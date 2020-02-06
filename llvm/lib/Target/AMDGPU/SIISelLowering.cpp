@@ -6046,6 +6046,16 @@ SDValue SITargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
                                 DAG.getConstant(1, SL, MVT::i32));
     return DAG.getSetCC(SL, MVT::i1, SrcHi, Aperture, ISD::SETEQ);
   }
+  case Intrinsic::amdgcn_reloc_constant: {
+    Module *M = const_cast<Module *>(MF.getFunction().getParent());
+    const MDNode *Metadata = cast<MDNodeSDNode>(Op.getOperand(1))->getMD();
+    auto SymbolName = cast<MDString>(Metadata->getOperand(0))->getString();
+    auto RelocSymbol = cast<GlobalVariable>(
+        M->getOrInsertGlobal(SymbolName, Type::getInt32Ty(M->getContext())));
+    SDValue GA = DAG.getTargetGlobalAddress(RelocSymbol, DL, MVT::i32, 0,
+                                            SIInstrInfo::MO_ABS32_LO);
+    return {DAG.getMachineNode(AMDGPU::S_MOV_B32, DL, MVT::i32, GA), 0};
+  }
   default:
     if (const AMDGPU::ImageDimIntrinsicInfo *ImageDimIntr =
             AMDGPU::getImageDimIntrinsicInfo(IntrinsicID))
