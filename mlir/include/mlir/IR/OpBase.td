@@ -1650,8 +1650,6 @@ def AutomaticAllocationScope : NativeOpTrait<"AutomaticAllocationScope">;
 // Op supports operand broadcast behavior.
 def ResultsBroadcastableShape :
   NativeOpTrait<"ResultsBroadcastableShape">;
-// TODO: Alias of the above, remove post integrate.
-def Broadcastable : NativeOpTrait<"ResultsBroadcastableShape">;
 // X op Y == Y op X
 def Commutative  : NativeOpTrait<"IsCommutative">;
 // Op behaves like a constant.
@@ -1685,6 +1683,9 @@ class SingleBlockImplicitTerminator<string op>
 // Op's parent operation is the provided one.
 class HasParent<string op>
     : ParamNativeOpTrait<"HasParent", op>;
+
+class ParentOneOf<list<string> ops>
+    : ParamNativeOpTrait<"HasParent", StrJoin<ops>.result>;
 
 // Op result type is derived from the first attribute. If the attribute is an
 // subclass of `TypeAttrBase`, its value is used, otherwise, the type of the
