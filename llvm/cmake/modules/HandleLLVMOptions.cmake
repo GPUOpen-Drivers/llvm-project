@@ -1,3 +1,5 @@
+# Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+# Notified per clause 4(b) of the license.
 # This CMake module is responsible for interpreting the user defined LLVM_
 # options and executing the appropriate CMake commands to realize the users'
 # selections.
@@ -565,6 +567,8 @@ if (MSVC)
       # any code that uses the LLVM_ALIGNAS macro), so this is must be disabled to
       # avoid unwanted alignment warnings.
       -wd4324 # Suppress 'structure was padded due to __declspec(align())'
+
+      -wd4307 # Suppress integral constant overflow warning - not required for VS 2019 +
 
       # Promoted warnings.
       -w14062 # Promote 'enumerator in switch of enum is not handled' to level 1 warning.

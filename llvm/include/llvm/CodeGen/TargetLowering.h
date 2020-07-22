@@ -2368,6 +2368,14 @@ public:
     return nullptr;
   }
 
+  /// Given a set in interconnected phis of type 'From' that are loaded/stored
+  /// or bitcast to type 'To', return true if the set should be converted to
+  /// 'To'.
+  virtual bool shouldConvertPhiType(Type *From, Type *To) const {
+    return (From->isIntegerTy() || From->isFloatingPointTy()) &&
+           (To->isIntegerTy() || To->isFloatingPointTy());
+  }
+
   /// Returns true if the opcode is a commutative binary operation.
   virtual bool isCommutativeBinOp(unsigned Opcode) const {
     // FIXME: This should get its info from the td file.
@@ -3306,6 +3314,13 @@ public:
   SDValue SimplifyMultipleUseDemandedBits(SDValue Op, const APInt &DemandedBits,
                                           SelectionDAG &DAG,
                                           unsigned Depth = 0) const;
+
+  /// Helper wrapper around SimplifyMultipleUseDemandedBits, demanding all
+  /// bits from only some vector elements.
+  SDValue SimplifyMultipleUseDemandedVectorElts(SDValue Op,
+                                                const APInt &DemandedElts,
+                                                SelectionDAG &DAG,
+                                                unsigned Depth = 0) const;
 
   /// Look at Vector Op. At this point, we know that only the DemandedElts
   /// elements of the result of Op are ever used downstream.  If we can use
@@ -4405,6 +4420,10 @@ public:
   /// Expand a VECREDUCE_* into an explicit calculation. If Count is specified,
   /// only the first Count elements of the vector are used.
   SDValue expandVecReduce(SDNode *Node, SelectionDAG &DAG) const;
+
+  /// Expand an SREM or UREM using SDIV/UDIV or SDIVREM/UDIVREM, if legal.
+  /// Returns true if the expansion was successful.
+  bool expandREM(SDNode *Node, SDValue &Result, SelectionDAG &DAG) const;
 
   //===--------------------------------------------------------------------===//
   // Instruction Emitting Hooks

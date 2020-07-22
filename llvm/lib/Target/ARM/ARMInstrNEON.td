@@ -1074,6 +1074,12 @@ def : Pat<(vector_insert (v4f16 DPR:$src),
 def : Pat<(vector_insert (v8f16 QPR:$src),
                          (f16 (load addrmode6:$addr)), imm:$lane),
           (VLD1LNq16Pseudo addrmode6:$addr, QPR:$src, imm:$lane)>;
+def : Pat<(vector_insert (v4bf16 DPR:$src),
+                         (bf16 (load addrmode6:$addr)), imm:$lane),
+          (VLD1LNd16 addrmode6:$addr, DPR:$src, imm:$lane)>;
+def : Pat<(vector_insert (v8bf16 QPR:$src),
+                         (bf16 (load addrmode6:$addr)), imm:$lane),
+          (VLD1LNq16Pseudo addrmode6:$addr, QPR:$src, imm:$lane)>;
 def : Pat<(vector_insert (v2f32 DPR:$src),
                          (f32 (load addrmode6:$addr)), imm:$lane),
           (VLD1LNd32 addrmode6:$addr, DPR:$src, imm:$lane)>;
@@ -2447,57 +2453,6 @@ def : Pat<(v2f64 (byte_alignedload addrmode6:$addr)),
 def : Pat<(byte_alignedstore (v2f64 QPR:$value), addrmode6:$addr),
           (VST1q8 addrmode6:$addr, QPR:$value)>;
 }
-
-//===----------------------------------------------------------------------===//
-// NEON pattern fragments
-//===----------------------------------------------------------------------===//
-
-// Extract D sub-registers of Q registers.
-def DSubReg_i8_reg  : SDNodeXForm<imm, [{
-  assert(ARM::dsub_7 == ARM::dsub_0+7 && "Unexpected subreg numbering");
-  return CurDAG->getTargetConstant(ARM::dsub_0 + N->getZExtValue()/8, SDLoc(N),
-                                   MVT::i32);
-}]>;
-def DSubReg_i16_reg : SDNodeXForm<imm, [{
-  assert(ARM::dsub_7 == ARM::dsub_0+7 && "Unexpected subreg numbering");
-  return CurDAG->getTargetConstant(ARM::dsub_0 + N->getZExtValue()/4, SDLoc(N),
-                                   MVT::i32);
-}]>;
-def DSubReg_i32_reg : SDNodeXForm<imm, [{
-  assert(ARM::dsub_7 == ARM::dsub_0+7 && "Unexpected subreg numbering");
-  return CurDAG->getTargetConstant(ARM::dsub_0 + N->getZExtValue()/2, SDLoc(N),
-                                   MVT::i32);
-}]>;
-def DSubReg_f64_reg : SDNodeXForm<imm, [{
-  assert(ARM::dsub_7 == ARM::dsub_0+7 && "Unexpected subreg numbering");
-  return CurDAG->getTargetConstant(ARM::dsub_0 + N->getZExtValue(), SDLoc(N),
-                                   MVT::i32);
-}]>;
-
-// Extract S sub-registers of Q/D registers.
-def SSubReg_f32_reg : SDNodeXForm<imm, [{
-  assert(ARM::ssub_3 == ARM::ssub_0+3 && "Unexpected subreg numbering");
-  return CurDAG->getTargetConstant(ARM::ssub_0 + N->getZExtValue(), SDLoc(N),
-                                   MVT::i32);
-}]>;
-
-// Extract S sub-registers of Q/D registers containing a given f16 lane.
-def SSubReg_f16_reg : SDNodeXForm<imm, [{
-  assert(ARM::ssub_3 == ARM::ssub_0+3 && "Unexpected subreg numbering");
-  return CurDAG->getTargetConstant(ARM::ssub_0 + N->getZExtValue()/2, SDLoc(N),
-                                   MVT::i32);
-}]>;
-
-// Translate lane numbers from Q registers to D subregs.
-def SubReg_i8_lane  : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant(N->getZExtValue() & 7, SDLoc(N), MVT::i32);
-}]>;
-def SubReg_i16_lane : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant(N->getZExtValue() & 3, SDLoc(N), MVT::i32);
-}]>;
-def SubReg_i32_lane : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant(N->getZExtValue() & 1, SDLoc(N), MVT::i32);
-}]>;
 
 //===----------------------------------------------------------------------===//
 // Instruction Classes
@@ -6404,32 +6359,57 @@ def : Pat<(extractelt (v2f64 QPR:$src1), imm:$src2),
           (EXTRACT_SUBREG QPR:$src1, (DSubReg_f64_reg imm:$src2))>;
 }
 
-def imm_even : ImmLeaf<i32, [{ return (Imm & 1) == 0; }]>;
-def imm_odd : ImmLeaf<i32, [{ return (Imm & 1) == 1; }]>;
+multiclass ExtractEltEvenF16<ValueType VT4, ValueType VT8> {
+  def : Pat<(extractelt (VT4 DPR:$src), imm_even:$lane),
+              (EXTRACT_SUBREG
+                  (v2f32 (COPY_TO_REGCLASS (VT4 DPR:$src), DPR_VFP2)),
+                  (SSubReg_f16_reg imm_even:$lane))>;
+  def : Pat<(extractelt (VT8 QPR:$src), imm_even:$lane),
+              (EXTRACT_SUBREG
+                  (v4f32 (COPY_TO_REGCLASS (VT8 QPR:$src), QPR_VFP2)),
+                  (SSubReg_f16_reg imm_even:$lane))>;
+}
+
+multiclass ExtractEltOddF16VMOVH<ValueType VT4, ValueType VT8> {
+  def : Pat<(extractelt (VT4 DPR:$src), imm_odd:$lane),
+            (COPY_TO_REGCLASS
+              (VMOVH (EXTRACT_SUBREG
+                        (v2f32 (COPY_TO_REGCLASS (VT4 DPR:$src), DPR_VFP2)),
+                        (SSubReg_f16_reg imm_odd:$lane))),
+              HPR)>;
+  def : Pat<(extractelt (VT8 QPR:$src), imm_odd:$lane),
+            (COPY_TO_REGCLASS
+              (VMOVH (EXTRACT_SUBREG
+                        (v4f32 (COPY_TO_REGCLASS (VT8 QPR:$src), QPR_VFP2)),
+                        (SSubReg_f16_reg imm_odd:$lane))),
+              HPR)>;
+}
 
 let Predicates = [HasNEON] in {
-def : Pat<(extractelt (v4f16 DPR:$src), imm_even:$lane),
-            (EXTRACT_SUBREG
-                (v2f32 (COPY_TO_REGCLASS (v4f16 DPR:$src), DPR_VFP2)),
-                (SSubReg_f16_reg imm_even:$lane))>;
+  defm : ExtractEltEvenF16<v4f16, v8f16>;
+  defm : ExtractEltOddF16VMOVH<v4f16, v8f16>;
+}
 
-def : Pat<(extractelt (v4f16 DPR:$src), imm_odd:$lane),
+let AddedComplexity = 1, Predicates = [HasNEON, HasBF16, HasFullFP16] in {
+  // If VMOVH (vmovx.f16) is available use it to extract BF16 from the odd lanes
+  defm : ExtractEltOddF16VMOVH<v4bf16, v8bf16>;
+}
+
+let Predicates = [HasBF16, HasNEON] in {
+  defm : ExtractEltEvenF16<v4bf16, v8bf16>;
+
+  // Otherwise, if VMOVH is not available resort to extracting the odd lane
+  // into a GPR and then moving to HPR
+  def : Pat<(extractelt (v4bf16 DPR:$src), imm_odd:$lane),
             (COPY_TO_REGCLASS
-              (VMOVH (EXTRACT_SUBREG
-                  (v2f32 (COPY_TO_REGCLASS (v4f16 DPR:$src), DPR_VFP2)),
-                  (SSubReg_f16_reg imm_odd:$lane))),
+              (VGETLNu16 (v4bf16 DPR:$src), imm:$lane),
               HPR)>;
 
-def : Pat<(extractelt (v8f16 QPR:$src), imm_even:$lane),
-            (EXTRACT_SUBREG
-                (v4f32 (COPY_TO_REGCLASS (v8f16 QPR:$src), QPR_VFP2)),
-                (SSubReg_f16_reg imm_even:$lane))>;
-
-def : Pat<(extractelt (v8f16 QPR:$src), imm_odd:$lane),
+  def : Pat<(extractelt (v8bf16 QPR:$src), imm_odd:$lane),
             (COPY_TO_REGCLASS
-              (VMOVH (EXTRACT_SUBREG
-                  (v4f32 (COPY_TO_REGCLASS (v8f16 QPR:$src), QPR_VFP2)),
-                  (SSubReg_f16_reg imm_odd:$lane))),
+              (VGETLNu16 (v4i16 (EXTRACT_SUBREG QPR:$src,
+                                                (DSubReg_i16_reg imm:$lane))),
+                         (SubReg_i16_lane imm:$lane)),
               HPR)>;
 }
 
@@ -6465,6 +6445,21 @@ def VSETLNi32 : NVSetLane<{1,1,1,0,0,0,?,0}, 0b1011, 0b00, (outs DPR:$V),
 }
 }
 
+// TODO: for odd lanes we could optimize this a bit by using the VINS
+// FullFP16 instruction when it is available
+multiclass InsertEltF16<ValueType VTScalar, ValueType VT4, ValueType VT8> {
+  def : Pat<(insertelt (VT4 DPR:$src1), (VTScalar HPR:$src2), imm:$lane),
+            (VT4 (VSETLNi16 DPR:$src1,
+                 (COPY_TO_REGCLASS HPR:$src2, GPR), imm:$lane))>;
+  def : Pat<(insertelt (VT8 QPR:$src1), (VTScalar HPR:$src2), imm:$lane),
+            (VT8 (INSERT_SUBREG QPR:$src1,
+                    (v4i16 (VSETLNi16 (v4i16 (EXTRACT_SUBREG QPR:$src1,
+                                        (DSubReg_i16_reg imm:$lane))),
+                              (COPY_TO_REGCLASS HPR:$src2, GPR),
+                              (SubReg_i16_lane imm:$lane))),
+                    (DSubReg_i16_reg imm:$lane)))>;
+}
+
 let Predicates = [HasNEON] in {
 def : Pat<(vector_insert (v16i8 QPR:$src1), GPR:$src2, imm:$lane),
           (v16i8 (INSERT_SUBREG QPR:$src1,
@@ -6492,14 +6487,7 @@ def : Pat<(v4f32 (insertelt QPR:$src1, SPR:$src2, imm:$src3)),
           (INSERT_SUBREG (v4f32 (COPY_TO_REGCLASS QPR:$src1, QPR_VFP2)),
                                 SPR:$src2, (SSubReg_f32_reg imm:$src3))>;
 
-def : Pat<(insertelt (v4f16 DPR:$src1), (f16 HPR:$src2), imm:$lane),
-          (v4f16 (VSETLNi16 DPR:$src1, (VMOVRH $src2), imm:$lane))>;
-def : Pat<(insertelt (v8f16 QPR:$src1), (f16 HPR:$src2), imm:$lane),
-          (v8f16 (INSERT_SUBREG QPR:$src1,
-                   (v4i16 (VSETLNi16 (v4i16 (EXTRACT_SUBREG QPR:$src1,
-                                      (DSubReg_i16_reg imm:$lane))),
-                             (VMOVRH $src2), (SubReg_i16_lane imm:$lane))),
-                   (DSubReg_i16_reg imm:$lane)))>;
+defm : InsertEltF16<f16, v4f16, v8f16>;
 
 //def : Pat<(v2i64 (insertelt QPR:$src1, DPR:$src2, imm:$src3)),
 //          (INSERT_SUBREG QPR:$src1, DPR:$src2, (DSubReg_f64_reg imm:$src3))>;
@@ -6533,6 +6521,9 @@ def : Pat<(v4i32 (scalar_to_vector GPR:$src)),
                          (VSETLNi32 (v2i32 (IMPLICIT_DEF)), GPR:$src, (i32 0)),
                          dsub_0)>;
 }
+
+let Predicates = [HasNEON, HasBF16] in
+defm : InsertEltF16<bf16, v4bf16, v8bf16>;
 
 //   VDUP     : Vector Duplicate (from ARM core register to all elements)
 
@@ -6650,6 +6641,23 @@ def : Pat<(v4f32 (ARMvdup (f32 SPR:$src))),
 def : Pat<(v8f16 (ARMvdup (f16 HPR:$src))),
           (v8f16 (VDUPLN16q (INSERT_SUBREG (v4f16 (IMPLICIT_DEF)),
                              (f16 HPR:$src), ssub_0), (i32 0)))>;
+}
+
+let Predicates = [HasNEON, HasBF16] in {
+def : Pat<(v4bf16 (ARMvduplane (v4bf16 DPR:$Vm), imm:$lane)),
+          (VDUPLN16d DPR:$Vm, imm:$lane)>;
+
+def : Pat<(v8bf16 (ARMvduplane (v8bf16 QPR:$src), imm:$lane)),
+          (v8bf16 (VDUPLN16q (v4bf16 (EXTRACT_SUBREG QPR:$src,
+                                    (DSubReg_i16_reg imm:$lane))),
+                            (SubReg_i16_lane imm:$lane)))>;
+
+def : Pat<(v4bf16 (ARMvdup (bf16 HPR:$src))),
+          (v4bf16 (VDUPLN16d (INSERT_SUBREG (v4bf16 (IMPLICIT_DEF)),
+                             (bf16 HPR:$src), ssub_0), (i32 0)))>;
+def : Pat<(v8bf16 (ARMvdup (bf16 HPR:$src))),
+          (v8bf16 (VDUPLN16q (INSERT_SUBREG (v4bf16 (IMPLICIT_DEF)),
+                             (bf16 HPR:$src), ssub_0), (i32 0)))>;
 }
 
 //   VMOVN    : Vector Narrowing Move
@@ -7979,6 +7987,8 @@ def : Pat<(v4f32 (concat_vectors DPR:$Dn, DPR:$Dm)),
           (REG_SEQUENCE QPR, DPR:$Dn, dsub_0, DPR:$Dm, dsub_1)>;
 def : Pat<(v8f16 (concat_vectors DPR:$Dn, DPR:$Dm)),
           (REG_SEQUENCE QPR, DPR:$Dn, dsub_0, DPR:$Dm, dsub_1)>;
+def : Pat<(v8bf16 (concat_vectors DPR:$Dn, DPR:$Dm)),
+          (REG_SEQUENCE QPR, DPR:$Dn, dsub_0, DPR:$Dm, dsub_1)>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -9035,15 +9045,20 @@ def : NEONInstAlias<"vmov${p}.f32 $Vd, $imm",
 // ARMv8.6a BFloat16 instructions.
 let Predicates = [HasBF16, HasNEON] in {
 class BF16VDOT<bits<5> op27_23, bits<2> op21_20, bit op6,
-               dag oops, dag iops>
+               dag oops, dag iops, list<dag> pattern>
    : N3Vnp<op27_23, op21_20, 0b1101, op6, 0, oops, iops,
-           N3RegFrm, IIC_VDOTPROD, "", "", []> {
+           N3RegFrm, IIC_VDOTPROD, "", "", pattern>
+{
     let DecoderNamespace = "VFPV8";
 }
 
 class BF16VDOTS<bit Q, RegisterClass RegTy, string opc, ValueType AccumTy, ValueType InputTy>
    : BF16VDOT<0b11000, 0b00,  Q, (outs RegTy:$dst),
-              (ins RegTy:$Vd, RegTy:$Vn, RegTy:$Vm)> {
+              (ins RegTy:$Vd, RegTy:$Vn, RegTy:$Vm),
+            [(set (AccumTy RegTy:$dst),
+                  (int_arm_neon_bfdot (AccumTy RegTy:$Vd),
+                                      (InputTy RegTy:$Vn),
+                                      (InputTy RegTy:$Vm)))]> {
   let Constraints = "$dst = $Vd";
   let AsmString = !strconcat(opc, ".bf16", "\t$Vd, $Vn, $Vm");
     let DecoderNamespace = "VFPV8";
@@ -9054,7 +9069,7 @@ multiclass BF16VDOTI<bit Q, RegisterClass RegTy, string opc, ValueType AccumTy,
 
   def "" : BF16VDOT<0b11100, 0b00, Q, (outs RegTy:$dst),
                     (ins RegTy:$Vd, RegTy:$Vn,
-                    DPR_VFP2:$Vm, VectorIndex32:$lane)> {
+                    DPR_VFP2:$Vm, VectorIndex32:$lane), []> {
     bit lane;
     let Inst{5} = lane;
     let Constraints = "$dst = $Vd";
@@ -9062,6 +9077,13 @@ multiclass BF16VDOTI<bit Q, RegisterClass RegTy, string opc, ValueType AccumTy,
     let DecoderNamespace = "VFPV8";
   }
 
+  def : Pat<
+    (AccumTy (int_arm_neon_bfdot (AccumTy RegTy:$Vd),
+                                 (InputTy RegTy:$Vn),
+                                 (InputTy (bitconvert (AccumTy
+                                          (ARMvduplane (AccumTy RegTy:$Vm),
+                                                        VectorIndex32:$lane)))))),
+    (!cast<Instruction>(NAME) RegTy:$Vd, RegTy:$Vn, RHS, VectorIndex32:$lane)>;
 }
 
 def BF16VDOTS_VDOTD : BF16VDOTS<0, DPR, "vdot", v2f32, v8i8>;
@@ -9074,7 +9096,10 @@ class BF16MM<bit Q, RegisterClass RegTy,
              string opc>
    : N3Vnp<0b11000, 0b00, 0b1100, Q, 0,
            (outs RegTy:$dst), (ins RegTy:$Vd, RegTy:$Vn, RegTy:$Vm),
-           N3RegFrm, IIC_VDOTPROD, "", "", []> {
+           N3RegFrm, IIC_VDOTPROD, "", "",
+                [(set (v4f32 QPR:$dst), (int_arm_neon_bfmmla (v4f32 QPR:$Vd),
+                                                (v16i8 QPR:$Vn),
+                                                (v16i8 QPR:$Vm)))]> {
    let Constraints = "$dst = $Vd";
    let AsmString = !strconcat(opc, ".bf16", "\t$Vd, $Vn, $Vm");
    let DecoderNamespace = "VFPV8";
@@ -9082,19 +9107,22 @@ class BF16MM<bit Q, RegisterClass RegTy,
 
 def VMMLA : BF16MM<1, QPR, "vmmla">;
 
-class VBF16MALQ<bit T, string suffix>
+class VBF16MALQ<bit T, string suffix, SDPatternOperator OpNode>
   : N3VCP8<0b00, 0b11, T, 1,
            (outs QPR:$dst), (ins QPR:$Vd, QPR:$Vn, QPR:$Vm),
            NoItinerary, "vfma" # suffix, "bf16", "$Vd, $Vn, $Vm", "",
-              []> { // TODO: Add intrinsics
+                [(set (v4f32 QPR:$dst),
+                      (OpNode (v4f32 QPR:$Vd),
+                              (v16i8 QPR:$Vn),
+                              (v16i8 QPR:$Vm)))]> {
   let Constraints = "$dst = $Vd";
   let DecoderNamespace = "VFPV8";
 }
 
-def VBF16MALTQ: VBF16MALQ<1, "t">;
-def VBF16MALBQ: VBF16MALQ<0, "b">;
+def VBF16MALTQ: VBF16MALQ<1, "t", int_arm_neon_bfmlalt>;
+def VBF16MALBQ: VBF16MALQ<0, "b", int_arm_neon_bfmlalb>;
 
-multiclass VBF16MALQI<bit T, string suffix> {
+multiclass VBF16MALQI<bit T, string suffix, SDPatternOperator OpNode> {
   def "" : N3VLaneCP8<0, 0b11, T, 1, (outs QPR:$dst),
               (ins QPR:$Vd, QPR:$Vn, DPR_8:$Vm, VectorIndex16:$idx),
                IIC_VMACD, "vfma" # suffix, "bf16", "$Vd, $Vn, $Vm$idx", "", []> {
@@ -9105,10 +9133,20 @@ multiclass VBF16MALQI<bit T, string suffix> {
   let DecoderNamespace = "VFPV8";
   }
 
+  def : Pat<
+    (v4f32 (OpNode (v4f32 QPR:$Vd),
+                   (v16i8 QPR:$Vn),
+                   (v16i8 (bitconvert (v8bf16 (ARMvduplane (v8bf16 QPR:$Vm),
+                                                           VectorIndex16:$lane)))))),
+    (!cast<Instruction>(NAME) QPR:$Vd,
+                              QPR:$Vn,
+                              (EXTRACT_SUBREG QPR:$Vm,
+                                (DSubReg_i16_reg VectorIndex16:$lane)),
+                              (SubReg_i16_lane VectorIndex16:$lane))>;
 }
 
-defm VBF16MALTQI: VBF16MALQI<1, "t">;
-defm VBF16MALBQI: VBF16MALQI<0, "b">;
+defm VBF16MALTQI: VBF16MALQI<1, "t", int_arm_neon_bfmlalt>;
+defm VBF16MALBQI: VBF16MALQI<0, "b", int_arm_neon_bfmlalb>;
 
 def BF16_VCVT :  N2V<0b11, 0b11, 0b01, 0b10, 0b01100, 1, 0,
                     (outs DPR:$Vd), (ins QPR:$Vm),

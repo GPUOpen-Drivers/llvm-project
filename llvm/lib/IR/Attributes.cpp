@@ -22,8 +22,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Twine.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
@@ -965,11 +965,9 @@ std::string AttributeSetNode::getAsString(bool InAttrGrp) const {
 //===----------------------------------------------------------------------===//
 
 /// Map from AttributeList index to the internal array index. Adding one happens
-/// to work, but it relies on unsigned integer wrapping. MSVC warns about
-/// unsigned wrapping in constexpr functions, so write out the conditional. LLVM
-/// folds it to add anyway.
+/// to work, because -1 wraps around to 0.
 static constexpr unsigned attrIdxToArrayIdx(unsigned Index) {
-  return Index == AttributeList::FunctionIndex ? 0 : Index + 1;
+  return Index + 1;
 }
 
 AttributeListImpl::AttributeListImpl(ArrayRef<AttributeSet> Sets)

@@ -246,6 +246,7 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<LiveIntervals>();
+    AU.addPreserved<LiveIntervals>();
     AU.addRequired<MachineDominatorTree>();
     AU.addPreserved<MachineDominatorTree>();
     AU.addRequired<MachinePostDominatorTree>();
@@ -1079,6 +1080,10 @@ MachineBasicBlock *SIWholeQuadMode::splitBlock(MachineBasicBlock *BB,
       MDT->getBase().applyUpdates(DTUpdates);
     if (PDT)
       PDT->getBase().applyUpdates(DTUpdates);
+
+    // Update live intervals
+    MachineInstr &InsertionPoint = SplitBB->front();
+    LIS->insertMBBInMaps(SplitBB, &InsertionPoint);
   }
 
   // Convert last instruction in to a terminator.
@@ -1093,8 +1098,9 @@ MachineBasicBlock *SIWholeQuadMode::splitBlock(MachineBasicBlock *BB,
   default:
     if (BB->getFirstTerminator() == BB->end()) {
       assert(SplitBB != nullptr);
-      BuildMI(*BB, BB->end(), DebugLoc(), TII->get(AMDGPU::S_BRANCH))
+      MachineInstr *MI = BuildMI(*BB, BB->end(), DebugLoc(), TII->get(AMDGPU::S_BRANCH))
         .addMBB(SplitBB);
+      LIS->InsertMachineInstrInMaps(*MI);
     }
     break;
   }
@@ -1314,18 +1320,23 @@ void SIWholeQuadMode::processBlock(MachineBasicBlock &MBB, bool isEntry) {
       if (State == StateWWM) {
         assert(SavedNonWWMReg);
         fromWWM(MBB, Before, SavedNonWWMReg, NonWWMState);
+        LIS->createAndComputeVirtRegInterval(SavedNonWWMReg);
+        SavedNonWWMReg = 0;
         State = NonWWMState;
       }
 
       if (Needs == StateWWM) {
         NonWWMState = State;
+        assert(!SavedNonWWMReg);
         SavedNonWWMReg = MRI->createVirtualRegister(BoolRC);
         toWWM(MBB, Before, SavedNonWWMReg);
         State = StateWWM;
       } else {
         if (State == StateWQM && (Needs & StateExact) && !(Needs & StateWQM)) {
-          if (!WQMFromExec && (OutNeeds & StateWQM))
+          if (!WQMFromExec && (OutNeeds & StateWQM)) {
+            assert(!SavedWQMReg);
             SavedWQMReg = MRI->createVirtualRegister(BoolRC);
+          }
 
           toExact(MBB, Before, SavedWQMReg, findLiveMaskReg(MBB, BI, Before));
           State = StateExact;
@@ -1359,6 +1370,8 @@ void SIWholeQuadMode::processBlock(MachineBasicBlock &MBB, bool isEntry) {
 
     II = Next;
   }
+  assert(!SavedWQMReg);
+  assert(!SavedNonWWMReg);
 }
 
 bool SIWholeQuadMode::lowerLiveMaskQueries(unsigned LiveMaskReg) {
@@ -1475,10 +1488,11 @@ bool SIWholeQuadMode::runOnMachineFunction(MachineFunction &MF) {
 
   if ((GlobalFlags == StateWQM) && DemoteInstrs.empty()) {
     // Shader only needs WQM
-    BuildMI(Entry, EntryMI, DebugLoc(), TII->get(ST->isWave32() ?
+    auto MI = BuildMI(Entry, EntryMI, DebugLoc(), TII->get(ST->isWave32() ?
               AMDGPU::S_WQM_B32 : AMDGPU::S_WQM_B64),
             Exec)
         .addReg(Exec);
+    LIS->InsertMachineInstrInMaps(*MI);
 
     lowerLiveMaskQueries(LiveMaskReg);
     lowerCopyInstrs();
@@ -1515,6 +1529,11 @@ bool SIWholeQuadMode::runOnMachineFunction(MachineFunction &MF) {
     lowerLiveMaskQueries(LiveMaskReg);
     lowerDemoteInstrs();
   }
+
+  // Physical registers like SCC aren't tracked by default anyway, so just
+  // removing the ranges we computed is the simplest option for maintaining
+  // the analysis results.
+  LIS->removeRegUnit(*MCRegUnitIterator(AMDGPU::SCC, TRI));
 
   return true;
 }

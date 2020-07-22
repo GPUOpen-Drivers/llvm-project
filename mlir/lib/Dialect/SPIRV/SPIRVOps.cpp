@@ -723,12 +723,6 @@ static LogicalResult verifyShiftOp(Operation *op) {
 //===----------------------------------------------------------------------===//
 
 static Type getElementPtrType(Type type, ValueRange indices, Location baseLoc) {
-  if (indices.empty()) {
-    emitError(baseLoc, "'spv.AccessChain' op expected at least "
-                       "one index ");
-    return nullptr;
-  }
-
   auto ptrType = type.dyn_cast<spirv::PointerType>();
   if (!ptrType) {
     emitError(baseLoc, "'spv.AccessChain' op expected a pointer "
@@ -791,18 +785,36 @@ static ParseResult parseAccessChainOp(OpAsmParser &parser,
   OpAsmParser::OperandType ptrInfo;
   SmallVector<OpAsmParser::OperandType, 4> indicesInfo;
   Type type;
-  // TODO(denis0x0D): regarding to the spec an index must be any integer type,
-  // figure out how to use resolveOperand with a range of types and do not
-  // fail on first attempt.
-  Type indicesType = parser.getBuilder().getIntegerType(32);
+  auto loc = parser.getCurrentLocation();
+  SmallVector<Type, 4> indicesTypes;
 
   if (parser.parseOperand(ptrInfo) ||
       parser.parseOperandList(indicesInfo, OpAsmParser::Delimiter::Square) ||
       parser.parseColonType(type) ||
-      parser.resolveOperand(ptrInfo, type, state.operands) ||
-      parser.resolveOperands(indicesInfo, indicesType, state.operands)) {
+      parser.resolveOperand(ptrInfo, type, state.operands)) {
     return failure();
   }
+
+  // Check that the provided indices list is not empty before parsing their
+  // type list.
+  if (indicesInfo.empty()) {
+    return emitError(state.location, "'spv.AccessChain' op expected at "
+                                     "least one index ");
+  }
+
+  if (parser.parseComma() || parser.parseTypeList(indicesTypes))
+    return failure();
+
+  // Check that the indices types list is not empty and that it has a one-to-one
+  // mapping to the provided indices.
+  if (indicesTypes.size() != indicesInfo.size()) {
+    return emitError(state.location, "'spv.AccessChain' op indices "
+                                     "types' count must be equal to indices "
+                                     "info count");
+  }
+
+  if (parser.resolveOperands(indicesInfo, indicesTypes, loc, state.operands))
+    return failure();
 
   auto resultType = getElementPtrType(
       type, llvm::makeArrayRef(state.operands).drop_front(), state.location);
@@ -816,7 +828,8 @@ static ParseResult parseAccessChainOp(OpAsmParser &parser,
 
 static void print(spirv::AccessChainOp op, OpAsmPrinter &printer) {
   printer << spirv::AccessChainOp::getOperationName() << ' ' << op.base_ptr()
-          << '[' << op.indices() << "] : " << op.base_ptr().getType();
+          << '[' << op.indices() << "] : " << op.base_ptr().getType() << ", "
+          << op.indices().getTypes();
 }
 
 static LogicalResult verify(spirv::AccessChainOp accessChainOp) {
@@ -2797,6 +2810,36 @@ static LogicalResult verifyMatrixTimesScalar(spirv::MatrixTimesScalarOp op) {
           resultMatrixColumns.getNumElements())
         return op.emitError("input and result matrices' columns must "
                             "have the same size");
+    }
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// spv.Transpose
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verifyTranspose(spirv::TransposeOp op) {
+  auto inputMatrix = op.matrix().getType().cast<spirv::MatrixType>();
+  auto resultMatrix = op.result().getType().cast<spirv::MatrixType>();
+
+  // Verify that the input and output matrices have correct shapes.
+  if (auto inputMatrixColumns =
+          inputMatrix.getElementType().dyn_cast<VectorType>()) {
+    if (inputMatrixColumns.getNumElements() != resultMatrix.getNumElements())
+      return op.emitError("input matrix rows count must be equal to "
+                          "output matrix columns count");
+    if (auto resultMatrixColumns =
+            resultMatrix.getElementType().dyn_cast<VectorType>()) {
+      if (resultMatrixColumns.getNumElements() != inputMatrix.getNumElements())
+        return op.emitError("input matrix columns count must be equal "
+                            "to output matrix rows count");
+
+      // Verify that the input and output matrices have the same component type
+      if (inputMatrixColumns.getElementType() !=
+          resultMatrixColumns.getElementType())
+        return op.emitError("input and output matrices must have the "
+                            "same component type");
     }
   }
   return success();

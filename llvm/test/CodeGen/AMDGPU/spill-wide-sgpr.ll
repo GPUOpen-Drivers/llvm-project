@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -O0 -march=amdgcn -mcpu=fiji -verify-machineinstrs < %s | FileCheck -check-prefix=ALL -check-prefix=VGPR %s
 ; RUN: llc -O0 -march=amdgcn -mcpu=fiji -amdgpu-spill-sgpr-to-vgpr=0 -verify-machineinstrs < %s | FileCheck -check-prefix=ALL -check-prefix=VMEM %s
 
@@ -14,10 +12,8 @@
 
 
 ; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
 ; VMEM: s_cbranch_scc1
 
-; VMEM: buffer_load_dword
 ; VMEM: buffer_load_dword
 define amdgpu_kernel void @spill_sgpr_x2(i32 addrspace(1)* %out, i32 %in) #0 {
   %wide.sgpr = call <2 x i32>  asm sideeffect "; def $0", "=s" () #0
@@ -45,12 +41,8 @@ ret:
 
 
 ; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
 ; VMEM: s_cbranch_scc1
 
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
 ; VMEM: buffer_load_dword
 define amdgpu_kernel void @spill_sgpr_x3(i32 addrspace(1)* %out, i32 %in) #0 {
   %wide.sgpr = call <3 x i32>  asm sideeffect "; def $0", "=s" () #0
@@ -80,14 +72,8 @@ ret:
 
 
 ; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
 ; VMEM: s_cbranch_scc1
 
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
 ; VMEM: buffer_load_dword
 define amdgpu_kernel void @spill_sgpr_x4(i32 addrspace(1)* %out, i32 %in) #0 {
   %wide.sgpr = call <4 x i32>  asm sideeffect "; def $0", "=s" () #0
@@ -119,16 +105,8 @@ ret:
 
 
 ; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
 ; VMEM: s_cbranch_scc1
 
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
 ; VMEM: buffer_load_dword
 define amdgpu_kernel void @spill_sgpr_x5(i32 addrspace(1)* %out, i32 %in) #0 {
   %wide.sgpr = call <5 x i32>  asm sideeffect "; def $0", "=s" () #0
@@ -165,22 +143,8 @@ ret:
 ; VGPR: v_readlane_b32 s{{[0-9]+}}, v{{[0-9]+}}, 7
 
 ; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
 ; VMEM: s_cbranch_scc1
 
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
 ; VMEM: buffer_load_dword
 define amdgpu_kernel void @spill_sgpr_x8(i32 addrspace(1)* %out, i32 %in) #0 {
   %wide.sgpr = call <8 x i32>  asm sideeffect "; def $0", "=s" () #0
@@ -233,38 +197,8 @@ ret:
 ; VGPR: v_readlane_b32 s{{[0-9]+}}, v{{[0-9]+}}, 15
 
 ; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
 ; VMEM: s_cbranch_scc1
 
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
 ; VMEM: buffer_load_dword
 define amdgpu_kernel void @spill_sgpr_x16(i32 addrspace(1)* %out, i32 %in) #0 {
   %wide.sgpr = call <16 x i32>  asm sideeffect "; def $0", "=s" () #0
@@ -349,70 +283,8 @@ ret:
 ; VGPR: v_readlane_b32 s{{[0-9]+}}, v{{[0-9]+}}, 31
 
 ; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
-; VMEM: buffer_store_dword
 ; VMEM: s_cbranch_scc1
 
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
-; VMEM: buffer_load_dword
 ; VMEM: buffer_load_dword
 define amdgpu_kernel void @spill_sgpr_x32(i32 addrspace(1)* %out, i32 %in) #0 {
   %wide.sgpr = call <32 x i32>  asm sideeffect "; def $0", "=s" () #0

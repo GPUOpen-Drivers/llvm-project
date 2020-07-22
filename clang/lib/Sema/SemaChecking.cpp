@@ -1808,6 +1808,36 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
     TheCall->setType(Context.IntTy);
     break;
   }
+  case Builtin::BI__builtin_expect_with_probability: {
+    // We first want to ensure we are called with 3 arguments
+    if (checkArgCount(*this, TheCall, 3))
+      return ExprError();
+    // then check probability is constant float in range [0.0, 1.0]
+    const Expr *ProbArg = TheCall->getArg(2);
+    SmallVector<PartialDiagnosticAt, 8> Notes;
+    Expr::EvalResult Eval;
+    Eval.Diag = &Notes;
+    if ((!ProbArg->EvaluateAsConstantExpr(Eval, Expr::EvaluateForCodeGen,
+                                          Context)) ||
+        !Eval.Val.isFloat()) {
+      Diag(ProbArg->getBeginLoc(), diag::err_probability_not_constant_float)
+          << ProbArg->getSourceRange();
+      for (const PartialDiagnosticAt &PDiag : Notes)
+        Diag(PDiag.first, PDiag.second);
+      return ExprError();
+    }
+    llvm::APFloat Probability = Eval.Val.getFloat();
+    bool LoseInfo = false;
+    Probability.convert(llvm::APFloat::IEEEdouble(),
+                        llvm::RoundingMode::Dynamic, &LoseInfo);
+    if (!(Probability >= llvm::APFloat(0.0) &&
+          Probability <= llvm::APFloat(1.0))) {
+      Diag(ProbArg->getBeginLoc(), diag::err_probability_out_of_range)
+          << ProbArg->getSourceRange();
+      return ExprError();
+    }
+    break;
+  }
   case Builtin::BI__builtin_preserve_access_index:
     if (SemaBuiltinPreserveAI(*this, TheCall))
       return ExprError();
@@ -3094,6 +3124,10 @@ bool Sema::CheckPPCBuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,
            SemaBuiltinConstantArgRange(TheCall, 1, 0, 1);
   case PPC::BI__builtin_pack_vector_int128:
     return SemaVSXCheck(TheCall);
+  case PPC::BI__builtin_altivec_vgnb:
+     return SemaBuiltinConstantArgRange(TheCall, 1, 2, 7);
+  case PPC::BI__builtin_vsx_xxeval:
+     return SemaBuiltinConstantArgRange(TheCall, 3, 0, 255);
   }
   return SemaBuiltinConstantArgRange(TheCall, i, l, u);
 }
@@ -13031,6 +13065,130 @@ public:
     });
   }
 
+  void VisitCXXOperatorCallExpr(const CXXOperatorCallExpr *CXXOCE) {
+    // C++17 [over.match.oper]p2:
+    //   [...] the operator notation is first transformed to the equivalent
+    //   function-call notation as summarized in Table 12 (where @ denotes one
+    //   of the operators covered in the specified subclause). However, the
+    //   operands are sequenced in the order prescribed for the built-in
+    //   operator (Clause 8).
+    //
+    // From the above only overloaded binary operators and overloaded call
+    // operators have sequencing rules in C++17 that we need to handle
+    // separately.
+    if (!SemaRef.getLangOpts().CPlusPlus17 ||
+        (CXXOCE->getNumArgs() != 2 && CXXOCE->getOperator() != OO_Call))
+      return VisitCallExpr(CXXOCE);
+
+    enum {
+      NoSequencing,
+      LHSBeforeRHS,
+      RHSBeforeLHS,
+      LHSBeforeRest
+    } SequencingKind;
+    switch (CXXOCE->getOperator()) {
+    case OO_Equal:
+    case OO_PlusEqual:
+    case OO_MinusEqual:
+    case OO_StarEqual:
+    case OO_SlashEqual:
+    case OO_PercentEqual:
+    case OO_CaretEqual:
+    case OO_AmpEqual:
+    case OO_PipeEqual:
+    case OO_LessLessEqual:
+    case OO_GreaterGreaterEqual:
+      SequencingKind = RHSBeforeLHS;
+      break;
+
+    case OO_LessLess:
+    case OO_GreaterGreater:
+    case OO_AmpAmp:
+    case OO_PipePipe:
+    case OO_Comma:
+    case OO_ArrowStar:
+    case OO_Subscript:
+      SequencingKind = LHSBeforeRHS;
+      break;
+
+    case OO_Call:
+      SequencingKind = LHSBeforeRest;
+      break;
+
+    default:
+      SequencingKind = NoSequencing;
+      break;
+    }
+
+    if (SequencingKind == NoSequencing)
+      return VisitCallExpr(CXXOCE);
+
+    // This is a call, so all subexpressions are sequenced before the result.
+    SequencedSubexpression Sequenced(*this);
+
+    SemaRef.runWithSufficientStackSpace(CXXOCE->getExprLoc(), [&] {
+      assert(SemaRef.getLangOpts().CPlusPlus17 &&
+             "Should only get there with C++17 and above!");
+      assert((CXXOCE->getNumArgs() == 2 || CXXOCE->getOperator() == OO_Call) &&
+             "Should only get there with an overloaded binary operator"
+             " or an overloaded call operator!");
+
+      if (SequencingKind == LHSBeforeRest) {
+        assert(CXXOCE->getOperator() == OO_Call &&
+               "We should only have an overloaded call operator here!");
+
+        // This is very similar to VisitCallExpr, except that we only have the
+        // C++17 case. The postfix-expression is the first argument of the
+        // CXXOperatorCallExpr. The expressions in the expression-list, if any,
+        // are in the following arguments.
+        //
+        // Note that we intentionally do not visit the callee expression since
+        // it is just a decayed reference to a function.
+        SequenceTree::Seq PostfixExprRegion = Tree.allocate(Region);
+        SequenceTree::Seq ArgsRegion = Tree.allocate(Region);
+        SequenceTree::Seq OldRegion = Region;
+
+        assert(CXXOCE->getNumArgs() >= 1 &&
+               "An overloaded call operator must have at least one argument"
+               " for the postfix-expression!");
+        const Expr *PostfixExpr = CXXOCE->getArgs()[0];
+        llvm::ArrayRef<const Expr *> Args(CXXOCE->getArgs() + 1,
+                                          CXXOCE->getNumArgs() - 1);
+
+        // Visit the postfix-expression first.
+        {
+          Region = PostfixExprRegion;
+          SequencedSubexpression Sequenced(*this);
+          Visit(PostfixExpr);
+        }
+
+        // Then visit the argument expressions.
+        Region = ArgsRegion;
+        for (const Expr *Arg : Args)
+          Visit(Arg);
+
+        Region = OldRegion;
+        Tree.merge(PostfixExprRegion);
+        Tree.merge(ArgsRegion);
+      } else {
+        assert(CXXOCE->getNumArgs() == 2 &&
+               "Should only have two arguments here!");
+        assert((SequencingKind == LHSBeforeRHS ||
+                SequencingKind == RHSBeforeLHS) &&
+               "Unexpected sequencing kind!");
+
+        // We do not visit the callee expression since it is just a decayed
+        // reference to a function.
+        const Expr *E1 = CXXOCE->getArg(0);
+        const Expr *E2 = CXXOCE->getArg(1);
+        if (SequencingKind == RHSBeforeLHS)
+          std::swap(E1, E2);
+
+        return VisitSequencedExpressions(E1, E2);
+      }
+    });
+  }
+
   void VisitCXXConstructExpr(const CXXConstructExpr *CCE) {
     // This is a call, so all subexpressions are sequenced before the result.
     SequencedSubexpression Sequenced(*this);
@@ -13466,9 +13624,9 @@ void Sema::CheckCastAlign(Expr *Op, QualType T, SourceRange TRange) {
   if (!SrcPtr) return;
   QualType SrcPointee = SrcPtr->getPointeeType();
 
-  // Whitelist casts from cv void*.  We already implicitly
-  // whitelisted casts to cv void*, since they have alignment 1.
-  // Also whitelist casts involving incomplete types, which implicitly
+  // Explicitly allow casts from cv void*.  We already implicitly
+  // allowed casts to cv void*, since they have alignment 1.
+  // Also allow casts involving incomplete types, which implicitly
   // includes 'void'.
   if (SrcPointee->isIncompleteType()) return;
 
@@ -13954,7 +14112,7 @@ static bool isSetterLikeSelector(Selector sel) {
   if (str.startswith("set"))
     str = str.substr(3);
   else if (str.startswith("add")) {
-    // Specially whitelist 'addOperationWithBlock:'.
+    // Specially allow 'addOperationWithBlock:'.
     if (sel.getNumArgs() == 1 && str.startswith("addOperationWithBlock"))
       return false;
     str = str.substr(3);
@@ -15141,7 +15299,8 @@ ExprResult Sema::SemaBuiltinMatrixColumnMajorLoad(CallExpr *TheCall,
   if (checkArgCount(*this, TheCall, 4))
     return ExprError();
 
-  Expr *PtrExpr = TheCall->getArg(0);
+  unsigned PtrArgIdx = 0;
+  Expr *PtrExpr = TheCall->getArg(PtrArgIdx);
   Expr *RowsExpr = TheCall->getArg(1);
   Expr *ColumnsExpr = TheCall->getArg(2);
   Expr *StrideExpr = TheCall->getArg(3);
@@ -15165,14 +15324,14 @@ ExprResult Sema::SemaBuiltinMatrixColumnMajorLoad(CallExpr *TheCall,
   QualType ElementTy;
   if (!PtrTy) {
     Diag(PtrExpr->getBeginLoc(), diag::err_builtin_matrix_pointer_arg)
-        << "first";
+        << PtrArgIdx + 1;
     ArgError = true;
   } else {
     ElementTy = PtrTy->getPointeeType().getUnqualifiedType();
 
     if (!ConstantMatrixType::isValidElementType(ElementTy)) {
       Diag(PtrExpr->getBeginLoc(), diag::err_builtin_matrix_pointer_arg)
-          << "first";
+          << PtrArgIdx + 1;
       ArgError = true;
     }
   }
@@ -15248,8 +15407,9 @@ ExprResult Sema::SemaBuiltinMatrixColumnMajorStore(CallExpr *TheCall,
   if (checkArgCount(*this, TheCall, 3))
     return ExprError();
 
+  unsigned PtrArgIdx = 1;
   Expr *MatrixExpr = TheCall->getArg(0);
-  Expr *PtrExpr = TheCall->getArg(1);
+  Expr *PtrExpr = TheCall->getArg(PtrArgIdx);
   Expr *StrideExpr = TheCall->getArg(2);
 
   bool ArgError = false;
@@ -15288,7 +15448,7 @@ ExprResult Sema::SemaBuiltinMatrixColumnMajorStore(CallExpr *TheCall,
   auto *PtrTy = PtrExpr->getType()->getAs<PointerType>();
   if (!PtrTy) {
     Diag(PtrExpr->getBeginLoc(), diag::err_builtin_matrix_pointer_arg)
-        << "second";
+        << PtrArgIdx + 1;
     ArgError = true;
   } else {
     QualType ElementTy = PtrTy->getPointeeType();

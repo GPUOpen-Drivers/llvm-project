@@ -686,7 +686,7 @@ protected:
   DominatorTree *DT;
 
   /// Alias Analysis.
-  AliasAnalysis *AA;
+  AAResults *AA;
 
   /// Target Library Info.
   const TargetLibraryInfo *TLI;
@@ -5932,7 +5932,7 @@ unsigned LoopVectorizationCostModel::getGatherScatterCost(Instruction *I,
   Type *ValTy = getMemInstValueType(I);
   auto *VectorTy = cast<VectorType>(ToVectorTy(ValTy, VF));
   const Align Alignment = getLoadStoreAlignment(I);
-  Value *Ptr = getLoadStorePointerOperand(I);
+  const Value *Ptr = getLoadStorePointerOperand(I);
 
   return TTI.getAddressComputationCost(VectorTy) +
          TTI.getGatherScatterOpCost(I->getOpcode(), VectorTy, Ptr,
@@ -7996,7 +7996,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 LoopVectorizeResult LoopVectorizePass::runImpl(
     Function &F, ScalarEvolution &SE_, LoopInfo &LI_, TargetTransformInfo &TTI_,
     DominatorTree &DT_, BlockFrequencyInfo &BFI_, TargetLibraryInfo *TLI_,
-    DemandedBits &DB_, AliasAnalysis &AA_, AssumptionCache &AC_,
+    DemandedBits &DB_, AAResults &AA_, AssumptionCache &AC_,
     std::function<const LoopAccessInfo &(Loop &)> &GetLAA_,
     OptimizationRemarkEmitter &ORE_, ProfileSummaryInfo *PSI_) {
   SE = &SE_;

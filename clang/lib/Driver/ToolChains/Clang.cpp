@@ -15,6 +15,7 @@
 #include "Arch/RISCV.h"
 #include "Arch/Sparc.h"
 #include "Arch/SystemZ.h"
+#include "Arch/VE.h"
 #include "Arch/X86.h"
 #include "CommonArgs.h"
 #include "Hexagon.h"
@@ -368,27 +369,14 @@ static void getTargetFeatures(const Driver &D, const llvm::Triple &Triple,
     break;
   case llvm::Triple::msp430:
     msp430::getMSP430TargetFeatures(D, Args, Features);
+    break;
+  case llvm::Triple::ve:
+    ve::getVETargetFeatures(D, Args, Features);
   }
 
-  // Find the last of each feature.
-  llvm::StringMap<unsigned> LastOpt;
-  for (unsigned I = 0, N = Features.size(); I < N; ++I) {
-    StringRef Name = Features[I];
-    assert(Name[0] == '-' || Name[0] == '+');
-    LastOpt[Name.drop_front(1)] = I;
-  }
-
-  for (unsigned I = 0, N = Features.size(); I < N; ++I) {
-    // If this feature was overridden, ignore it.
-    StringRef Name = Features[I];
-    llvm::StringMap<unsigned>::iterator LastI = LastOpt.find(Name.drop_front(1));
-    assert(LastI != LastOpt.end());
-    unsigned Last = LastI->second;
-    if (Last != I)
-      continue;
-
+  for (auto Feature : unifyTargetFeatures(Features)) {
     CmdArgs.push_back(IsAux ? "-aux-target-feature" : "-target-feature");
-    CmdArgs.push_back(Name.data());
+    CmdArgs.push_back(Feature.data());
   }
 }
 
@@ -1241,6 +1229,7 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
     if (YcArg && JA.getKind() >= Action::PrecompileJobClass &&
         JA.getKind() <= Action::AssembleJobClass) {
       CmdArgs.push_back(Args.MakeArgString("-building-pch-with-obj"));
+      CmdArgs.push_back(Args.MakeArgString("-fpch-instantiate-templates"));
     }
     if (YcArg || YuArg) {
       StringRef ThroughHeader = YcArg ? YcArg->getValue() : YuArg->getValue();
@@ -1661,6 +1650,10 @@ void Clang::RenderTargetOptions(const llvm::Triple &EffectiveTriple,
   case llvm::Triple::wasm32:
   case llvm::Triple::wasm64:
     AddWebAssemblyTargetArgs(Args, CmdArgs);
+    break;
+
+  case llvm::Triple::ve:
+    AddVETargetArgs(Args, CmdArgs);
     break;
   }
 }
@@ -2157,6 +2150,12 @@ void Clang::AddWebAssemblyTargetArgs(const ArgList &Args,
     CmdArgs.push_back("-fvisibility");
     CmdArgs.push_back("hidden");
   }
+}
+
+void Clang::AddVETargetArgs(const ArgList &Args, ArgStringList &CmdArgs) const {
+  // Floating point operations and argument passing are hard.
+  CmdArgs.push_back("-mfloat-abi");
+  CmdArgs.push_back("hard");
 }
 
 void Clang::DumpCompilationDatabase(Compilation &C, StringRef Filename,
@@ -5242,6 +5241,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                        options::OPT_fno_openmp_cuda_mode, /*Default=*/false))
         CmdArgs.push_back("-fopenmp-cuda-mode");
 
+      // When in OpenMP offloading mode with NVPTX target, forward
+      // cuda-parallel-target-regions flag
+      if (Args.hasFlag(options::OPT_fopenmp_cuda_parallel_target_regions,
+                       options::OPT_fno_openmp_cuda_parallel_target_regions,
+                       /*Default=*/true))
+        CmdArgs.push_back("-fopenmp-cuda-parallel-target-regions");
+
       // When in OpenMP offloading mode with NVPTX target, check if full runtime
       // is required.
       if (Args.hasFlag(options::OPT_fopenmp_cuda_force_full_runtime,
@@ -5498,7 +5504,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // -fuse-cxa-atexit is default.
   if (!Args.hasFlag(
           options::OPT_fuse_cxa_atexit, options::OPT_fno_use_cxa_atexit,
-          !RawTriple.isOSWindows() &&
+          !RawTriple.isOSAIX() && !RawTriple.isOSWindows() &&
               TC.getArch() != llvm::Triple::xcore &&
               ((RawTriple.getVendor() != llvm::Triple::MipsTechnologies) ||
                RawTriple.hasEnvironment())) ||
@@ -5633,6 +5639,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasFlag(options::OPT_fpch_validate_input_files_content,
                    options::OPT_fno_pch_validate_input_files_content, false))
     CmdArgs.push_back("-fvalidate-ast-input-files-content");
+  if (Args.hasFlag(options::OPT_fpch_instantiate_templates,
+                   options::OPT_fno_pch_instantiate_templates, false))
+    CmdArgs.push_back("-fpch-instantiate-templates");
 
   Args.AddLastArg(CmdArgs, options::OPT_fexperimental_new_pass_manager,
                   options::OPT_fno_experimental_new_pass_manager);
