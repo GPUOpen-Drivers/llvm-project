@@ -54,6 +54,7 @@ class InnerLoopVectorizer;
 template <class T> class InterleaveGroup;
 class LoopInfo;
 class raw_ostream;
+class RecurrenceDescriptor;
 class Value;
 class VPBasicBlock;
 class VPRegionBlock;
@@ -618,6 +619,7 @@ public:
     VPInstructionSC,
     VPInterleaveSC,
     VPPredInstPHISC,
+    VPReductionSC,
     VPReplicateSC,
     VPWidenCallSC,
     VPWidenCanonicalIVSC,
@@ -865,12 +867,18 @@ public:
 /// A recipe for handling GEP instructions.
 class VPWidenGEPRecipe : public VPRecipeBase {
   GetElementPtrInst *GEP;
+
+  /// Hold VPValues for the base and indices of the GEP.
+  VPUser User;
+
   bool IsPtrLoopInvariant;
   SmallBitVector IsIndexLoopInvariant;
 
 public:
-  VPWidenGEPRecipe(GetElementPtrInst *GEP, Loop *OrigLoop)
-      : VPRecipeBase(VPWidenGEPSC), GEP(GEP),
+  template <typename IterT>
+  VPWidenGEPRecipe(GetElementPtrInst *GEP, iterator_range<IterT> Operands,
+                   Loop *OrigLoop)
+      : VPRecipeBase(VPWidenGEPSC), GEP(GEP), User(Operands),
         IsIndexLoopInvariant(GEP->getNumIndices(), false) {
     IsPtrLoopInvariant = OrigLoop->isLoopInvariant(GEP->getPointerOperand());
     for (auto Index : enumerate(GEP->indices()))
@@ -1024,6 +1032,43 @@ public:
              VPSlotTracker &SlotTracker) const override;
 
   const InterleaveGroup<Instruction> *getInterleaveGroup() { return IG; }
+};
+
+/// A recipe to represent inloop reduction operations, performing a reduction on
+/// a vector operand into a scalar value, and adding the result to a chain.
+class VPReductionRecipe : public VPRecipeBase {
+  /// The recurrence decriptor for the reduction in question.
+  RecurrenceDescriptor *RdxDesc;
+  /// The original instruction being converted to a reduction.
+  Instruction *I;
+  /// The VPValue of the vector value to be reduced.
+  VPValue *VecOp;
+  /// The VPValue of the scalar Chain being accumulated.
+  VPValue *ChainOp;
+  /// Fast math flags to use for the resulting reduction operation.
+  bool NoNaN;
+  /// Pointer to the TTI, needed to create the target reduction
+  const TargetTransformInfo *TTI;
+
+public:
+  VPReductionRecipe(RecurrenceDescriptor *R, Instruction *I, VPValue *ChainOp,
+                    VPValue *VecOp, bool NoNaN, const TargetTransformInfo *TTI)
+      : VPRecipeBase(VPReductionSC), RdxDesc(R), I(I), VecOp(VecOp),
+        ChainOp(ChainOp), NoNaN(NoNaN), TTI(TTI) {}
+
+  ~VPReductionRecipe() override = default;
+
+  /// Method to support type inquiry through isa, cast, and dyn_cast.
+  static inline bool classof(const VPRecipeBase *V) {
+    return V->getVPRecipeID() == VPRecipeBase::VPReductionSC;
+  }
+
+  /// Generate the reduction in the loop
+  void execute(VPTransformState &State) override;
+
+  /// Print the recipe.
+  void print(raw_ostream &O, const Twine &Indent,
+             VPSlotTracker &SlotTracker) const override;
 };
 
 /// VPReplicateRecipe replicates a given instruction producing multiple scalar

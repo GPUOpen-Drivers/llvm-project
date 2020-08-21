@@ -92,7 +92,8 @@ void AMDGCN::Linker::constructLldCommand(Compilation &C, const JobAction &JA,
   for (auto Input : Inputs)
     LldArgs.push_back(Input.getFilename());
   const char *Lld = Args.MakeArgString(getToolChain().GetProgramPath("lld"));
-  C.addCommand(std::make_unique<Command>(JA, *this, Lld, LldArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, *this, ResponseFileSupport::None(),
+                                         Lld, LldArgs, Inputs));
 }
 
 // Construct a clang-offload-bundler command to bundle code objects for
@@ -125,7 +126,8 @@ void AMDGCN::constructHIPFatbinCommand(Compilation &C, const JobAction &JA,
 
   const char *Bundler = Args.MakeArgString(
       T.getToolChain().GetProgramPath("clang-offload-bundler"));
-  C.addCommand(std::make_unique<Command>(JA, T, Bundler, BundlerArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, T, ResponseFileSupport::None(),
+                                         Bundler, BundlerArgs, Inputs));
 }
 
 /// Add Generated HIP Object File which has device images embedded into the
@@ -191,11 +193,11 @@ void AMDGCN::Linker::constructGenerateObjFileFromHIPFatBinary(
 
   Objf << ObjBuffer;
 
-  ArgStringList McArgs{"-triple", Args.MakeArgString(TC.getTripleString()),
-                       "-o",      Output.getFilename(),
+  ArgStringList McArgs{"-o",      Output.getFilename(),
                        McinFile,  "--filetype=obj"};
   const char *Mc = Args.MakeArgString(TC.GetProgramPath("llvm-mc"));
-  C.addCommand(std::make_unique<Command>(JA, *this, Mc, McArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(JA, *this, ResponseFileSupport::None(),
+                                         Mc, McArgs, Inputs));
 }
 
 // For amdgcn the inputs of the linker job are device bitcode and output is
@@ -277,8 +279,7 @@ void HIPToolChain::addClangTargetOptions(
   ArgStringList LibraryPaths;
 
   // Find in --hip-device-lib-path and HIP_LIBRARY_PATH.
-  for (auto Path :
-       DriverArgs.getAllArgValues(options::OPT_hip_device_lib_path_EQ))
+  for (auto Path : RocmInstallation.getRocmDeviceLibPathArg())
     LibraryPaths.push_back(DriverArgs.MakeArgString(Path));
 
   addDirectoryList(DriverArgs, LibraryPaths, "", "HIP_DEVICE_LIB_PATH");
@@ -289,14 +290,14 @@ void HIPToolChain::addClangTargetOptions(
     for (auto Lib : BCLibs)
       addBCLib(getDriver(), DriverArgs, CC1Args, LibraryPaths, Lib);
   } else {
-    if (!RocmInstallation.isValid()) {
-      getDriver().Diag(diag::err_drv_no_rocm_installation);
+    if (!RocmInstallation.hasDeviceLibrary()) {
+      getDriver().Diag(diag::err_drv_no_rocm_device_lib) << 0;
       return;
     }
 
     std::string LibDeviceFile = RocmInstallation.getLibDeviceFile(CanonArch);
     if (LibDeviceFile.empty()) {
-      getDriver().Diag(diag::err_drv_no_rocm_device_lib) << GpuArch;
+      getDriver().Diag(diag::err_drv_no_rocm_device_lib) << 1 << GpuArch;
       return;
     }
 

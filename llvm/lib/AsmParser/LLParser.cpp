@@ -788,13 +788,20 @@ bool LLParser::ParseStandaloneMetadata() {
 // Skips a single module summary entry.
 bool LLParser::SkipModuleSummaryEntry() {
   // Each module summary entry consists of a tag for the entry
-  // type, followed by a colon, then the fields surrounded by nested sets of
-  // parentheses. The "tag:" looks like a Label. Once parsing support is
-  // in place we will look for the tokens corresponding to the expected tags.
+  // type, followed by a colon, then the fields which may be surrounded by
+  // nested sets of parentheses. The "tag:" looks like a Label. Once parsing
+  // support is in place we will look for the tokens corresponding to the
+  // expected tags.
   if (Lex.getKind() != lltok::kw_gv && Lex.getKind() != lltok::kw_module &&
-      Lex.getKind() != lltok::kw_typeid)
+      Lex.getKind() != lltok::kw_typeid && Lex.getKind() != lltok::kw_flags &&
+      Lex.getKind() != lltok::kw_blockcount)
     return TokError(
-        "Expected 'gv', 'module', or 'typeid' at the start of summary entry");
+        "Expected 'gv', 'module', 'typeid', 'flags' or 'blockcount' at the "
+        "start of summary entry");
+  if (Lex.getKind() == lltok::kw_flags)
+    return ParseSummaryIndexFlags();
+  if (Lex.getKind() == lltok::kw_blockcount)
+    return ParseBlockCount();
   Lex.Lex();
   if (ParseToken(lltok::colon, "expected ':' at start of summary entry") ||
       ParseToken(lltok::lparen, "expected '(' at start of summary entry"))
@@ -1374,6 +1381,7 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
     case lltok::kw_inalloca:
     case lltok::kw_nest:
     case lltok::kw_noalias:
+    case lltok::kw_noundef:
     case lltok::kw_nocapture:
     case lltok::kw_nonnull:
     case lltok::kw_returned:
@@ -1381,6 +1389,7 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
     case lltok::kw_swifterror:
     case lltok::kw_swiftself:
     case lltok::kw_immarg:
+    case lltok::kw_byref:
       HaveError |=
         Error(Lex.getLoc(),
               "invalid use of parameter-only attribute on a function");
@@ -1641,7 +1650,7 @@ bool LLParser::ParseOptionalParamAttrs(AttrBuilder &B) {
     }
     case lltok::kw_align: {
       MaybeAlign Alignment;
-      if (ParseOptionalAlignment(Alignment))
+      if (ParseOptionalAlignment(Alignment, true))
         return true;
       B.addAlignmentAttr(Alignment);
       continue;
@@ -1674,9 +1683,19 @@ bool LLParser::ParseOptionalParamAttrs(AttrBuilder &B) {
       B.addDereferenceableOrNullAttr(Bytes);
       continue;
     }
+    case lltok::kw_byref: {
+      Type *Ty;
+      if (ParseByRef(Ty))
+        return true;
+      B.addByRefAttr(Ty);
+      continue;
+    }
     case lltok::kw_inalloca:        B.addAttribute(Attribute::InAlloca); break;
     case lltok::kw_inreg:           B.addAttribute(Attribute::InReg); break;
     case lltok::kw_nest:            B.addAttribute(Attribute::Nest); break;
+    case lltok::kw_noundef:
+      B.addAttribute(Attribute::NoUndef);
+      break;
     case lltok::kw_noalias:         B.addAttribute(Attribute::NoAlias); break;
     case lltok::kw_nocapture:       B.addAttribute(Attribute::NoCapture); break;
     case lltok::kw_nofree:          B.addAttribute(Attribute::NoFree); break;
@@ -1774,6 +1793,9 @@ bool LLParser::ParseOptionalReturnAttrs(AttrBuilder &B) {
     }
     case lltok::kw_inreg:           B.addAttribute(Attribute::InReg); break;
     case lltok::kw_noalias:         B.addAttribute(Attribute::NoAlias); break;
+    case lltok::kw_noundef:
+      B.addAttribute(Attribute::NoUndef);
+      break;
     case lltok::kw_nonnull:         B.addAttribute(Attribute::NonNull); break;
     case lltok::kw_signext:         B.addAttribute(Attribute::SExt); break;
     case lltok::kw_zeroext:         B.addAttribute(Attribute::ZExt); break;
@@ -1788,6 +1810,7 @@ bool LLParser::ParseOptionalReturnAttrs(AttrBuilder &B) {
     case lltok::kw_swifterror:
     case lltok::kw_swiftself:
     case lltok::kw_immarg:
+    case lltok::kw_byref:
       HaveError |= Error(Lex.getLoc(), "invalid use of parameter-only attribute");
       break;
 
@@ -2127,14 +2150,26 @@ bool LLParser::ParseOptionalFunctionMetadata(Function &F) {
 /// ParseOptionalAlignment
 ///   ::= /* empty */
 ///   ::= 'align' 4
-bool LLParser::ParseOptionalAlignment(MaybeAlign &Alignment) {
+bool LLParser::ParseOptionalAlignment(MaybeAlign &Alignment, bool AllowParens) {
   Alignment = None;
   if (!EatIfPresent(lltok::kw_align))
     return false;
   LocTy AlignLoc = Lex.getLoc();
   uint32_t Value = 0;
+
+  LocTy ParenLoc = Lex.getLoc();
+  bool HaveParens = false;
+  if (AllowParens) {
+    if (EatIfPresent(lltok::lparen))
+      HaveParens = true;
+  }
+
   if (ParseUInt32(Value))
     return true;
+
+  if (HaveParens && !EatIfPresent(lltok::rparen))
+    return Error(ParenLoc, "expected ')'");
+
   if (!isPowerOf2_32(Value))
     return Error(AlignLoc, "alignment is not a power of two");
   if (Value > Value::MaximumAlignment)
@@ -2549,11 +2584,11 @@ bool LLParser::ParseByValWithOptionalType(Type *&Result) {
   return false;
 }
 
-/// ParsePreallocated
-///   ::= preallocated(<ty>)
-bool LLParser::ParsePreallocated(Type *&Result) {
+/// ParseRequiredTypeAttr
+///   ::= attrname(<ty>)
+bool LLParser::ParseRequiredTypeAttr(Type *&Result, lltok::Kind AttrName) {
   Result = nullptr;
-  if (!EatIfPresent(lltok::kw_preallocated))
+  if (!EatIfPresent(AttrName))
     return true;
   if (!EatIfPresent(lltok::lparen))
     return Error(Lex.getLoc(), "expected '('");
@@ -2562,6 +2597,18 @@ bool LLParser::ParsePreallocated(Type *&Result) {
   if (!EatIfPresent(lltok::rparen))
     return Error(Lex.getLoc(), "expected ')'");
   return false;
+}
+
+/// ParsePreallocated
+///   ::= preallocated(<ty>)
+bool LLParser::ParsePreallocated(Type *&Result) {
+  return ParseRequiredTypeAttr(Result, lltok::kw_preallocated);
+}
+
+/// ParseByRef
+///   ::= byref(<type>)
+bool LLParser::ParseByRef(Type *&Result) {
+  return ParseRequiredTypeAttr(Result, lltok::kw_byref);
 }
 
 /// ParseOptionalOperandBundles
@@ -4642,7 +4689,9 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
   OPTIONAL(templateParams, MDField, );                                         \
   OPTIONAL(identifier, MDStringField, );                                       \
   OPTIONAL(discriminator, MDField, );                                          \
-  OPTIONAL(dataLocation, MDField, );
+  OPTIONAL(dataLocation, MDField, );                                           \
+  OPTIONAL(associated, MDField, );                                             \
+  OPTIONAL(allocated, MDField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
@@ -4652,7 +4701,8 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
             Context, *identifier.Val, tag.Val, name.Val, file.Val, line.Val,
             scope.Val, baseType.Val, size.Val, align.Val, offset.Val, flags.Val,
             elements.Val, runtimeLang.Val, vtableHolder.Val, templateParams.Val,
-            discriminator.Val, dataLocation.Val)) {
+            discriminator.Val, dataLocation.Val, associated.Val,
+            allocated.Val)) {
       Result = CT;
       return false;
     }
@@ -4664,7 +4714,7 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
       (Context, tag.Val, name.Val, file.Val, line.Val, scope.Val, baseType.Val,
        size.Val, align.Val, offset.Val, flags.Val, elements.Val,
        runtimeLang.Val, vtableHolder.Val, templateParams.Val, identifier.Val,
-       discriminator.Val, dataLocation.Val));
+       discriminator.Val, dataLocation.Val, associated.Val, allocated.Val));
   return false;
 }
 
@@ -7197,8 +7247,13 @@ int LLParser::ParseCmpXchg(Instruction *&Inst, PerFunctionState &PFS) {
     return Error(NewLoc, "new value and pointer type do not match");
   if (!New->getType()->isFirstClassType())
     return Error(NewLoc, "cmpxchg operand must be a first class value");
+
+  Align Alignment(
+      PFS.getFunction().getParent()->getDataLayout().getTypeStoreSize(
+          Cmp->getType()));
+
   AtomicCmpXchgInst *CXI = new AtomicCmpXchgInst(
-      Ptr, Cmp, New, SuccessOrdering, FailureOrdering, SSID);
+      Ptr, Cmp, New, Alignment, SuccessOrdering, FailureOrdering, SSID);
   CXI->setVolatile(isVolatile);
   CXI->setWeak(isWeak);
   Inst = CXI;
@@ -7282,9 +7337,11 @@ int LLParser::ParseAtomicRMW(Instruction *&Inst, PerFunctionState &PFS) {
   if (Size < 8 || (Size & (Size - 1)))
     return Error(ValLoc, "atomicrmw operand must be power-of-two byte-sized"
                          " integer");
-
+  Align Alignment(
+      PFS.getFunction().getParent()->getDataLayout().getTypeStoreSize(
+          Val->getType()));
   AtomicRMWInst *RMWI =
-    new AtomicRMWInst(Operation, Ptr, Val, Ordering, SSID);
+      new AtomicRMWInst(Operation, Ptr, Val, Alignment, Ordering, SSID);
   RMWI->setVolatile(isVolatile);
   Inst = RMWI;
   return AteExtraComma ? InstExtraComma : InstNormal;
@@ -7729,13 +7786,11 @@ bool LLParser::ParseTypeIdCompatibleVtableEntry(unsigned ID) {
   // Now that the TI vector is finalized, it is safe to save the locations
   // of any forward GV references that need updating later.
   for (auto I : IdToIndexMap) {
+    auto &Infos = ForwardRefValueInfos[I.first];
     for (auto P : I.second) {
       assert(TI[P.first].VTableVI == EmptyVI &&
              "Forward referenced ValueInfo expected to be empty");
-      auto FwdRef = ForwardRefValueInfos.insert(std::make_pair(
-          I.first, std::vector<std::pair<ValueInfo *, LocTy>>()));
-      FwdRef.first->second.push_back(
-          std::make_pair(&TI[P.first].VTableVI, P.second));
+      Infos.emplace_back(&TI[P.first].VTableVI, P.second);
     }
   }
 
@@ -7773,6 +7828,9 @@ bool LLParser::ParseTypeTestResolution(TypeTestResolution &TTRes) {
     return true;
 
   switch (Lex.getKind()) {
+  case lltok::kw_unknown:
+    TTRes.TheKind = TypeTestResolution::Unknown;
+    break;
   case lltok::kw_unsat:
     TTRes.TheKind = TypeTestResolution::Unsat;
     break;
@@ -8116,7 +8174,8 @@ bool LLParser::ParseSummaryIndexFlags() {
   uint64_t Flags;
   if (ParseUInt64(Flags))
     return true;
-  Index->setFlags(Flags);
+  if (Index)
+    Index->setFlags(Flags);
   return false;
 }
 
@@ -8131,7 +8190,8 @@ bool LLParser::ParseBlockCount() {
   uint64_t BlockCount;
   if (ParseUInt64(BlockCount))
     return true;
-  Index->setBlockCount(BlockCount);
+  if (Index)
+    Index->setBlockCount(BlockCount);
   return false;
 }
 
@@ -8383,9 +8443,7 @@ bool LLParser::ParseAliasSummary(std::string Name, GlobalValue::GUID GUID,
 
   // Record forward reference if the aliasee is not parsed yet.
   if (AliaseeVI.getRef() == FwdVIRef) {
-    auto FwdRef = ForwardRefAliasees.insert(
-        std::make_pair(GVId, std::vector<std::pair<AliasSummary *, LocTy>>()));
-    FwdRef.first->second.push_back(std::make_pair(AS.get(), Loc));
+    ForwardRefAliasees[GVId].emplace_back(AS.get(), Loc);
   } else {
     auto Summary = Index->findSummaryInModule(AliaseeVI, ModulePath);
     assert(Summary && "Aliasee must be a definition");
@@ -8526,13 +8584,11 @@ bool LLParser::ParseOptionalCalls(std::vector<FunctionSummary::EdgeTy> &Calls) {
   // Now that the Calls vector is finalized, it is safe to save the locations
   // of any forward GV references that need updating later.
   for (auto I : IdToIndexMap) {
+    auto &Infos = ForwardRefValueInfos[I.first];
     for (auto P : I.second) {
       assert(Calls[P.first].first.getRef() == FwdVIRef &&
              "Forward referenced ValueInfo expected to be empty");
-      auto FwdRef = ForwardRefValueInfos.insert(std::make_pair(
-          I.first, std::vector<std::pair<ValueInfo *, LocTy>>()));
-      FwdRef.first->second.push_back(
-          std::make_pair(&Calls[P.first].first, P.second));
+      Infos.emplace_back(&Calls[P.first].first, P.second);
     }
   }
 
@@ -8613,13 +8669,11 @@ bool LLParser::ParseOptionalVTableFuncs(VTableFuncList &VTableFuncs) {
   // Now that the VTableFuncs vector is finalized, it is safe to save the
   // locations of any forward GV references that need updating later.
   for (auto I : IdToIndexMap) {
+    auto &Infos = ForwardRefValueInfos[I.first];
     for (auto P : I.second) {
       assert(VTableFuncs[P.first].FuncVI == EmptyVI &&
              "Forward referenced ValueInfo expected to be empty");
-      auto FwdRef = ForwardRefValueInfos.insert(std::make_pair(
-          I.first, std::vector<std::pair<ValueInfo *, LocTy>>()));
-      FwdRef.first->second.push_back(
-          std::make_pair(&VTableFuncs[P.first].FuncVI, P.second));
+      Infos.emplace_back(&VTableFuncs[P.first].FuncVI, P.second);
     }
   }
 
@@ -8794,12 +8848,11 @@ bool LLParser::ParseOptionalRefs(std::vector<ValueInfo> &Refs) {
   // Now that the Refs vector is finalized, it is safe to save the locations
   // of any forward GV references that need updating later.
   for (auto I : IdToIndexMap) {
+    auto &Infos = ForwardRefValueInfos[I.first];
     for (auto P : I.second) {
       assert(Refs[P.first].getRef() == FwdVIRef &&
              "Forward referenced ValueInfo expected to be empty");
-      auto FwdRef = ForwardRefValueInfos.insert(std::make_pair(
-          I.first, std::vector<std::pair<ValueInfo *, LocTy>>()));
-      FwdRef.first->second.push_back(std::make_pair(&Refs[P.first], P.second));
+      Infos.emplace_back(&Refs[P.first], P.second);
     }
   }
 
@@ -8889,13 +8942,11 @@ bool LLParser::ParseTypeTests(std::vector<GlobalValue::GUID> &TypeTests) {
   // Now that the TypeTests vector is finalized, it is safe to save the
   // locations of any forward GV references that need updating later.
   for (auto I : IdToIndexMap) {
+    auto &Ids = ForwardRefTypeIds[I.first];
     for (auto P : I.second) {
       assert(TypeTests[P.first] == 0 &&
              "Forward referenced type id GUID expected to be 0");
-      auto FwdRef = ForwardRefTypeIds.insert(std::make_pair(
-          I.first, std::vector<std::pair<GlobalValue::GUID *, LocTy>>()));
-      FwdRef.first->second.push_back(
-          std::make_pair(&TypeTests[P.first], P.second));
+      Ids.emplace_back(&TypeTests[P.first], P.second);
     }
   }
 
@@ -8930,13 +8981,11 @@ bool LLParser::ParseVFuncIdList(
   // Now that the VFuncIdList vector is finalized, it is safe to save the
   // locations of any forward GV references that need updating later.
   for (auto I : IdToIndexMap) {
+    auto &Ids = ForwardRefTypeIds[I.first];
     for (auto P : I.second) {
       assert(VFuncIdList[P.first].GUID == 0 &&
              "Forward referenced type id GUID expected to be 0");
-      auto FwdRef = ForwardRefTypeIds.insert(std::make_pair(
-          I.first, std::vector<std::pair<GlobalValue::GUID *, LocTy>>()));
-      FwdRef.first->second.push_back(
-          std::make_pair(&VFuncIdList[P.first].GUID, P.second));
+      Ids.emplace_back(&VFuncIdList[P.first].GUID, P.second);
     }
   }
 
@@ -8969,13 +9018,11 @@ bool LLParser::ParseConstVCallList(
   // Now that the ConstVCallList vector is finalized, it is safe to save the
   // locations of any forward GV references that need updating later.
   for (auto I : IdToIndexMap) {
+    auto &Ids = ForwardRefTypeIds[I.first];
     for (auto P : I.second) {
       assert(ConstVCallList[P.first].VFunc.GUID == 0 &&
              "Forward referenced type id GUID expected to be 0");
-      auto FwdRef = ForwardRefTypeIds.insert(std::make_pair(
-          I.first, std::vector<std::pair<GlobalValue::GUID *, LocTy>>()));
-      FwdRef.first->second.push_back(
-          std::make_pair(&ConstVCallList[P.first].VFunc.GUID, P.second));
+      Ids.emplace_back(&ConstVCallList[P.first].VFunc.GUID, P.second);
     }
   }
 

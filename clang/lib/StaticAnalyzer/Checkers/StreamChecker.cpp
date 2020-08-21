@@ -195,29 +195,17 @@ ProgramStateRef bindInt(uint64_t Value, ProgramStateRef State,
 
 class StreamChecker : public Checker<check::PreCall, eval::Call,
                                      check::DeadSymbols, check::PointerEscape> {
-  BuiltinBug BT_FileNull{this, "NULL stream pointer",
-                         "Stream pointer might be NULL."};
-  BuiltinBug BT_UseAfterClose{
-      this, "Closed stream",
-      "Stream might be already closed. Causes undefined behaviour."};
-  BuiltinBug BT_UseAfterOpenFailed{this, "Invalid stream",
-                                   "Stream might be invalid after "
-                                   "(re-)opening it has failed. "
-                                   "Can cause undefined behaviour."};
-  BuiltinBug BT_IndeterminatePosition{
-      this, "Invalid stream state",
-      "File position of the stream might be 'indeterminate' "
-      "after a failed operation. "
-      "Can cause undefined behavior."};
-  BuiltinBug BT_IllegalWhence{this, "Illegal whence argument",
-                              "The whence argument to fseek() should be "
-                              "SEEK_SET, SEEK_END, or SEEK_CUR."};
-  BuiltinBug BT_StreamEof{this, "Stream already in EOF",
-                          "Read function called when stream is in EOF state. "
-                          "Function has no effect."};
-  BuiltinBug BT_ResourceLeak{
-      this, "Resource leak",
-      "Opened stream never closed. Potential resource leak."};
+  BugType BT_FileNull{this, "NULL stream pointer", "Stream handling error"};
+  BugType BT_UseAfterClose{this, "Closed stream", "Stream handling error"};
+  BugType BT_UseAfterOpenFailed{this, "Invalid stream",
+                                "Stream handling error"};
+  BugType BT_IndeterminatePosition{this, "Invalid stream state",
+                                   "Stream handling error"};
+  BugType BT_IllegalWhence{this, "Illegal whence argument",
+                           "Stream handling error"};
+  BugType BT_StreamEof{this, "Stream already in EOF", "Stream handling error"};
+  BugType BT_ResourceLeak{this, "Resource leak", "Stream handling error",
+                          /*SuppressOnSink =*/true};
 
 public:
   void checkPreCall(const CallEvent &Call, CheckerContext &C) const;
@@ -349,6 +337,12 @@ private:
   /// by the new non-fatal error node or (if failed) a normal transition,
   /// to ensure uniform handling.
   void reportFEofWarning(CheckerContext &C, ProgramStateRef State) const;
+
+  /// Emit resource leak warnings for the given symbols.
+  /// Createn a non-fatal error node for these, and returns it (if any warnings
+  /// were generated). Return value is non-null.
+  ExplodedNode *reportLeaks(const SmallVector<SymbolRef, 2> &LeakedSyms,
+                            CheckerContext &C, ExplodedNode *Pred) const;
 
   /// Find the description data of the function called by a call event.
   /// Returns nullptr if no function is recognized.
@@ -834,7 +828,7 @@ StreamChecker::ensureStreamNonNull(SVal StreamVal, CheckerContext &C,
   if (!StateNotNull && StateNull) {
     if (ExplodedNode *N = C.generateErrorNode(StateNull)) {
       C.emitReport(std::make_unique<PathSensitiveBugReport>(
-          BT_FileNull, BT_FileNull.getDescription(), N));
+          BT_FileNull, "Stream pointer might be NULL.", N));
     }
     return nullptr;
   }
@@ -859,7 +853,8 @@ ProgramStateRef StreamChecker::ensureStreamOpened(SVal StreamVal,
     ExplodedNode *N = C.generateErrorNode();
     if (N) {
       C.emitReport(std::make_unique<PathSensitiveBugReport>(
-          BT_UseAfterClose, BT_UseAfterClose.getDescription(), N));
+          BT_UseAfterClose,
+          "Stream might be already closed. Causes undefined behaviour.", N));
       return nullptr;
     }
 
@@ -874,7 +869,11 @@ ProgramStateRef StreamChecker::ensureStreamOpened(SVal StreamVal,
     ExplodedNode *N = C.generateErrorNode();
     if (N) {
       C.emitReport(std::make_unique<PathSensitiveBugReport>(
-          BT_UseAfterOpenFailed, BT_UseAfterOpenFailed.getDescription(), N));
+          BT_UseAfterOpenFailed,
+          "Stream might be invalid after "
+          "(re-)opening it has failed. "
+          "Can cause undefined behaviour.",
+          N));
       return nullptr;
     }
     return State;
@@ -885,6 +884,11 @@ ProgramStateRef StreamChecker::ensureStreamOpened(SVal StreamVal,
 
 ProgramStateRef StreamChecker::ensureNoFilePositionIndeterminate(
     SVal StreamVal, CheckerContext &C, ProgramStateRef State) const {
+  static const char *BugMessage =
+      "File position of the stream might be 'indeterminate' "
+      "after a failed operation. "
+      "Can cause undefined behavior.";
+
   SymbolRef Sym = StreamVal.getAsSymbol();
   if (!Sym)
     return State;
@@ -905,8 +909,7 @@ ProgramStateRef StreamChecker::ensureNoFilePositionIndeterminate(
         return nullptr;
 
       C.emitReport(std::make_unique<PathSensitiveBugReport>(
-          BT_IndeterminatePosition, BT_IndeterminatePosition.getDescription(),
-          N));
+          BT_IndeterminatePosition, BugMessage, N));
       return State->set<StreamMap>(
           Sym, StreamState::getOpened(SS->LastOperation, ErrorFEof, false));
     }
@@ -916,8 +919,7 @@ ProgramStateRef StreamChecker::ensureNoFilePositionIndeterminate(
     ExplodedNode *N = C.generateErrorNode(State);
     if (N)
       C.emitReport(std::make_unique<PathSensitiveBugReport>(
-          BT_IndeterminatePosition, BT_IndeterminatePosition.getDescription(),
-          N));
+          BT_IndeterminatePosition, BugMessage, N));
 
     return nullptr;
   }
@@ -938,7 +940,10 @@ StreamChecker::ensureFseekWhenceCorrect(SVal WhenceVal, CheckerContext &C,
 
   if (ExplodedNode *N = C.generateNonFatalErrorNode(State)) {
     C.emitReport(std::make_unique<PathSensitiveBugReport>(
-        BT_IllegalWhence, BT_IllegalWhence.getDescription(), N));
+        BT_IllegalWhence,
+        "The whence argument to fseek() should be "
+        "SEEK_SET, SEEK_END, or SEEK_CUR.",
+        N));
     return nullptr;
   }
 
@@ -949,34 +954,23 @@ void StreamChecker::reportFEofWarning(CheckerContext &C,
                                       ProgramStateRef State) const {
   if (ExplodedNode *N = C.generateNonFatalErrorNode(State)) {
     C.emitReport(std::make_unique<PathSensitiveBugReport>(
-        BT_StreamEof, BT_StreamEof.getDescription(), N));
+        BT_StreamEof,
+        "Read function called when stream is in EOF state. "
+        "Function has no effect.",
+        N));
     return;
   }
   C.addTransition(State);
 }
 
-void StreamChecker::checkDeadSymbols(SymbolReaper &SymReaper,
-                                     CheckerContext &C) const {
-  ProgramStateRef State = C.getState();
+ExplodedNode *
+StreamChecker::reportLeaks(const SmallVector<SymbolRef, 2> &LeakedSyms,
+                           CheckerContext &C, ExplodedNode *Pred) const {
+  ExplodedNode *Err = C.generateNonFatalErrorNode(C.getState(), Pred);
+  if (!Err)
+    return Pred;
 
-  // TODO: Clean up the state.
-  const StreamMapTy &Map = State->get<StreamMap>();
-  for (const auto &I : Map) {
-    SymbolRef Sym = I.first;
-    const StreamState &SS = I.second;
-    if (!SymReaper.isDead(Sym) || !SS.isOpened())
-      continue;
-
-    ExplodedNode *N = C.generateErrorNode();
-    if (!N)
-      continue;
-
-    // Do not warn for non-closed stream at program exit.
-    ExplodedNode *Pred = C.getPredecessor();
-    if (Pred && Pred->getCFGBlock() &&
-        Pred->getCFGBlock()->hasNoReturnElement())
-      continue;
-
+  for (SymbolRef LeakSym : LeakedSyms) {
     // Resource leaks can result in multiple warning that describe the same kind
     // of programming error:
     //  void f() {
@@ -988,8 +982,7 @@ void StreamChecker::checkDeadSymbols(SymbolReaper &SymReaper,
     // from a different kinds of errors), the reduction in redundant reports
     // makes this a worthwhile heuristic.
     // FIXME: Add a checker option to turn this uniqueing feature off.
-
-    const ExplodedNode *StreamOpenNode = getAcquisitionSite(N, Sym, C);
+    const ExplodedNode *StreamOpenNode = getAcquisitionSite(Err, LeakSym, C);
     assert(StreamOpenNode && "Could not find place of stream opening.");
     PathDiagnosticLocation LocUsedForUniqueing =
         PathDiagnosticLocation::createBegin(
@@ -998,12 +991,39 @@ void StreamChecker::checkDeadSymbols(SymbolReaper &SymReaper,
 
     std::unique_ptr<PathSensitiveBugReport> R =
         std::make_unique<PathSensitiveBugReport>(
-            BT_ResourceLeak, BT_ResourceLeak.getDescription(), N,
+            BT_ResourceLeak,
+            "Opened stream never closed. Potential resource leak.", Err,
             LocUsedForUniqueing,
             StreamOpenNode->getLocationContext()->getDecl());
-    R->markInteresting(Sym);
+    R->markInteresting(LeakSym);
     C.emitReport(std::move(R));
   }
+
+  return Err;
+}
+
+void StreamChecker::checkDeadSymbols(SymbolReaper &SymReaper,
+                                     CheckerContext &C) const {
+  ProgramStateRef State = C.getState();
+
+  llvm::SmallVector<SymbolRef, 2> LeakedSyms;
+
+  const StreamMapTy &Map = State->get<StreamMap>();
+  for (const auto &I : Map) {
+    SymbolRef Sym = I.first;
+    const StreamState &SS = I.second;
+    if (!SymReaper.isDead(Sym))
+      continue;
+    if (SS.isOpened())
+      LeakedSyms.push_back(Sym);
+    State = State->remove<StreamMap>(Sym);
+  }
+
+  ExplodedNode *N = C.getPredecessor();
+  if (!LeakedSyms.empty())
+    N = reportLeaks(LeakedSyms, C, N);
+
+  C.addTransition(State, N);
 }
 
 ProgramStateRef StreamChecker::checkPointerEscape(

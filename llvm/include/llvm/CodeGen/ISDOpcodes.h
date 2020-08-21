@@ -310,6 +310,16 @@ enum NodeType {
   SSUBSAT,
   USUBSAT,
 
+  /// RESULT = [US]SHLSAT(LHS, RHS) - Perform saturation left shift. The first
+  /// operand is the value to be shifted, and the second argument is the amount
+  /// to shift by. Both must be integers of the same bit width (W). If the true
+  /// value of LHS << RHS exceeds the largest value that can be represented by
+  /// W bits, the resulting value is this maximum value, Otherwise, if this
+  /// value is less than the smallest value that can be represented by W bits,
+  /// the resulting value is this minimum value.
+  SSHLSAT,
+  USHLSAT,
+
   /// RESULT = [US]MULFIX(LHS, RHS, SCALE) - Perform fixed point multiplication
   /// on
   /// 2 integers with the same width and scale. SCALE represents the scale of
@@ -448,11 +458,11 @@ enum NodeType {
   FCANONICALIZE,
 
   /// BUILD_VECTOR(ELT0, ELT1, ELT2, ELT3,...) - Return a fixed-width vector
-  /// with the specified, possibly variable, elements.  The number of elements
-  /// is required to be a power of two. The types of the operands must all be
-  /// the same and must match the vector element type, except that integer types
-  /// are allowed to be larger than the element type, in which case the operands
-  /// are implicitly truncated.
+  /// with the specified, possibly variable, elements. The types of the
+  /// operands must match the vector element type, except that integer types
+  /// are allowed to be larger than the element type, in which case the
+  /// operands are implicitly truncated. The types of the operands must all
+  /// be the same.
   BUILD_VECTOR,
 
   /// INSERT_VECTOR_ELT(VECTOR, VAL, IDX) - Returns VECTOR with the element
@@ -870,7 +880,7 @@ enum NodeType {
   /// SDOperands.
   INLINEASM,
 
-  /// INLINEASM_BR - Terminator version of inline asm. Used by asm-goto.
+  /// INLINEASM_BR - Branching version of inline asm. Used by asm-goto.
   INLINEASM_BR,
 
   /// EH_LABEL - Represents a label in mid basic block used to track

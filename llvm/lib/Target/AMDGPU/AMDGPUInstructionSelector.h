@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 /// \file
@@ -47,7 +49,7 @@ class SIInstrInfo;
 class SIMachineFunctionInfo;
 class SIRegisterInfo;
 
-class AMDGPUInstructionSelector : public InstructionSelector {
+class AMDGPUInstructionSelector final : public InstructionSelector {
 private:
   MachineRegisterInfo *MRI;
 
@@ -106,12 +108,22 @@ private:
 
   bool selectInterpP1F16(MachineInstr &MI) const;
   bool selectDivScale(MachineInstr &MI) const;
+  bool selectIntrinsicIcmp(MachineInstr &MI) const;
+  bool selectBallot(MachineInstr &I) const;
+  bool selectRelocConstant(MachineInstr &I) const;
+  bool selectReturnAddress(MachineInstr &I) const;
   bool selectG_INTRINSIC(MachineInstr &I) const;
 
   bool selectEndCfIntrinsic(MachineInstr &MI) const;
   bool selectDSOrderedIntrinsic(MachineInstr &MI, Intrinsic::ID IID) const;
   bool selectDSGWSIntrinsic(MachineInstr &MI, Intrinsic::ID IID) const;
   bool selectDSAppendConsume(MachineInstr &MI, bool IsAppend) const;
+
+  bool selectWaterfallBegin(MachineInstr &MI) const;
+  bool selectWaterfallEnd(MachineInstr &MI) const;
+  bool selectWaterfallReadFirstLane(MachineInstr &MI) const;
+  bool selectWaterfallLastUse(MachineInstr &MI) const;
+  bool selectWaterfallIntrinsic(MachineInstr &MI, unsigned Opcode) const;
 
   bool selectImageIntrinsic(MachineInstr &MI,
                             const AMDGPU::ImageDimIntrinsicInfo *Intr) const;
@@ -129,7 +141,7 @@ private:
   bool selectG_STORE(MachineInstr &I) const;
   bool selectG_SELECT(MachineInstr &I) const;
   bool selectG_BRCOND(MachineInstr &I) const;
-  bool selectG_FRAME_INDEX_GLOBAL_VALUE(MachineInstr &I) const;
+  bool selectG_GLOBAL_VALUE(MachineInstr &I) const;
   bool selectG_PTRMASK(MachineInstr &I) const;
   bool selectG_EXTRACT_VECTOR_ELT(MachineInstr &I) const;
   bool selectG_INSERT_VECTOR_ELT(MachineInstr &I) const;
@@ -281,6 +293,8 @@ private:
   void renderExtractDLC(MachineInstrBuilder &MIB, const MachineInstr &MI,
                         int OpIdx) const;
   void renderExtractSWZ(MachineInstrBuilder &MIB, const MachineInstr &MI,
+                        int OpIdx) const;
+  void renderFrameIndex(MachineInstrBuilder &MIB, const MachineInstr &MI,
                         int OpIdx) const;
 
   bool isInlineImmediate16(int64_t Imm) const;

@@ -269,6 +269,10 @@ def int_amdgcn_rcp_legacy : GCCBuiltin<"__builtin_amdgcn_rcp_legacy">,
   [IntrNoMem, IntrSpeculatable, IntrWillReturn]
 >;
 
+def int_amdgcn_sqrt :  Intrinsic<
+  [llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrNoMem, IntrSpeculatable, IntrWillReturn]
+>;
+
 def int_amdgcn_rsq :  Intrinsic<
   [llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrNoMem, IntrSpeculatable, IntrWillReturn]
 >;
@@ -1026,9 +1030,9 @@ class AMDGPUStructBufferStore<LLVMType data_ty = llvm_any_ty> : Intrinsic <
 def int_amdgcn_struct_buffer_store_format : AMDGPUStructBufferStore;
 def int_amdgcn_struct_buffer_store : AMDGPUStructBufferStore;
 
-class AMDGPURawBufferAtomic<LLVMType data_ty = llvm_any_ty> : Intrinsic <
-  [data_ty],
-  [LLVMMatchType<0>,  // vdata(VGPR)
+class AMDGPURawBufferAtomic<LLVMType data_ty = llvm_any_ty, bit NoRtn = 0> : Intrinsic <
+  !if(NoRtn, [], [data_ty]),
+  [!if(NoRtn, data_ty, LLVMMatchType<0>),  // vdata(VGPR)
    llvm_v4i32_ty,     // rsrc(SGPR)
    llvm_i32_ty,       // offset(VGPR/imm, included in bounds checking and swizzling)
    llvm_i32_ty,       // soffset(SGPR/imm, excluded from bounds checking and swizzling)
@@ -1058,9 +1062,12 @@ def int_amdgcn_raw_buffer_atomic_cmpswap : Intrinsic<
   [ImmArg<ArgIndex<5>>, IntrWillReturn], "", [SDNPMemOperand]>,
   AMDGPURsrcIntrinsic<2, 0>;
 
-class AMDGPUStructBufferAtomic<LLVMType data_ty = llvm_any_ty> : Intrinsic <
-  [data_ty],
-  [LLVMMatchType<0>,  // vdata(VGPR)
+// gfx908 intrinsic
+def int_amdgcn_raw_buffer_atomic_fadd : AMDGPURawBufferAtomic<llvm_anyfloat_ty, /*NoRtn*/1>;
+
+class AMDGPUStructBufferAtomic<LLVMType data_ty = llvm_any_ty, bit NoRtn = 0> : Intrinsic <
+  !if(NoRtn, [], [data_ty]),
+  [!if(NoRtn, data_ty, LLVMMatchType<0>),  // vdata(VGPR)
    llvm_v4i32_ty,     // rsrc(SGPR)
    llvm_i32_ty,       // vindex(VGPR)
    llvm_i32_ty,       // offset(VGPR/imm, included in bounds checking and swizzling)
@@ -1091,6 +1098,10 @@ def int_amdgcn_struct_buffer_atomic_cmpswap : Intrinsic<
    llvm_i32_ty],      // cachepolicy(imm; bit 1 = slc)
   [ImmArg<ArgIndex<6>>, IntrWillReturn], "", [SDNPMemOperand]>,
   AMDGPURsrcIntrinsic<2, 0>;
+
+// gfx908 intrinsic
+def int_amdgcn_struct_buffer_atomic_fadd : AMDGPUStructBufferAtomic<llvm_anyfloat_ty, /*NoRtn*/1>;
+
 
 // Obsolescent tbuffer intrinsics.
 def int_amdgcn_tbuffer_load : Intrinsic <
@@ -1774,7 +1785,8 @@ class AMDGPUGlobalAtomicRtn<LLVMType vt> : Intrinsic <
   [vt],
   [llvm_anyptr_ty,    // vaddr
    vt],               // vdata(VGPR)
-  [IntrArgMemOnly, NoCapture<ArgIndex<0>>], "", [SDNPMemOperand]>;
+  [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<0>>], "",
+  [SDNPMemOperand]>;
 
 def int_amdgcn_global_atomic_csub : AMDGPUGlobalAtomicRtn<llvm_i32_ty>;
 
@@ -1910,8 +1922,10 @@ class AMDGPUGlobalAtomicNoRtn : Intrinsic <
   [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<0>>], "",
   [SDNPMemOperand]>;
 
-def int_amdgcn_buffer_atomic_fadd    : AMDGPUBufferAtomicNoRtn;
 def int_amdgcn_global_atomic_fadd    : AMDGPUGlobalAtomicNoRtn;
+
+// Legacy form of the intrinsic. raw and struct forms should be preferred.
+def int_amdgcn_buffer_atomic_fadd : AMDGPUBufferAtomicNoRtn;
 
 // llvm.amdgcn.mfma.f32.* vdst, srcA, srcB, srcC, cbsz, abid, blgp
 def int_amdgcn_mfma_f32_32x32x1f32 : GCCBuiltin<"__builtin_amdgcn_mfma_f32_32x32x1f32">,

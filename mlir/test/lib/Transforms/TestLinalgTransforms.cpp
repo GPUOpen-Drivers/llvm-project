@@ -54,6 +54,15 @@ struct TestLinalgTransforms
       llvm::cl::desc(
           "Test a fused pass that forwards linalg.copy to vector.transfer"),
       llvm::cl::init(false)};
+  Option<bool> testGenericToVectorPattern{
+      *this, "test-contraction-to-vector-patterns",
+      llvm::cl::desc("Test a set of patterns that rewrite a linalg contraction "
+                     "in vector.contract form"),
+      llvm::cl::init(false)};
+  Option<bool> testAffineMinSCFCanonicalizationPatterns{
+      *this, "test-affine-min-scf-canonicalization-patterns",
+      llvm::cl::desc("Test affine-min + scf canonicalization patterns."),
+      llvm::cl::init(false)};
 };
 } // end anonymous namespace
 
@@ -139,6 +148,7 @@ static void applyPatterns(FuncOp funcOp) {
   //===--------------------------------------------------------------------===//
   patterns.insert<LinalgVectorizationPattern<MatmulOp>,
                   LinalgVectorizationPattern<FillOp>,
+                  LinalgVectorizationPattern<CopyOp>,
                   LinalgVectorizationPattern<GenericOp>>(
       ctx, LinalgMarker(Identifier::get("VECTORIZE", ctx)));
 
@@ -244,8 +254,8 @@ static LogicalResult copyCallBackFn(OpBuilder &b, Value src, Value dst,
   return success();
 }
 
-void fillPromotionCallBackPatterns(MLIRContext *ctx,
-                                   OwningRewritePatternList &patterns) {
+static void fillPromotionCallBackPatterns(MLIRContext *ctx,
+                                          OwningRewritePatternList &patterns) {
   patterns.insert<LinalgTilingPattern<MatmulOp>>(
       ctx, LinalgTilingOptions().setTileSizes({16, 16, 16}),
       LinalgMarker(Identifier::get("START", ctx),
@@ -300,6 +310,25 @@ static void applyVectorTransferForwardingPatterns(FuncOp funcOp) {
   applyPatternsAndFoldGreedily(funcOp, forwardPattern);
 }
 
+static void applyContractionToVectorPatterns(FuncOp funcOp) {
+  OwningRewritePatternList patterns;
+  patterns.insert<LinalgVectorizationPattern<BatchMatmulOp>,
+                  LinalgVectorizationPattern<MatmulOp>,
+                  LinalgVectorizationPattern<MatvecOp>,
+                  LinalgVectorizationPattern<DotOp>,
+                  LinalgVectorizationPattern<GenericOp>>(funcOp.getContext());
+  applyPatternsAndFoldGreedily(funcOp, patterns);
+}
+
+static void applyAffineMinSCFCanonicalizationPatterns(FuncOp funcOp) {
+  OwningRewritePatternList foldPattern;
+  foldPattern.insert<AffineMinSCFCanonicalizationPattern>(funcOp.getContext());
+  // Explicitly walk and apply the pattern locally to avoid more general folding
+  // on the rest of the IR.
+  funcOp.walk([&foldPattern](AffineMinOp minOp) {
+    applyOpPatternsAndFold(minOp, foldPattern);
+  });
+}
 /// Apply transformations specified as patterns.
 void TestLinalgTransforms::runOnFunction() {
   auto lambda = [&](void *) {
@@ -323,6 +352,10 @@ void TestLinalgTransforms::runOnFunction() {
                                        testMatmulToVectorPatterns2dTiling);
   if (testVectorTransferForwardingPatterns)
     return applyVectorTransferForwardingPatterns(getFunction());
+  if (testGenericToVectorPattern)
+    return applyContractionToVectorPatterns(getFunction());
+  if (testAffineMinSCFCanonicalizationPatterns)
+    return applyAffineMinSCFCanonicalizationPatterns(getFunction());
 }
 
 namespace mlir {

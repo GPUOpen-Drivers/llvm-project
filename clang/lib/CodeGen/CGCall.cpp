@@ -1470,6 +1470,7 @@ void ClangToLLVMArgMapping::construct(const ASTContext &Context,
       break;
     }
     case ABIArgInfo::Indirect:
+    case ABIArgInfo::IndirectAliased:
       IRArgs.NumberOfArgs = 1;
       break;
     case ABIArgInfo::Ignore:
@@ -1560,6 +1561,7 @@ CodeGenTypes::GetFunctionType(const CGFunctionInfo &FI) {
   const ABIArgInfo &retAI = FI.getReturnInfo();
   switch (retAI.getKind()) {
   case ABIArgInfo::Expand:
+  case ABIArgInfo::IndirectAliased:
     llvm_unreachable("Invalid ABI kind for return argument");
 
   case ABIArgInfo::Extend:
@@ -1637,7 +1639,12 @@ CodeGenTypes::GetFunctionType(const CGFunctionInfo &FI) {
           CGM.getDataLayout().getAllocaAddrSpace());
       break;
     }
-
+    case ABIArgInfo::IndirectAliased: {
+      assert(NumIRArgs == 1);
+      llvm::Type *LTy = ConvertTypeForMem(it->type);
+      ArgTypes[FirstIRArg] = LTy->getPointerTo(ArgInfo.getIndirectAddrSpace());
+      break;
+    }
     case ABIArgInfo::Extend:
     case ABIArgInfo::Direct: {
       // Fast-isel and the optimizer generally like scalar values better than
@@ -2101,6 +2108,7 @@ void CodeGenModule::ConstructAttributeList(
     break;
 
   case ABIArgInfo::Expand:
+  case ABIArgInfo::IndirectAliased:
     llvm_unreachable("Invalid ABI kind for return argument");
   }
 
@@ -2184,6 +2192,9 @@ void CodeGenModule::ConstructAttributeList(
       if (AI.getIndirectByVal())
         Attrs.addByValAttr(getTypes().ConvertTypeForMem(ParamType));
 
+      // TODO: We could add the byref attribute if not byval, but it would
+      // require updating many testcases.
+
       CharUnits Align = AI.getIndirectAlign();
 
       // In a byval argument, it is important that the required
@@ -2206,6 +2217,13 @@ void CodeGenModule::ConstructAttributeList(
       // byval disables readnone and readonly.
       FuncAttrs.removeAttribute(llvm::Attribute::ReadOnly)
         .removeAttribute(llvm::Attribute::ReadNone);
+
+      break;
+    }
+    case ABIArgInfo::IndirectAliased: {
+      CharUnits Align = AI.getIndirectAlign();
+      Attrs.addByRefAttr(getTypes().ConvertTypeForMem(ParamType));
+      Attrs.addAlignmentAttr(Align.getQuantity());
       break;
     }
     case ABIArgInfo::Ignore:
@@ -2434,16 +2452,19 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
       break;
     }
 
-    case ABIArgInfo::Indirect: {
+    case ABIArgInfo::Indirect:
+    case ABIArgInfo::IndirectAliased: {
       assert(NumIRArgs == 1);
       Address ParamAddr =
           Address(Fn->getArg(FirstIRArg), ArgI.getIndirectAlign());
 
       if (!hasScalarEvaluationKind(Ty)) {
-        // Aggregates and complex variables are accessed by reference.  All we
-        // need to do is realign the value, if requested.
+        // Aggregates and complex variables are accessed by reference. All we
+        // need to do is realign the value, if requested. Also, if the address
+        // may be aliased, copy it to ensure that the parameter variable is
+        // mutable and has a unique adress, as C requires.
         Address V = ParamAddr;
-        if (ArgI.getIndirectRealign()) {
+        if (ArgI.getIndirectRealign() || ArgI.isIndirectAliased()) {
           Address AlignedTemp = CreateMemTemp(Ty, "coerce");
 
           // Copy from the incoming argument pointer to the temporary with the
@@ -2504,9 +2525,11 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
                   ArrSize) {
                 llvm::AttrBuilder Attrs;
                 Attrs.addDereferenceableAttr(
-                  getContext().getTypeSizeInChars(ETy).getQuantity()*ArrSize);
+                    getContext().getTypeSizeInChars(ETy).getQuantity() *
+                    ArrSize);
                 AI->addAttrs(Attrs);
-              } else if (getContext().getTargetAddressSpace(ETy) == 0 &&
+              } else if (getContext().getTargetInfo().getNullPointerValue(
+                             ETy.getAddressSpace()) == 0 &&
                          !CGM.getCodeGenOpts().NullPointerIsValid) {
                 AI->addAttr(llvm::Attribute::NonNull);
               }
@@ -3283,8 +3306,8 @@ void CodeGenFunction::EmitFunctionEpilog(const CGFunctionInfo &FI,
     }
     break;
   }
-
   case ABIArgInfo::Expand:
+  case ABIArgInfo::IndirectAliased:
     llvm_unreachable("Invalid ABI kind for return argument");
   }
 
@@ -4245,7 +4268,7 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   llvm::FunctionType *IRFuncTy = getTypes().GetFunctionType(CallInfo);
 
   const Decl *TargetDecl = Callee.getAbstractInfo().getCalleeDecl().getDecl();
-  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl))
+  if (const FunctionDecl *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl)) {
     // We can only guarantee that a function is called from the correct
     // context/function based on the appropriate target attributes,
     // so only check in the case where we have both always_inline and target
@@ -4255,6 +4278,12 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
     if (TargetDecl->hasAttr<AlwaysInlineAttr>() &&
         TargetDecl->hasAttr<TargetAttr>())
       checkTargetFeatures(Loc, FD);
+
+    // Some architectures (such as x86-64) have the ABI changed based on
+    // attribute-target/features. Give them a chance to diagnose.
+    CGM.getTargetCodeGenInfo().checkFunctionCallABI(
+        CGM, Loc, dyn_cast_or_null<FunctionDecl>(CurCodeDecl), FD, CallArgs);
+  }
 
 #ifndef NDEBUG
   if (!(CallInfo.isVariadic() && CallInfo.getArgStruct())) {
@@ -4405,7 +4434,8 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
       break;
     }
 
-    case ABIArgInfo::Indirect: {
+    case ABIArgInfo::Indirect:
+    case ABIArgInfo::IndirectAliased: {
       assert(NumIRArgs == 1);
       if (!I->isAggregate()) {
         // Make a temporary alloca to pass the argument.
@@ -4660,11 +4690,12 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
       break;
     }
 
-    case ABIArgInfo::Expand:
+    case ABIArgInfo::Expand: {
       unsigned IRArgPos = FirstIRArg;
       ExpandTypeToArgs(I->Ty, *I, IRFuncTy, IRCallArgs, IRArgPos);
       assert(IRArgPos == FirstIRArg + NumIRArgs);
       break;
+    }
     }
   }
 
@@ -4833,6 +4864,10 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   } else {
     // Otherwise, nounwind call sites will never throw.
     CannotThrow = Attrs.hasFnAttribute(llvm::Attribute::NoUnwind);
+
+    if (auto *FPtr = dyn_cast<llvm::Function>(CalleePtr))
+      if (FPtr->hasFnAttribute(llvm::Attribute::NoUnwind))
+        CannotThrow = true;
   }
 
   // If we made a temporary, be sure to clean up after ourselves. Note that we
@@ -5072,6 +5107,7 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
     }
 
     case ABIArgInfo::Expand:
+    case ABIArgInfo::IndirectAliased:
       llvm_unreachable("Invalid ABI kind for return argument");
     }
 

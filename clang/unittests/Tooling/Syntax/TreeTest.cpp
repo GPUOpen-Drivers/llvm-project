@@ -18,6 +18,7 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Testing/CommandLineArgs.h"
+#include "clang/Testing/TestClangConfig.h"
 #include "clang/Tooling/Core/Replacement.h"
 #include "clang/Tooling/Syntax/BuildTree.h"
 #include "clang/Tooling/Syntax/Mutations.h"
@@ -34,11 +35,12 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <cstdlib>
+#include <memory>
 
 using namespace clang;
 
 namespace {
-static llvm::ArrayRef<syntax::Token> tokens(syntax::Node *N) {
+static ArrayRef<syntax::Token> tokens(syntax::Node *N) {
   assert(N->isOriginal() && "tokens of modified nodes are not well-defined");
   if (auto *L = dyn_cast<syntax::Leaf>(N))
     return llvm::makeArrayRef(L->token(), 1);
@@ -47,110 +49,36 @@ static llvm::ArrayRef<syntax::Token> tokens(syntax::Node *N) {
                             T->lastLeaf()->token() + 1);
 }
 
-struct TestClangConfig {
-  TestLanguage Language;
-  std::string Target;
-
-  bool isC99OrLater() const { return Language == Lang_C99; }
-
-  bool isC() const { return Language == Lang_C89 || Language == Lang_C99; }
-
-  bool isCXX() const {
-    return Language == Lang_CXX03 || Language == Lang_CXX11 ||
-           Language == Lang_CXX14 || Language == Lang_CXX17 ||
-           Language == Lang_CXX20;
-  }
-
-  bool isCXX11OrLater() const {
-    return Language == Lang_CXX11 || Language == Lang_CXX14 ||
-           Language == Lang_CXX17 || Language == Lang_CXX20;
-  }
-
-  bool isCXX14OrLater() const {
-    return Language == Lang_CXX14 || Language == Lang_CXX17 ||
-           Language == Lang_CXX20;
-  }
-
-  bool isCXX17OrLater() const {
-    return Language == Lang_CXX17 || Language == Lang_CXX20;
-  }
-
-  bool supportsCXXDynamicExceptionSpecification() const {
-    return Language == Lang_CXX03 || Language == Lang_CXX11 ||
-           Language == Lang_CXX14;
-  }
-
-  bool hasDelayedTemplateParsing() const {
-    return Target == "x86_64-pc-win32-msvc";
-  }
-
-  std::vector<std::string> getCommandLineArgs() const {
-    std::vector<std::string> Result = getCommandLineArgsForTesting(Language);
-    Result.push_back("-target");
-    Result.push_back(Target);
-    return Result;
-  }
-
-  std::string toString() const {
-    std::string Result;
-    llvm::raw_string_ostream OS(Result);
-    OS << "{ Language=" << Language << ", Target=" << Target << " }";
-    return OS.str();
-  }
-
-  friend std::ostream &operator<<(std::ostream &OS,
-                                  const TestClangConfig &ClangConfig) {
-    return OS << ClangConfig.toString();
-  }
-
-  static std::vector<TestClangConfig> &allConfigs() {
-    static std::vector<TestClangConfig> all_configs = []() {
-      std::vector<TestClangConfig> all_configs;
-      for (TestLanguage lang : {Lang_C89, Lang_C99, Lang_CXX03, Lang_CXX11,
-                                Lang_CXX14, Lang_CXX17, Lang_CXX20}) {
-        TestClangConfig config;
-        config.Language = lang;
-        config.Target = "x86_64-pc-linux-gnu";
-        all_configs.push_back(config);
-
-        // Windows target is interesting to test because it enables
-        // `-fdelayed-template-parsing`.
-        config.Target = "x86_64-pc-win32-msvc";
-        all_configs.push_back(config);
-      }
-      return all_configs;
-    }();
-    return all_configs;
-  }
-};
-
 class SyntaxTreeTest : public ::testing::Test,
                        public ::testing::WithParamInterface<TestClangConfig> {
 protected:
   // Build a syntax tree for the code.
-  syntax::TranslationUnit *buildTree(llvm::StringRef Code,
+  syntax::TranslationUnit *buildTree(StringRef Code,
                                      const TestClangConfig &ClangConfig) {
     // FIXME: this code is almost the identical to the one in TokensTest. Share
     //        it.
     class BuildSyntaxTree : public ASTConsumer {
     public:
       BuildSyntaxTree(syntax::TranslationUnit *&Root,
+                      std::unique_ptr<syntax::TokenBuffer> &TB,
                       std::unique_ptr<syntax::Arena> &Arena,
                       std::unique_ptr<syntax::TokenCollector> Tokens)
-          : Root(Root), Arena(Arena), Tokens(std::move(Tokens)) {
+          : Root(Root), TB(TB), Arena(Arena), Tokens(std::move(Tokens)) {
         assert(this->Tokens);
       }
 
       void HandleTranslationUnit(ASTContext &Ctx) override {
-        Arena = std::make_unique<syntax::Arena>(Ctx.getSourceManager(),
-                                                Ctx.getLangOpts(),
-                                                std::move(*Tokens).consume());
+        TB =
+            std::make_unique<syntax::TokenBuffer>(std::move(*Tokens).consume());
         Tokens = nullptr; // make sure we fail if this gets called twice.
+        Arena = std::make_unique<syntax::Arena>(Ctx.getSourceManager(),
+                                                Ctx.getLangOpts(), *TB);
         Root = syntax::buildSyntaxTree(*Arena, *Ctx.getTranslationUnitDecl());
       }
 
     private:
       syntax::TranslationUnit *&Root;
+      std::unique_ptr<syntax::TokenBuffer> &TB;
       std::unique_ptr<syntax::Arena> &Arena;
       std::unique_ptr<syntax::TokenCollector> Tokens;
     };
@@ -158,20 +86,22 @@ protected:
     class BuildSyntaxTreeAction : public ASTFrontendAction {
     public:
       BuildSyntaxTreeAction(syntax::TranslationUnit *&Root,
+                            std::unique_ptr<syntax::TokenBuffer> &TB,
                             std::unique_ptr<syntax::Arena> &Arena)
-          : Root(Root), Arena(Arena) {}
+          : Root(Root), TB(TB), Arena(Arena) {}
 
       std::unique_ptr<ASTConsumer>
       CreateASTConsumer(CompilerInstance &CI, StringRef InFile) override {
         // We start recording the tokens, ast consumer will take on the result.
         auto Tokens =
             std::make_unique<syntax::TokenCollector>(CI.getPreprocessor());
-        return std::make_unique<BuildSyntaxTree>(Root, Arena,
+        return std::make_unique<BuildSyntaxTree>(Root, TB, Arena,
                                                  std::move(Tokens));
       }
 
     private:
       syntax::TranslationUnit *&Root;
+      std::unique_ptr<syntax::TokenBuffer> &TB;
       std::unique_ptr<syntax::Arena> &Arena;
     };
 
@@ -208,7 +138,7 @@ protected:
     Compiler.setSourceManager(SourceMgr.get());
 
     syntax::TranslationUnit *Root = nullptr;
-    BuildSyntaxTreeAction Recorder(Root, this->Arena);
+    BuildSyntaxTreeAction Recorder(Root, this->TB, this->Arena);
 
     // Action could not be executed but the frontend didn't identify any errors
     // in the code ==> problem in setting up the action.
@@ -239,7 +169,7 @@ protected:
   }
 
   // Adds a file to the test VFS.
-  void addFile(llvm::StringRef Path, llvm::StringRef Contents) {
+  void addFile(StringRef Path, StringRef Contents) {
     if (!FS->addFile(Path, time_t(),
                      llvm::MemoryBuffer::getMemBufferCopy(Contents))) {
       ADD_FAILURE() << "could not add a file to VFS: " << Path;
@@ -249,7 +179,7 @@ protected:
   /// Finds the deepest node in the tree that covers exactly \p R.
   /// FIXME: implement this efficiently and move to public syntax tree API.
   syntax::Node *nodeByRange(llvm::Annotations::Range R, syntax::Node *Root) {
-    llvm::ArrayRef<syntax::Token> Toks = tokens(Root);
+    ArrayRef<syntax::Token> Toks = tokens(Root);
 
     if (Toks.front().location().isFileID() &&
         Toks.back().location().isFileID() &&
@@ -268,18 +198,18 @@ protected:
   }
 
   // Data fields.
-  llvm::IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts =
-      new DiagnosticOptions();
-  llvm::IntrusiveRefCntPtr<DiagnosticsEngine> Diags =
+  IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions();
+  IntrusiveRefCntPtr<DiagnosticsEngine> Diags =
       new DiagnosticsEngine(new DiagnosticIDs, DiagOpts.get());
   IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> FS =
       new llvm::vfs::InMemoryFileSystem;
-  llvm::IntrusiveRefCntPtr<FileManager> FileMgr =
+  IntrusiveRefCntPtr<FileManager> FileMgr =
       new FileManager(FileSystemOptions(), FS);
-  llvm::IntrusiveRefCntPtr<SourceManager> SourceMgr =
+  IntrusiveRefCntPtr<SourceManager> SourceMgr =
       new SourceManager(*Diags, *FileMgr);
   std::shared_ptr<CompilerInvocation> Invocation;
   // Set after calling buildTree().
+  std::unique_ptr<syntax::TokenBuffer> TB;
   std::unique_ptr<syntax::Arena> Arena;
 };
 
@@ -943,24 +873,47 @@ TEST_P(SyntaxTreeTest, QualifiedId) {
   }
   EXPECT_TRUE(treeDumpEqual(
       R"cpp(
-namespace a {
+namespace n {
   struct S {
     template<typename T>
-    static T f(){}
+    struct ST {
+      static void f();
+    };
   };
 }
+template<typename T>
+struct ST {
+  struct S {
+    template<typename U>
+    static U f();
+  };
+};
 void test() {
-  ::              // global-namespace-specifier
-  a::             // namespace-specifier
-  S::             // type-name-specifier
+  ::                 // global-namespace-specifier
+  n::                // namespace-specifier
+  S::                // type-name-specifier
+  template ST<int>:: // type-template-instantiation-specifier
+  f();
+
+  n::                // namespace-specifier
+  S::                // type-name-specifier
+  ST<int>::          // type-template-instantiation-specifier
+  f();
+
+  ST<int>::         // type-name-specifier
+  S::               // type-name-specifier
   f<int>();
+
+  ST<int>::         // type-name-specifier
+  S::               // type-name-specifier
+  template f<int>();
 }
 )cpp",
       R"txt(
 *: TranslationUnit
 |-NamespaceDefinition
 | |-namespace
-| |-a
+| |-n
 | |-{
 | |-SimpleDeclaration
 | | |-struct
@@ -974,19 +927,58 @@ void test() {
 | | | | `-T
 | | | |->
 | | | `-SimpleDeclaration
-| | |   |-static
-| | |   |-T
-| | |   |-SimpleDeclarator
-| | |   | |-f
-| | |   | `-ParametersAndQualifiers
-| | |   |   |-(
-| | |   |   `-)
-| | |   `-CompoundStatement
-| | |     |-{
-| | |     `-}
+| | |   |-struct
+| | |   |-ST
+| | |   |-{
+| | |   |-SimpleDeclaration
+| | |   | |-static
+| | |   | |-void
+| | |   | |-SimpleDeclarator
+| | |   | | |-f
+| | |   | | `-ParametersAndQualifiers
+| | |   | |   |-(
+| | |   | |   `-)
+| | |   | `-;
+| | |   |-}
+| | |   `-;
 | | |-}
 | | `-;
 | `-}
+|-TemplateDeclaration
+| |-template
+| |-<
+| |-UnknownDeclaration
+| | |-typename
+| | `-T
+| |->
+| `-SimpleDeclaration
+|   |-struct
+|   |-ST
+|   |-{
+|   |-SimpleDeclaration
+|   | |-struct
+|   | |-S
+|   | |-{
+|   | |-TemplateDeclaration
+|   | | |-template
+|   | | |-<
+|   | | |-UnknownDeclaration
+|   | | | |-typename
+|   | | | `-U
+|   | | |->
+|   | | `-SimpleDeclaration
+|   | |   |-static
+|   | |   |-U
+|   | |   |-SimpleDeclarator
+|   | |   | |-f
+|   | |   | `-ParametersAndQualifiers
+|   | |   |   |-(
+|   | |   |   `-)
+|   | |   `-;
+|   | |-}
+|   | `-;
+|   |-}
+|   `-;
 `-SimpleDeclaration
   |-void
   |-SimpleDeclarator
@@ -1000,14 +992,81 @@ void test() {
     | |-UnknownExpression
     | | |-IdExpression
     | | | |-NestedNameSpecifier
-    | | | | |-NameSpecifier
-    | | | | | `-::
-    | | | | |-NameSpecifier
-    | | | | | |-a
-    | | | | | `-::
-    | | | | `-NameSpecifier
-    | | | |   |-S
-    | | | |   `-::
+    | | | | |-::
+    | | | | |-IdentifierNameSpecifier
+    | | | | | `-n
+    | | | | |-::
+    | | | | |-IdentifierNameSpecifier
+    | | | | | `-S
+    | | | | |-::
+    | | | | |-SimpleTemplateNameSpecifier
+    | | | | | |-template
+    | | | | | |-ST
+    | | | | | |-<
+    | | | | | |-int
+    | | | | | `->
+    | | | | `-::
+    | | | `-UnqualifiedId
+    | | |   `-f
+    | | |-(
+    | | `-)
+    | `-;
+    |-ExpressionStatement
+    | |-UnknownExpression
+    | | |-IdExpression
+    | | | |-NestedNameSpecifier
+    | | | | |-IdentifierNameSpecifier
+    | | | | | `-n
+    | | | | |-::
+    | | | | |-IdentifierNameSpecifier
+    | | | | | `-S
+    | | | | |-::
+    | | | | |-SimpleTemplateNameSpecifier
+    | | | | | |-ST
+    | | | | | |-<
+    | | | | | |-int
+    | | | | | `->
+    | | | | `-::
+    | | | `-UnqualifiedId
+    | | |   `-f
+    | | |-(
+    | | `-)
+    | `-;
+    |-ExpressionStatement
+    | |-UnknownExpression
+    | | |-IdExpression
+    | | | |-NestedNameSpecifier
+    | | | | |-SimpleTemplateNameSpecifier
+    | | | | | |-ST
+    | | | | | |-<
+    | | | | | |-int
+    | | | | | `->
+    | | | | |-::
+    | | | | |-IdentifierNameSpecifier
+    | | | | | `-S
+    | | | | `-::
+    | | | `-UnqualifiedId
+    | | |   |-f
+    | | |   |-<
+    | | |   |-int
+    | | |   `->
+    | | |-(
+    | | `-)
+    | `-;
+    |-ExpressionStatement
+    | |-UnknownExpression
+    | | |-IdExpression
+    | | | |-NestedNameSpecifier
+    | | | | |-SimpleTemplateNameSpecifier
+    | | | | | |-ST
+    | | | | | |-<
+    | | | | | |-int
+    | | | | | `->
+    | | | | |-::
+    | | | | |-IdentifierNameSpecifier
+    | | | | | `-S
+    | | | | `-::
+    | | | |-template
     | | | `-UnqualifiedId
     | | |   |-f
     | | |   |-<
@@ -1020,7 +1079,7 @@ void test() {
 )txt"));
 }
 
-TEST_P(SyntaxTreeTest, QualifiedIdWithTemplateKeyword) {
+TEST_P(SyntaxTreeTest, QualifiedIdWithDependentType) {
   if (!GetParam().isCXX()) {
     return;
   }
@@ -1031,63 +1090,17 @@ TEST_P(SyntaxTreeTest, QualifiedIdWithTemplateKeyword) {
   }
   EXPECT_TRUE(treeDumpEqual(
       R"cpp(
-struct X {
-  template<int> static void f();
-  template<int>
-  struct Y {
-    static void f();
-  };
-};
-template<typename T> void test() {
-  // TODO: Expose `id-expression` from `DependentScopeDeclRefExpr`
-  T::template f<0>();     // nested-name-specifier template unqualified-id
-  T::template Y<0>::f();  // nested-name-specifier template :: unqualified-id
+template <typename T>
+void test() {
+  T::template U<int>::f();
+
+  T::U::f();
+
+  T::template f<0>();
 }
 )cpp",
       R"txt(
 *: TranslationUnit
-|-SimpleDeclaration
-| |-struct
-| |-X
-| |-{
-| |-TemplateDeclaration
-| | |-template
-| | |-<
-| | |-SimpleDeclaration
-| | | `-int
-| | |->
-| | `-SimpleDeclaration
-| |   |-static
-| |   |-void
-| |   |-SimpleDeclarator
-| |   | |-f
-| |   | `-ParametersAndQualifiers
-| |   |   |-(
-| |   |   `-)
-| |   `-;
-| |-TemplateDeclaration
-| | |-template
-| | |-<
-| | |-SimpleDeclaration
-| | | `-int
-| | |->
-| | `-SimpleDeclaration
-| |   |-struct
-| |   |-Y
-| |   |-{
-| |   |-SimpleDeclaration
-| |   | |-static
-| |   | |-void
-| |   | |-SimpleDeclarator
-| |   | | |-f
-| |   | | `-ParametersAndQualifiers
-| |   | |   |-(
-| |   | |   `-)
-| |   | `-;
-| |   |-}
-| |   `-;
-| |-}
-| `-;
 `-TemplateDeclaration
   |-template
   |-<
@@ -1106,31 +1119,52 @@ template<typename T> void test() {
       |-{
       |-ExpressionStatement
       | |-UnknownExpression
-      | | |-UnknownExpression
-      | | | |-T
-      | | | |-::
-      | | | |-template
-      | | | |-f
-      | | | |-<
-      | | | |-IntegerLiteralExpression
-      | | | | `-0
-      | | | `->
+      | | |-IdExpression
+      | | | |-NestedNameSpecifier
+      | | | | |-IdentifierNameSpecifier
+      | | | | | `-T
+      | | | | |-::
+      | | | | |-SimpleTemplateNameSpecifier
+      | | | | | |-template
+      | | | | | |-U
+      | | | | | |-<
+      | | | | | |-int
+      | | | | | `->
+      | | | | `-::
+      | | | `-UnqualifiedId
+      | | |   `-f
       | | |-(
       | | `-)
       | `-;
       |-ExpressionStatement
       | |-UnknownExpression
-      | | |-UnknownExpression
-      | | | |-T
-      | | | |-::
+      | | |-IdExpression
+      | | | |-NestedNameSpecifier
+      | | | | |-IdentifierNameSpecifier
+      | | | | | `-T
+      | | | | |-::
+      | | | | |-IdentifierNameSpecifier
+      | | | | | `-U
+      | | | | `-::
+      | | | `-UnqualifiedId
+      | | |   `-f
+      | | |-(
+      | | `-)
+      | `-;
+      |-ExpressionStatement
+      | |-UnknownExpression
+      | | |-IdExpression
+      | | | |-NestedNameSpecifier
+      | | | | |-IdentifierNameSpecifier
+      | | | | | `-T
+      | | | | `-::
       | | | |-template
-      | | | |-Y
-      | | | |-<
-      | | | |-IntegerLiteralExpression
-      | | | | `-0
-      | | | |->
-      | | | |-::
-      | | | `-f
+      | | | `-UnqualifiedId
+      | | |   |-f
+      | | |   |-<
+      | | |   |-IntegerLiteralExpression
+      | | |   | `-0
+      | | |   `->
       | | |-(
       | | `-)
       | `-;
@@ -1188,14 +1222,14 @@ void test(S s) {
     | |-UnknownExpression
     | | |-IdExpression
     | | | |-NestedNameSpecifier
-    | | | | `-NameSpecifier
-    | | | |   |-decltype
-    | | | |   |-(
-    | | | |   |-IdExpression
-    | | | |   | `-UnqualifiedId
-    | | | |   |   `-s
-    | | | |   |-)
-    | | | |   `-::
+    | | | | |-DecltypeNameSpecifier
+    | | | | | |-decltype
+    | | | | | |-(
+    | | | | | |-IdExpression
+    | | | | | | `-UnqualifiedId
+    | | | | | |   `-s
+    | | | | | `-)
+    | | | | `-::
     | | | `-UnqualifiedId
     | | |   `-f
     | | |-(
@@ -1205,16 +1239,13 @@ void test(S s) {
 )txt"));
 }
 
-TEST_P(SyntaxTreeTest, IntegerLiteral) {
+TEST_P(SyntaxTreeTest, ParenExpr) {
   EXPECT_TRUE(treeDumpEqual(
       R"cpp(
 void test() {
-  12;
-  12u;
-  12l;
-  12ul;
-  014;
-  0XC;
+  (1);
+  ((1));
+  (1 + (2));
 }
 )cpp",
       R"txt(
@@ -1229,28 +1260,213 @@ void test() {
   `-CompoundStatement
     |-{
     |-ExpressionStatement
-    | |-IntegerLiteralExpression
-    | | `-12
+    | |-ParenExpression
+    | | |-(
+    | | |-IntegerLiteralExpression
+    | | | `-1
+    | | `-)
     | `-;
     |-ExpressionStatement
-    | |-IntegerLiteralExpression
-    | | `-12u
+    | |-ParenExpression
+    | | |-(
+    | | |-ParenExpression
+    | | | |-(
+    | | | |-IntegerLiteralExpression
+    | | | | `-1
+    | | | `-)
+    | | `-)
     | `-;
     |-ExpressionStatement
-    | |-IntegerLiteralExpression
-    | | `-12l
+    | |-ParenExpression
+    | | |-(
+    | | |-BinaryOperatorExpression
+    | | | |-IntegerLiteralExpression
+    | | | | `-1
+    | | | |-+
+    | | | `-ParenExpression
+    | | |   |-(
+    | | |   |-IntegerLiteralExpression
+    | | |   | `-2
+    | | |   `-)
+    | | `-)
+    | `-;
+    `-}
+)txt"));
+}
+
+TEST_P(SyntaxTreeTest, UserDefinedLiteral) {
+  if (!GetParam().isCXX11OrLater()) {
+    return;
+  }
+  EXPECT_TRUE(treeDumpEqual(
+      R"cpp(
+typedef decltype(sizeof(void *)) size_t;
+
+unsigned operator "" _i(unsigned long long);
+unsigned operator "" _f(long double);
+unsigned operator "" _c(char);
+unsigned operator "" _s(const char*, size_t);
+unsigned operator "" _r(const char*);
+template <char...>
+unsigned operator "" _t();
+
+void test() {
+  12_i;   // call: operator "" _i(12uLL)      | kind: integer
+  1.2_f;  // call: operator "" _f(1.2L)       | kind: float
+  '2'_c;  // call: operator "" _c('2')        | kind: char
+  "12"_s; // call: operator "" _s("12")       | kind: string
+
+  12_r;   // call: operator "" _r("12")       | kind: integer
+  1.2_r;  // call: operator "" _i("1.2")      | kind: float
+  12_t;   // call: operator<'1', '2'> "" _x() | kind: integer
+  1.2_t;  // call: operator<'1', '2'> "" _x() | kind: float
+}
+    )cpp",
+      R"txt(
+*: TranslationUnit
+|-SimpleDeclaration
+| |-typedef
+| |-decltype
+| |-(
+| |-UnknownExpression
+| | |-sizeof
+| | |-(
+| | |-void
+| | |-*
+| | `-)
+| |-)
+| |-SimpleDeclarator
+| | `-size_t
+| `-;
+|-SimpleDeclaration
+| |-unsigned
+| |-SimpleDeclarator
+| | |-operator
+| | |-""
+| | |-_i
+| | `-ParametersAndQualifiers
+| |   |-(
+| |   |-SimpleDeclaration
+| |   | |-unsigned
+| |   | |-long
+| |   | `-long
+| |   `-)
+| `-;
+|-SimpleDeclaration
+| |-unsigned
+| |-SimpleDeclarator
+| | |-operator
+| | |-""
+| | |-_f
+| | `-ParametersAndQualifiers
+| |   |-(
+| |   |-SimpleDeclaration
+| |   | |-long
+| |   | `-double
+| |   `-)
+| `-;
+|-SimpleDeclaration
+| |-unsigned
+| |-SimpleDeclarator
+| | |-operator
+| | |-""
+| | |-_c
+| | `-ParametersAndQualifiers
+| |   |-(
+| |   |-SimpleDeclaration
+| |   | `-char
+| |   `-)
+| `-;
+|-SimpleDeclaration
+| |-unsigned
+| |-SimpleDeclarator
+| | |-operator
+| | |-""
+| | |-_s
+| | `-ParametersAndQualifiers
+| |   |-(
+| |   |-SimpleDeclaration
+| |   | |-const
+| |   | |-char
+| |   | `-SimpleDeclarator
+| |   |   `-*
+| |   |-,
+| |   |-SimpleDeclaration
+| |   | `-size_t
+| |   `-)
+| `-;
+|-SimpleDeclaration
+| |-unsigned
+| |-SimpleDeclarator
+| | |-operator
+| | |-""
+| | |-_r
+| | `-ParametersAndQualifiers
+| |   |-(
+| |   |-SimpleDeclaration
+| |   | |-const
+| |   | |-char
+| |   | `-SimpleDeclarator
+| |   |   `-*
+| |   `-)
+| `-;
+|-TemplateDeclaration
+| |-template
+| |-<
+| |-SimpleDeclaration
+| | `-char
+| |-...
+| |->
+| `-SimpleDeclaration
+|   |-unsigned
+|   |-SimpleDeclarator
+|   | |-operator
+|   | |-""
+|   | |-_t
+|   | `-ParametersAndQualifiers
+|   |   |-(
+|   |   `-)
+|   `-;
+`-SimpleDeclaration
+  |-void
+  |-SimpleDeclarator
+  | |-test
+  | `-ParametersAndQualifiers
+  |   |-(
+  |   `-)
+  `-CompoundStatement
+    |-{
+    |-ExpressionStatement
+    | |-IntegerUserDefinedLiteralExpression
+    | | `-12_i
     | `-;
     |-ExpressionStatement
-    | |-IntegerLiteralExpression
-    | | `-12ul
+    | |-FloatUserDefinedLiteralExpression
+    | | `-1.2_f
     | `-;
     |-ExpressionStatement
-    | |-IntegerLiteralExpression
-    | | `-014
+    | |-CharUserDefinedLiteralExpression
+    | | `-'2'_c
     | `-;
     |-ExpressionStatement
-    | |-IntegerLiteralExpression
-    | | `-0XC
+    | |-StringUserDefinedLiteralExpression
+    | | `-"12"_s
+    | `-;
+    |-ExpressionStatement
+    | |-IntegerUserDefinedLiteralExpression
+    | | `-12_r
+    | `-;
+    |-ExpressionStatement
+    | |-FloatUserDefinedLiteralExpression
+    | | `-1.2_r
+    | `-;
+    |-ExpressionStatement
+    | |-IntegerUserDefinedLiteralExpression
+    | | `-12_t
+    | `-;
+    |-ExpressionStatement
+    | |-FloatUserDefinedLiteralExpression
+    | | `-1.2_t
     | `-;
     `-}
 )txt"));
@@ -1636,33 +1852,33 @@ TEST_P(SyntaxTreeTest, StringLiteralRaw) {
   if (!GetParam().isCXX11OrLater()) {
     return;
   }
-  EXPECT_TRUE(treeDumpEqual(
-      R"cpp(
-void test() {
-  R"SyntaxTree(
-  Hello "Syntax" \"
-  )SyntaxTree";
-}
-)cpp",
-      R"txt(
-*: TranslationUnit
-`-SimpleDeclaration
-  |-void
-  |-SimpleDeclarator
-  | |-test
-  | `-ParametersAndQualifiers
-  |   |-(
-  |   `-)
-  `-CompoundStatement
-    |-{
-    |-ExpressionStatement
-    | |-StringLiteralExpression
-    | | `-R"SyntaxTree(
-  Hello "Syntax" \"
-  )SyntaxTree"
-    | `-;
-    `-}
-)txt"));
+  // This test uses regular string literals instead of raw string literals to
+  // hold source code and expected output because of a bug in MSVC up to MSVC
+  // 2019 16.2:
+  // https://developercommunity.visualstudio.com/content/problem/67300/stringifying-raw-string-literal.html
+  EXPECT_TRUE(treeDumpEqual( //
+      "void test() {\n"
+      "  R\"SyntaxTree(\n"
+      "  Hello \"Syntax\" \\\"\n"
+      "  )SyntaxTree\";\n"
+      "}\n",
+      "*: TranslationUnit\n"
+      "`-SimpleDeclaration\n"
+      "  |-void\n"
+      "  |-SimpleDeclarator\n"
+      "  | |-test\n"
+      "  | `-ParametersAndQualifiers\n"
+      "  |   |-(\n"
+      "  |   `-)\n"
+      "  `-CompoundStatement\n"
+      "    |-{\n"
+      "    |-ExpressionStatement\n"
+      "    | |-StringLiteralExpression\n"
+      "    | | `-R\"SyntaxTree(\n"
+      "  Hello \"Syntax\" \\\"\n"
+      "  )SyntaxTree\"\n"
+      "    | `-;\n"
+      "    `-}\n"));
 }
 
 TEST_P(SyntaxTreeTest, BoolLiteral) {
@@ -2116,7 +2332,7 @@ void test(int a, int b) {
     |-{
     |-ExpressionStatement
     | |-BinaryOperatorExpression
-    | | |-UnknownExpression
+    | | |-ParenExpression
     | | | |-(
     | | | |-BinaryOperatorExpression
     | | | | |-IntegerLiteralExpression
@@ -2126,7 +2342,7 @@ void test(int a, int b) {
     | | | |   `-2
     | | | `-)
     | | |-*
-    | | `-UnknownExpression
+    | | `-ParenExpression
     | |   |-(
     | |   |-BinaryOperatorExpression
     | |   | |-IntegerLiteralExpression
@@ -2214,11 +2430,19 @@ struct X {
   X& operator=(const X&);
   friend X operator+(X, const X&);
   friend bool operator<(const X&, const X&);
+  friend X operator<<(X&, const X&);
+  X operator,(X&);
+  X operator->*(int);
+  // TODO: Unbox operators in syntax tree.
+  // Represent operators by `+` instead of `IdExpression-UnqualifiedId-+`
 };
-void test(X x, X y) {
+void test(X x, X y, X* xp, int X::* pmi) {
   x = y;
   x + y;
   x < y;
+  x << y;
+  x, y;
+  xp->*pmi;
 }
 )cpp",
       R"txt(
@@ -2283,6 +2507,51 @@ void test(X x, X y) {
 | |   |   |   `-&
 | |   |   `-)
 | |   `-;
+| |-UnknownDeclaration
+| | `-SimpleDeclaration
+| |   |-friend
+| |   |-X
+| |   |-SimpleDeclarator
+| |   | |-operator
+| |   | |-<<
+| |   | `-ParametersAndQualifiers
+| |   |   |-(
+| |   |   |-SimpleDeclaration
+| |   |   | |-X
+| |   |   | `-SimpleDeclarator
+| |   |   |   `-&
+| |   |   |-,
+| |   |   |-SimpleDeclaration
+| |   |   | |-const
+| |   |   | |-X
+| |   |   | `-SimpleDeclarator
+| |   |   |   `-&
+| |   |   `-)
+| |   `-;
+| |-SimpleDeclaration
+| | |-X
+| | |-SimpleDeclarator
+| | | |-operator
+| | | |-,
+| | | `-ParametersAndQualifiers
+| | |   |-(
+| | |   |-SimpleDeclaration
+| | |   | |-X
+| | |   | `-SimpleDeclarator
+| | |   |   `-&
+| | |   `-)
+| | `-;
+| |-SimpleDeclaration
+| | |-X
+| | |-SimpleDeclarator
+| | | |-operator
+| | | |-->*
+| | | `-ParametersAndQualifiers
+| | |   |-(
+| | |   |-SimpleDeclaration
+| | |   | `-int
+| | |   `-)
+| | `-;
 | |-}
 | `-;
 `-SimpleDeclaration
@@ -2300,6 +2569,21 @@ void test(X x, X y) {
   |   | |-X
   |   | `-SimpleDeclarator
   |   |   `-y
+  |   |-,
+  |   |-SimpleDeclaration
+  |   | |-X
+  |   | `-SimpleDeclarator
+  |   |   |-*
+  |   |   `-xp
+  |   |-,
+  |   |-SimpleDeclaration
+  |   | |-int
+  |   | `-SimpleDeclarator
+  |   |   |-MemberPointer
+  |   |   | |-X
+  |   |   | |-::
+  |   |   | `-*
+  |   |   `-pmi
   |   `-)
   `-CompoundStatement
     |-{
@@ -2339,6 +2623,195 @@ void test(X x, X y) {
     | | `-IdExpression
     | |   `-UnqualifiedId
     | |     `-y
+    | `-;
+    |-ExpressionStatement
+    | |-BinaryOperatorExpression
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-x
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-<<
+    | | `-IdExpression
+    | |   `-UnqualifiedId
+    | |     `-y
+    | `-;
+    |-ExpressionStatement
+    | |-BinaryOperatorExpression
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-x
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-,
+    | | `-IdExpression
+    | |   `-UnqualifiedId
+    | |     `-y
+    | `-;
+    |-ExpressionStatement
+    | |-BinaryOperatorExpression
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-xp
+    | | |-->*
+    | | `-IdExpression
+    | |   `-UnqualifiedId
+    | |     `-pmi
+    | `-;
+    `-}
+)txt"));
+}
+
+TEST_P(SyntaxTreeTest, UserDefinedUnaryPrefixOperator) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(treeDumpEqual(
+      R"cpp(
+struct X {
+  X operator++();
+  bool operator!();
+  X* operator&();
+};
+void test(X x) {
+  ++x;
+  !x;
+  &x;
+}
+)cpp",
+      R"txt(
+*: TranslationUnit
+|-SimpleDeclaration
+| |-struct
+| |-X
+| |-{
+| |-SimpleDeclaration
+| | |-X
+| | |-SimpleDeclarator
+| | | |-operator
+| | | |-++
+| | | `-ParametersAndQualifiers
+| | |   |-(
+| | |   `-)
+| | `-;
+| |-SimpleDeclaration
+| | |-bool
+| | |-SimpleDeclarator
+| | | |-operator
+| | | |-!
+| | | `-ParametersAndQualifiers
+| | |   |-(
+| | |   `-)
+| | `-;
+| |-SimpleDeclaration
+| | |-X
+| | |-SimpleDeclarator
+| | | |-*
+| | | |-operator
+| | | |-&
+| | | `-ParametersAndQualifiers
+| | |   |-(
+| | |   `-)
+| | `-;
+| |-}
+| `-;
+`-SimpleDeclaration
+  |-void
+  |-SimpleDeclarator
+  | |-test
+  | `-ParametersAndQualifiers
+  |   |-(
+  |   |-SimpleDeclaration
+  |   | |-X
+  |   | `-SimpleDeclarator
+  |   |   `-x
+  |   `-)
+  `-CompoundStatement
+    |-{
+    |-ExpressionStatement
+    | |-PrefixUnaryOperatorExpression
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-++
+    | | `-IdExpression
+    | |   `-UnqualifiedId
+    | |     `-x
+    | `-;
+    |-ExpressionStatement
+    | |-PrefixUnaryOperatorExpression
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-!
+    | | `-IdExpression
+    | |   `-UnqualifiedId
+    | |     `-x
+    | `-;
+    |-ExpressionStatement
+    | |-PrefixUnaryOperatorExpression
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-&
+    | | `-IdExpression
+    | |   `-UnqualifiedId
+    | |     `-x
+    | `-;
+    `-}
+)txt"));
+}
+
+TEST_P(SyntaxTreeTest, UserDefinedUnaryPostfixOperator) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(treeDumpEqual(
+      R"cpp(
+struct X {
+  X operator++(int);
+};
+void test(X x) {
+  x++;
+}
+)cpp",
+      R"txt(
+*: TranslationUnit
+|-SimpleDeclaration
+| |-struct
+| |-X
+| |-{
+| |-SimpleDeclaration
+| | |-X
+| | |-SimpleDeclarator
+| | | |-operator
+| | | |-++
+| | | `-ParametersAndQualifiers
+| | |   |-(
+| | |   |-SimpleDeclaration
+| | |   | `-int
+| | |   `-)
+| | `-;
+| |-}
+| `-;
+`-SimpleDeclaration
+  |-void
+  |-SimpleDeclarator
+  | |-test
+  | `-ParametersAndQualifiers
+  |   |-(
+  |   |-SimpleDeclaration
+  |   | |-X
+  |   | `-SimpleDeclarator
+  |   |   `-x
+  |   `-)
+  `-CompoundStatement
+    |-{
+    |-ExpressionStatement
+    | |-PostfixUnaryOperatorExpression
+    | | |-IdExpression
+    | | | `-UnqualifiedId
+    | | |   `-x
+    | | `-IdExpression
+    | |   `-UnqualifiedId
+    | |     `-++
     | `-;
     `-}
 )txt"));
@@ -3741,6 +4214,99 @@ const int X::* b;
 )txt"));
 }
 
+TEST_P(SyntaxTreeTest, MemberFunctionPointer) {
+  if (!GetParam().isCXX()) {
+    return;
+  }
+  EXPECT_TRUE(treeDumpEqual(
+      R"cpp(
+struct X {
+  struct Y {};
+};
+void (X::*xp)();
+void (X::**xpp)(const int*);
+// FIXME: Generate the right syntax tree for this type,
+// i.e. create a syntax node for the outer member pointer
+void (X::Y::*xyp)(const int*, char);
+)cpp",
+      R"txt(
+*: TranslationUnit
+|-SimpleDeclaration
+| |-struct
+| |-X
+| |-{
+| |-SimpleDeclaration
+| | |-struct
+| | |-Y
+| | |-{
+| | |-}
+| | `-;
+| |-}
+| `-;
+|-SimpleDeclaration
+| |-void
+| |-SimpleDeclarator
+| | |-ParenDeclarator
+| | | |-(
+| | | |-MemberPointer
+| | | | |-X
+| | | | |-::
+| | | | `-*
+| | | |-xp
+| | | `-)
+| | `-ParametersAndQualifiers
+| |   |-(
+| |   `-)
+| `-;
+|-SimpleDeclaration
+| |-void
+| |-SimpleDeclarator
+| | |-ParenDeclarator
+| | | |-(
+| | | |-MemberPointer
+| | | | |-X
+| | | | |-::
+| | | | `-*
+| | | |-*
+| | | |-xpp
+| | | `-)
+| | `-ParametersAndQualifiers
+| |   |-(
+| |   |-SimpleDeclaration
+| |   | |-const
+| |   | |-int
+| |   | `-SimpleDeclarator
+| |   |   `-*
+| |   `-)
+| `-;
+`-SimpleDeclaration
+  |-void
+  |-SimpleDeclarator
+  | |-ParenDeclarator
+  | | |-(
+  | | |-X
+  | | |-::
+  | | |-MemberPointer
+  | | | |-Y
+  | | | |-::
+  | | | `-*
+  | | |-xyp
+  | | `-)
+  | `-ParametersAndQualifiers
+  |   |-(
+  |   |-SimpleDeclaration
+  |   | |-const
+  |   | |-int
+  |   | `-SimpleDeclarator
+  |   |   `-*
+  |   |-,
+  |   |-SimpleDeclaration
+  |   | `-char
+  |   `-)
+  `-;
+)txt"));
+}
+
 TEST_P(SyntaxTreeTest, ComplexDeclarator) {
   EXPECT_TRUE(treeDumpEqual(
       R"cpp(
@@ -3893,7 +4459,24 @@ TEST_P(SyntaxTreeTest, SynthesizedNodes) {
   EXPECT_TRUE(S->isDetached());
 }
 
+static std::vector<TestClangConfig> allTestClangConfigs() {
+  std::vector<TestClangConfig> all_configs;
+  for (TestLanguage lang : {Lang_C89, Lang_C99, Lang_CXX03, Lang_CXX11,
+                            Lang_CXX14, Lang_CXX17, Lang_CXX20}) {
+    TestClangConfig config;
+    config.Language = lang;
+    config.Target = "x86_64-pc-linux-gnu";
+    all_configs.push_back(config);
+
+    // Windows target is interesting to test because it enables
+    // `-fdelayed-template-parsing`.
+    config.Target = "x86_64-pc-win32-msvc";
+    all_configs.push_back(config);
+  }
+  return all_configs;
+}
+
 INSTANTIATE_TEST_CASE_P(SyntaxTreeTests, SyntaxTreeTest,
-                        testing::ValuesIn(TestClangConfig::allConfigs()), );
+                        testing::ValuesIn(allTestClangConfigs()), );
 
 } // namespace

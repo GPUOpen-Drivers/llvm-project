@@ -193,32 +193,57 @@ TEST(RangeSelectorTest, AfterOp) {
                        HasValue(EqualsCharSourceRange(ExpectedAfter)));
 }
 
+TEST(RangeSelectorTest, BetweenOp) {
+  StringRef Code = R"cc(
+    int f(int x, int y, int z) { return 3; }
+    int g() { return f(3, /* comment */ 7 /* comment */, 9); }
+  )cc";
+  auto Matcher = callExpr(hasArgument(0, expr().bind("a0")),
+                          hasArgument(1, expr().bind("a1")));
+  RangeSelector R = between(node("a0"), node("a1"));
+  TestMatch Match = matchCode(Code, Matcher);
+  EXPECT_THAT_EXPECTED(select(R, Match), HasValue(", /* comment */ "));
+}
+
+TEST(RangeSelectorTest, BetweenOpParsed) {
+  StringRef Code = R"cc(
+    int f(int x, int y, int z) { return 3; }
+    int g() { return f(3, /* comment */ 7 /* comment */, 9); }
+  )cc";
+  auto Matcher = callExpr(hasArgument(0, expr().bind("a0")),
+                          hasArgument(1, expr().bind("a1")));
+  auto R = parseRangeSelector(R"rs(between(node("a0"), node("a1")))rs");
+  ASSERT_THAT_EXPECTED(R, llvm::Succeeded());
+  TestMatch Match = matchCode(Code, Matcher);
+  EXPECT_THAT_EXPECTED(select(*R, Match), HasValue(", /* comment */ "));
+}
+
 // Node-id specific version.
-TEST(RangeSelectorTest, RangeOpNodes) {
+TEST(RangeSelectorTest, EncloseOpNodes) {
   StringRef Code = R"cc(
     int f(int x, int y, int z) { return 3; }
     int g() { return f(/* comment */ 3, 7 /* comment */, 9); }
   )cc";
   auto Matcher = callExpr(hasArgument(0, expr().bind("a0")),
                           hasArgument(1, expr().bind("a1")));
-  RangeSelector R = range("a0", "a1");
+  RangeSelector R = encloseNodes("a0", "a1");
   TestMatch Match = matchCode(Code, Matcher);
   EXPECT_THAT_EXPECTED(select(R, Match), HasValue("3, 7"));
 }
 
-TEST(RangeSelectorTest, RangeOpGeneral) {
+TEST(RangeSelectorTest, EncloseOpGeneral) {
   StringRef Code = R"cc(
     int f(int x, int y, int z) { return 3; }
     int g() { return f(/* comment */ 3, 7 /* comment */, 9); }
   )cc";
   auto Matcher = callExpr(hasArgument(0, expr().bind("a0")),
                           hasArgument(1, expr().bind("a1")));
-  RangeSelector R = range(node("a0"), node("a1"));
+  RangeSelector R = enclose(node("a0"), node("a1"));
   TestMatch Match = matchCode(Code, Matcher);
   EXPECT_THAT_EXPECTED(select(R, Match), HasValue("3, 7"));
 }
 
-TEST(RangeSelectorTest, RangeOpNodesParsed) {
+TEST(RangeSelectorTest, EncloseOpNodesParsed) {
   StringRef Code = R"cc(
     int f(int x, int y, int z) { return 3; }
     int g() { return f(/* comment */ 3, 7 /* comment */, 9); }
@@ -231,7 +256,7 @@ TEST(RangeSelectorTest, RangeOpNodesParsed) {
   EXPECT_THAT_EXPECTED(select(*R, Match), HasValue("3, 7"));
 }
 
-TEST(RangeSelectorTest, RangeOpGeneralParsed) {
+TEST(RangeSelectorTest, EncloseOpGeneralParsed) {
   StringRef Code = R"cc(
     int f(int x, int y, int z) { return 3; }
     int g() { return f(/* comment */ 3, 7 /* comment */, 9); }

@@ -47,7 +47,9 @@ Type Attribute::getType() const { return impl->getType(); }
 MLIRContext *Attribute::getContext() const { return getType().getContext(); }
 
 /// Get the dialect this attribute is registered to.
-Dialect &Attribute::getDialect() const { return impl->getDialect(); }
+Dialect &Attribute::getDialect() const {
+  return impl->getAbstractAttribute().getDialect();
+}
 
 //===----------------------------------------------------------------------===//
 // AffineMapAttr
@@ -337,7 +339,7 @@ uint64_t IntegerAttr::getUInt() const {
 }
 
 static LogicalResult verifyIntegerTypeInvariants(Location loc, Type type) {
-  if (type.isa<IntegerType>() || type.isa<IndexType>())
+  if (type.isa<IntegerType, IndexType>())
     return success();
   return emitError(loc, "expected integer or index type");
 }
@@ -458,16 +460,11 @@ int64_t ElementsAttr::getNumElements() const {
 /// Return the value at the given index. If index does not refer to a valid
 /// element, then a null attribute is returned.
 Attribute ElementsAttr::getValue(ArrayRef<uint64_t> index) const {
-  switch (getKind()) {
-  case StandardAttributes::DenseIntOrFPElements:
-    return cast<DenseElementsAttr>().getValue(index);
-  case StandardAttributes::OpaqueElements:
-    return cast<OpaqueElementsAttr>().getValue(index);
-  case StandardAttributes::SparseElements:
-    return cast<SparseElementsAttr>().getValue(index);
-  default:
-    llvm_unreachable("unknown ElementsAttr kind");
-  }
+  if (auto denseAttr = dyn_cast<DenseElementsAttr>())
+    return denseAttr.getValue(index);
+  if (auto opaqueAttr = dyn_cast<OpaqueElementsAttr>())
+    return opaqueAttr.getValue(index);
+  return cast<SparseElementsAttr>().getValue(index);
 }
 
 /// Return if the given 'index' refers to a valid element in this attribute.
@@ -489,23 +486,23 @@ bool ElementsAttr::isValidIndex(ArrayRef<uint64_t> index) const {
 ElementsAttr
 ElementsAttr::mapValues(Type newElementType,
                         function_ref<APInt(const APInt &)> mapping) const {
-  switch (getKind()) {
-  case StandardAttributes::DenseIntOrFPElements:
-    return cast<DenseElementsAttr>().mapValues(newElementType, mapping);
-  default:
-    llvm_unreachable("unsupported ElementsAttr subtype");
-  }
+  if (auto intOrFpAttr = dyn_cast<DenseElementsAttr>())
+    return intOrFpAttr.mapValues(newElementType, mapping);
+  llvm_unreachable("unsupported ElementsAttr subtype");
 }
 
 ElementsAttr
 ElementsAttr::mapValues(Type newElementType,
                         function_ref<APInt(const APFloat &)> mapping) const {
-  switch (getKind()) {
-  case StandardAttributes::DenseIntOrFPElements:
-    return cast<DenseElementsAttr>().mapValues(newElementType, mapping);
-  default:
-    llvm_unreachable("unsupported ElementsAttr subtype");
-  }
+  if (auto intOrFpAttr = dyn_cast<DenseElementsAttr>())
+    return intOrFpAttr.mapValues(newElementType, mapping);
+  llvm_unreachable("unsupported ElementsAttr subtype");
+}
+
+/// Method for support type inquiry through isa, cast and dyn_cast.
+bool ElementsAttr::classof(Attribute attr) {
+  return attr.isa<DenseIntOrFPElementsAttr, DenseStringElementsAttr,
+                  OpaqueElementsAttr, SparseElementsAttr>();
 }
 
 /// Returns the 1 dimensional flattened row-major index from the given
@@ -715,6 +712,11 @@ DenseElementsAttr::ComplexFloatElementIterator::ComplexFloatElementIterator(
 //===----------------------------------------------------------------------===//
 // DenseElementsAttr
 //===----------------------------------------------------------------------===//
+
+/// Method for support type inquiry through isa, cast and dyn_cast.
+bool DenseElementsAttr::classof(Attribute attr) {
+  return attr.isa<DenseIntOrFPElementsAttr, DenseStringElementsAttr>();
+}
 
 DenseElementsAttr DenseElementsAttr::get(ShapedType type,
                                          ArrayRef<Attribute> values) {
@@ -1090,7 +1092,7 @@ DenseElementsAttr DenseIntOrFPElementsAttr::getRaw(ShapedType type,
 DenseElementsAttr DenseIntOrFPElementsAttr::getRaw(ShapedType type,
                                                    ArrayRef<char> data,
                                                    bool isSplat) {
-  assert((type.isa<RankedTensorType>() || type.isa<VectorType>()) &&
+  assert((type.isa<RankedTensorType, VectorType>()) &&
          "type must be ranked tensor or vector");
   assert(type.hasStaticShape() && "type must have static shape");
   return Base::get(type.getContext(), StandardAttributes::DenseIntOrFPElements,
@@ -1247,7 +1249,7 @@ SparseElementsAttr SparseElementsAttr::get(ShapedType type,
                                            DenseElementsAttr values) {
   assert(indices.getType().getElementType().isInteger(64) &&
          "expected sparse indices to be 64-bit integer values");
-  assert((type.isa<RankedTensorType>() || type.isa<VectorType>()) &&
+  assert((type.isa<RankedTensorType, VectorType>()) &&
          "type must be ranked tensor or vector");
   assert(type.hasStaticShape() && "type must have static shape");
   return Base::get(type.getContext(), StandardAttributes::SparseElements, type,

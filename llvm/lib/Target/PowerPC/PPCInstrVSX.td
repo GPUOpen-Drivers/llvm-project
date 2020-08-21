@@ -1,9 +1,9 @@
 //===- PPCInstrVSX.td - The PowerPC VSX Extension --*- tablegen -*-===//
-// 
+//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// 
+//
 //===----------------------------------------------------------------------===//
 //
 // This file describes the VSX extension to the PowerPC instruction set.
@@ -142,15 +142,15 @@ def PPCSToV : SDNode<"PPCISD::SCALAR_TO_VECTOR_PERMUTED",
                      SDTypeProfile<1, 1, []>, []>;
 
 //-------------------------- Predicate definitions ---------------------------//
-def HasVSX : Predicate<"PPCSubTarget->hasVSX()">;
-def IsLittleEndian : Predicate<"PPCSubTarget->isLittleEndian()">;
-def IsBigEndian : Predicate<"!PPCSubTarget->isLittleEndian()">;
-def HasOnlySwappingMemOps : Predicate<"!PPCSubTarget->hasP9Vector()">;
-def HasP8Vector : Predicate<"PPCSubTarget->hasP8Vector()">;
-def HasDirectMove : Predicate<"PPCSubTarget->hasDirectMove()">;
-def NoP9Vector : Predicate<"!PPCSubTarget->hasP9Vector()">;
-def HasP9Vector : Predicate<"PPCSubTarget->hasP9Vector()">;
-def NoP9Altivec : Predicate<"!PPCSubTarget->hasP9Altivec()">;
+def HasVSX : Predicate<"Subtarget->hasVSX()">;
+def IsLittleEndian : Predicate<"Subtarget->isLittleEndian()">;
+def IsBigEndian : Predicate<"!Subtarget->isLittleEndian()">;
+def HasOnlySwappingMemOps : Predicate<"!Subtarget->hasP9Vector()">;
+def HasP8Vector : Predicate<"Subtarget->hasP8Vector()">;
+def HasDirectMove : Predicate<"Subtarget->hasDirectMove()">;
+def NoP9Vector : Predicate<"!Subtarget->hasP9Vector()">;
+def HasP9Vector : Predicate<"Subtarget->hasP9Vector()">;
+def NoP9Altivec : Predicate<"!Subtarget->hasP9Altivec()">;
 
 //--------------------- VSX-specific instruction formats ---------------------//
 // By default, all VSX instructions are to be selected over their Altivec
@@ -362,7 +362,8 @@ let hasSideEffects = 0 in {
     }
   } // mayStore
 
-  let Uses = [RM], mayRaiseFPException = 1 in {
+  let mayRaiseFPException = 1 in {
+  let Uses = [RM] in {
   // Add/Mul Instructions
   let isCommutable = 1 in {
     def XSADDDP : XX3Form<60, 32,
@@ -885,70 +886,19 @@ let hasSideEffects = 0 in {
                       "xvcvuxwsp $XT, $XB", IIC_VecFP,
                       [(set v4f32:$XT, (uint_to_fp v4i32:$XB))]>;
 
-  // Rounding Instructions
-  def XSRDPI : XX2Form<60, 73,
-                      (outs vsfrc:$XT), (ins vsfrc:$XB),
-                      "xsrdpi $XT, $XB", IIC_VecFP,
-                      [(set f64:$XT, (any_fround f64:$XB))]>;
+  // Rounding Instructions respecting current rounding mode
   def XSRDPIC : XX2Form<60, 107,
                       (outs vsfrc:$XT), (ins vsfrc:$XB),
                       "xsrdpic $XT, $XB", IIC_VecFP,
                       [(set f64:$XT, (any_fnearbyint f64:$XB))]>;
-  def XSRDPIM : XX2Form<60, 121,
-                      (outs vsfrc:$XT), (ins vsfrc:$XB),
-                      "xsrdpim $XT, $XB", IIC_VecFP,
-                      [(set f64:$XT, (any_ffloor f64:$XB))]>;
-  def XSRDPIP : XX2Form<60, 105,
-                      (outs vsfrc:$XT), (ins vsfrc:$XB),
-                      "xsrdpip $XT, $XB", IIC_VecFP,
-                      [(set f64:$XT, (any_fceil f64:$XB))]>;
-  def XSRDPIZ : XX2Form<60, 89,
-                      (outs vsfrc:$XT), (ins vsfrc:$XB),
-                      "xsrdpiz $XT, $XB", IIC_VecFP,
-                      [(set f64:$XT, (any_ftrunc f64:$XB))]>;
-
-  def XVRDPI : XX2Form<60, 201,
-                      (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrdpi $XT, $XB", IIC_VecFP,
-                      [(set v2f64:$XT, (any_fround v2f64:$XB))]>;
   def XVRDPIC : XX2Form<60, 235,
                       (outs vsrc:$XT), (ins vsrc:$XB),
                       "xvrdpic $XT, $XB", IIC_VecFP,
                       [(set v2f64:$XT, (any_fnearbyint v2f64:$XB))]>;
-  def XVRDPIM : XX2Form<60, 249,
-                      (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrdpim $XT, $XB", IIC_VecFP,
-                      [(set v2f64:$XT, (any_ffloor v2f64:$XB))]>;
-  def XVRDPIP : XX2Form<60, 233,
-                      (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrdpip $XT, $XB", IIC_VecFP,
-                      [(set v2f64:$XT, (any_fceil v2f64:$XB))]>;
-  def XVRDPIZ : XX2Form<60, 217,
-                      (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrdpiz $XT, $XB", IIC_VecFP,
-                      [(set v2f64:$XT, (any_ftrunc v2f64:$XB))]>;
-
-  def XVRSPI : XX2Form<60, 137,
-                      (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrspi $XT, $XB", IIC_VecFP,
-                      [(set v4f32:$XT, (any_fround v4f32:$XB))]>;
   def XVRSPIC : XX2Form<60, 171,
                       (outs vsrc:$XT), (ins vsrc:$XB),
                       "xvrspic $XT, $XB", IIC_VecFP,
                       [(set v4f32:$XT, (any_fnearbyint v4f32:$XB))]>;
-  def XVRSPIM : XX2Form<60, 185,
-                      (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrspim $XT, $XB", IIC_VecFP,
-                      [(set v4f32:$XT, (any_ffloor v4f32:$XB))]>;
-  def XVRSPIP : XX2Form<60, 169,
-                      (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrspip $XT, $XB", IIC_VecFP,
-                      [(set v4f32:$XT, (any_fceil v4f32:$XB))]>;
-  def XVRSPIZ : XX2Form<60, 153,
-                      (outs vsrc:$XT), (ins vsrc:$XB),
-                      "xvrspiz $XT, $XB", IIC_VecFP,
-                      [(set v4f32:$XT, (any_ftrunc v4f32:$XB))]>;
-
   // Max/Min Instructions
   let isCommutable = 1 in {
   def XSMAXDP : XX3Form<60, 160,
@@ -984,7 +934,60 @@ let hasSideEffects = 0 in {
                         [(set vsrc:$XT,
                               (int_ppc_vsx_xvminsp vsrc:$XA, vsrc:$XB))]>;
   } // isCommutable
-  } // Uses = [RM], mayRaiseFPException
+  } // Uses = [RM]
+
+  // Rounding Instructions with static direction.
+  def XSRDPI : XX2Form<60, 73,
+                      (outs vsfrc:$XT), (ins vsfrc:$XB),
+                      "xsrdpi $XT, $XB", IIC_VecFP,
+                      [(set f64:$XT, (any_fround f64:$XB))]>;
+  def XSRDPIM : XX2Form<60, 121,
+                      (outs vsfrc:$XT), (ins vsfrc:$XB),
+                      "xsrdpim $XT, $XB", IIC_VecFP,
+                      [(set f64:$XT, (any_ffloor f64:$XB))]>;
+  def XSRDPIP : XX2Form<60, 105,
+                      (outs vsfrc:$XT), (ins vsfrc:$XB),
+                      "xsrdpip $XT, $XB", IIC_VecFP,
+                      [(set f64:$XT, (any_fceil f64:$XB))]>;
+  def XSRDPIZ : XX2Form<60, 89,
+                      (outs vsfrc:$XT), (ins vsfrc:$XB),
+                      "xsrdpiz $XT, $XB", IIC_VecFP,
+                      [(set f64:$XT, (any_ftrunc f64:$XB))]>;
+
+  def XVRDPI : XX2Form<60, 201,
+                      (outs vsrc:$XT), (ins vsrc:$XB),
+                      "xvrdpi $XT, $XB", IIC_VecFP,
+                      [(set v2f64:$XT, (any_fround v2f64:$XB))]>;
+  def XVRDPIM : XX2Form<60, 249,
+                      (outs vsrc:$XT), (ins vsrc:$XB),
+                      "xvrdpim $XT, $XB", IIC_VecFP,
+                      [(set v2f64:$XT, (any_ffloor v2f64:$XB))]>;
+  def XVRDPIP : XX2Form<60, 233,
+                      (outs vsrc:$XT), (ins vsrc:$XB),
+                      "xvrdpip $XT, $XB", IIC_VecFP,
+                      [(set v2f64:$XT, (any_fceil v2f64:$XB))]>;
+  def XVRDPIZ : XX2Form<60, 217,
+                      (outs vsrc:$XT), (ins vsrc:$XB),
+                      "xvrdpiz $XT, $XB", IIC_VecFP,
+                      [(set v2f64:$XT, (any_ftrunc v2f64:$XB))]>;
+
+  def XVRSPI : XX2Form<60, 137,
+                      (outs vsrc:$XT), (ins vsrc:$XB),
+                      "xvrspi $XT, $XB", IIC_VecFP,
+                      [(set v4f32:$XT, (any_fround v4f32:$XB))]>;
+  def XVRSPIM : XX2Form<60, 185,
+                      (outs vsrc:$XT), (ins vsrc:$XB),
+                      "xvrspim $XT, $XB", IIC_VecFP,
+                      [(set v4f32:$XT, (any_ffloor v4f32:$XB))]>;
+  def XVRSPIP : XX2Form<60, 169,
+                      (outs vsrc:$XT), (ins vsrc:$XB),
+                      "xvrspip $XT, $XB", IIC_VecFP,
+                      [(set v4f32:$XT, (any_fceil v4f32:$XB))]>;
+  def XVRSPIZ : XX2Form<60, 153,
+                      (outs vsrc:$XT), (ins vsrc:$XB),
+                      "xvrspiz $XT, $XB", IIC_VecFP,
+                      [(set v4f32:$XT, (any_ftrunc v4f32:$XB))]>;
+  } // mayRaiseFPException
 
   // Logical Instructions
   let isCommutable = 1 in

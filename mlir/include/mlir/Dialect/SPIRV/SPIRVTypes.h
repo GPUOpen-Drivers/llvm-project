@@ -109,6 +109,11 @@ public:
   /// times.
   void getCapabilities(CapabilityArrayRefVector &capabilities,
                        Optional<spirv::StorageClass> storage = llvm::None);
+
+  /// Returns the size in bytes for each type. If no size can be calculated,
+  /// returns `llvm::None`. Note that if the type has explicit layout, it is
+  /// also taken into account in calculation.
+  Optional<int64_t> getSizeInBytes();
 };
 
 // SPIR-V scalar type: bool type, integer type, floating point type.
@@ -127,6 +132,8 @@ public:
                      Optional<spirv::StorageClass> storage = llvm::None);
   void getCapabilities(SPIRVType::CapabilityArrayRefVector &capabilities,
                        Optional<spirv::StorageClass> storage = llvm::None);
+
+  Optional<int64_t> getSizeInBytes();
 };
 
 // SPIR-V composite type: VectorType, SPIR-V ArrayType, or SPIR-V StructType.
@@ -153,6 +160,8 @@ public:
                      Optional<spirv::StorageClass> storage = llvm::None);
   void getCapabilities(SPIRVType::CapabilityArrayRefVector &capabilities,
                        Optional<spirv::StorageClass> storage = llvm::None);
+
+  Optional<int64_t> getSizeInBytes();
 };
 
 // SPIR-V array type
@@ -160,8 +169,6 @@ class ArrayType : public Type::TypeBase<ArrayType, CompositeType,
                                         detail::ArrayTypeStorage> {
 public:
   using Base::Base;
-
-  static bool kindof(unsigned kind) { return kind == TypeKind::Array; }
 
   static ArrayType get(Type elementType, unsigned elementCount);
 
@@ -181,6 +188,10 @@ public:
                      Optional<spirv::StorageClass> storage = llvm::None);
   void getCapabilities(SPIRVType::CapabilityArrayRefVector &capabilities,
                        Optional<spirv::StorageClass> storage = llvm::None);
+
+  /// Returns the array size in bytes. Since array type may have an explicit
+  /// stride declaration (in bytes), we also include it in the calculation.
+  Optional<int64_t> getSizeInBytes();
 };
 
 // SPIR-V image type
@@ -188,8 +199,6 @@ class ImageType
     : public Type::TypeBase<ImageType, SPIRVType, detail::ImageTypeStorage> {
 public:
   using Base::Base;
-
-  static bool kindof(unsigned kind) { return kind == TypeKind::Image; }
 
   static ImageType
   get(Type elementType, Dim dim,
@@ -216,7 +225,7 @@ public:
   ImageSamplingInfo getSamplingInfo() const;
   ImageSamplerUseInfo getSamplerUseInfo() const;
   ImageFormat getImageFormat() const;
-  // TODO(ravishankarm): Add support for Access qualifier
+  // TODO: Add support for Access qualifier
 
   void getExtensions(SPIRVType::ExtensionArrayRefVector &extensions,
                      Optional<spirv::StorageClass> storage = llvm::None);
@@ -229,8 +238,6 @@ class PointerType : public Type::TypeBase<PointerType, SPIRVType,
                                           detail::PointerTypeStorage> {
 public:
   using Base::Base;
-
-  static bool kindof(unsigned kind) { return kind == TypeKind::Pointer; }
 
   static PointerType get(Type pointeeType, StorageClass storageClass);
 
@@ -250,8 +257,6 @@ class RuntimeArrayType
                             detail::RuntimeArrayTypeStorage> {
 public:
   using Base::Base;
-
-  static bool kindof(unsigned kind) { return kind == TypeKind::RuntimeArray; }
 
   static RuntimeArrayType get(Type elementType);
 
@@ -304,8 +309,6 @@ public:
                   static_cast<uint32_t>(other.decoration));
     }
   };
-
-  static bool kindof(unsigned kind) { return kind == TypeKind::Struct; }
 
   /// Construct a StructType with at least one member.
   static StructType get(ArrayRef<Type> memberTypes,
@@ -372,10 +375,6 @@ class CooperativeMatrixNVType
 public:
   using Base::Base;
 
-  static bool kindof(unsigned kind) {
-    return kind == TypeKind::CooperativeMatrix;
-  }
-
   static CooperativeMatrixNVType get(Type elementType, spirv::Scope scope,
                                      unsigned rows, unsigned columns);
   Type getElementType() const;
@@ -399,8 +398,6 @@ class MatrixType : public Type::TypeBase<MatrixType, CompositeType,
 public:
   using Base::Base;
 
-  static bool kindof(unsigned kind) { return kind == TypeKind::Matrix; }
-
   static MatrixType get(Type columnType, uint32_t columnCount);
 
   static MatrixType getChecked(Type columnType, uint32_t columnCount,
@@ -410,12 +407,22 @@ public:
                                                     Type columnType,
                                                     uint32_t columnCount);
 
-  /// Returns true if the matrix elements are vectors of float elements
+  /// Returns true if the matrix elements are vectors of float elements.
   static bool isValidColumnType(Type columnType);
 
-  Type getElementType() const;
+  Type getColumnType() const;
 
+  /// Returns the number of rows.
+  unsigned getNumRows() const;
+
+  /// Returns the number of columns.
+  unsigned getNumColumns() const;
+
+  /// Returns total number of elements (rows*columns).
   unsigned getNumElements() const;
+
+  /// Returns the elements' type (i.e, single element type).
+  Type getElementType() const;
 
   void getExtensions(SPIRVType::ExtensionArrayRefVector &extensions,
                      Optional<spirv::StorageClass> storage = llvm::None);

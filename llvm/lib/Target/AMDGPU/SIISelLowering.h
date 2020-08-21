@@ -42,7 +42,8 @@ private:
   SDValue getImplicitArgPtr(SelectionDAG &DAG, const SDLoc &SL) const;
   SDValue lowerKernargMemParameter(SelectionDAG &DAG, EVT VT, EVT MemVT,
                                    const SDLoc &SL, SDValue Chain,
-                                   uint64_t Offset, unsigned Align, bool Signed,
+                                   uint64_t Offset, Align Alignment,
+                                   bool Signed,
                                    const ISD::InputArg *Arg = nullptr) const;
 
   SDValue lowerStackParameter(SelectionDAG &DAG, CCValAssign &VA,
@@ -61,6 +62,11 @@ private:
                      SelectionDAG &DAG) const;
   SDValue lowerSBuffer(EVT VT, SDLoc DL, SDValue Rsrc, SDValue Offset,
                        SDValue CachePolicy, SelectionDAG &DAG) const;
+
+  SDValue lowerRawBufferAtomicIntrin(SDValue Op, SelectionDAG &DAG,
+                                     unsigned NewOpcode) const;
+  SDValue lowerStructBufferAtomicIntrin(SDValue Op, SelectionDAG &DAG,
+                                        unsigned NewOpcode) const;
 
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;
@@ -216,7 +222,7 @@ private:
   /// \returns 0 If there is a non-constant offset or if the offset is 0.
   /// Otherwise returns the constant offset.
   unsigned setBufferOffsets(SDValue CombinedOffset, SelectionDAG &DAG,
-                           SDValue *Offsets, unsigned Align = 4) const;
+                            SDValue *Offsets, Align Alignment = Align(4)) const;
 
   // Handle 8 bit and 16 bit buffer loads
   SDValue handleByteShortBufferLoads(SelectionDAG &DAG, EVT LoadVT, SDLoc DL,
@@ -254,12 +260,22 @@ public:
                         const SelectionDAG &DAG) const override;
 
   bool allowsMisalignedMemoryAccessesImpl(
-      unsigned Size, unsigned AS, unsigned Align,
+      unsigned Size, unsigned AddrSpace, Align Alignment,
       MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
       bool *IsFast = nullptr) const;
 
   bool allowsMisalignedMemoryAccesses(
-      EVT VT, unsigned AS, unsigned Align,
+      LLT Ty, unsigned AddrSpace, Align Alignment,
+      MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
+      bool *IsFast = nullptr) const override {
+    if (IsFast)
+      *IsFast = false;
+    return allowsMisalignedMemoryAccessesImpl(Ty.getSizeInBits(), AddrSpace,
+                                              Alignment, Flags, IsFast);
+  }
+
+  bool allowsMisalignedMemoryAccesses(
+      EVT VT, unsigned AS, unsigned Alignment,
       MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
       bool *IsFast = nullptr) const override;
 
@@ -274,15 +290,6 @@ public:
            AS == AMDGPUAS::PRIVATE_ADDRESS;
   }
 
-  // FIXME: Missing constant_32bit
-  static bool isFlatGlobalAddrSpace(unsigned AS) {
-    return AS == AMDGPUAS::GLOBAL_ADDRESS ||
-           AS == AMDGPUAS::FLAT_ADDRESS ||
-           AS == AMDGPUAS::CONSTANT_ADDRESS ||
-           AS > AMDGPUAS::MAX_AMDGPU_ADDRESS;
-  }
-
-  bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override;
   bool isFreeAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override;
 
   TargetLoweringBase::LegalizeTypeAction
@@ -396,9 +403,13 @@ public:
                                     std::string &Constraint,
                                     std::vector<SDValue> &Ops,
                                     SelectionDAG &DAG) const override;
-  void LowerAsmOperandForConstraintA(SDValue Op,
-                                     std::vector<SDValue> &Ops,
-                                     SelectionDAG &DAG) const;
+  bool getAsmOperandConstVal(SDValue Op, uint64_t &Val) const;
+  bool checkAsmConstraintVal(SDValue Op,
+                             const std::string &Constraint,
+                             uint64_t Val) const;
+  bool checkAsmConstraintValA(SDValue Op,
+                              uint64_t Val,
+                              unsigned MaxSize = 64) const;
   SDValue copyToM0(SelectionDAG &DAG, SDValue Chain, const SDLoc &DL,
                    SDValue V) const;
 
@@ -459,6 +470,9 @@ public:
                                       MachineFunction &MF,
                                       const SIRegisterInfo &TRI,
                                       SIMachineFunctionInfo &Info) const;
+
+  std::pair<int, MVT> getTypeLegalizationCost(const DataLayout &DL,
+                                              Type *Ty) const;
 };
 
 } // End namespace llvm

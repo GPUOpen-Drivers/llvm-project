@@ -81,6 +81,7 @@ OUTPUT OPTIONS
 .. option:: -s, --succinct
 
  Show less output, for example don't show information on tests that pass.
+ Also show a progress bar, unless ``--no-progress-bar`` is specified.
 
 .. option:: -v, --verbose
 
@@ -158,11 +159,10 @@ EXECUTION OPTIONS
 SELECTION OPTIONS
 -----------------
 
-.. option:: --max-failures MAX_FAILURES
+.. option:: --max-failures N
 
- Stop execution after the given number of failures.
- An integer argument may be passed on the command line
- or the environment vairable MAX_FAILURES may be set
+ Stop execution after the given number ``N`` of failures.
+ An integer argument should be passed on the command line
  prior to execution.
 
 .. option:: --max-tests=N

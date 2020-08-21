@@ -11,6 +11,7 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Dialect.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/Twine.h"
 
@@ -72,11 +73,11 @@ bool Type::isUnsignedInteger(unsigned width) {
 }
 
 bool Type::isSignlessIntOrIndex() {
-  return isa<IndexType>() || isSignlessInteger();
+  return isSignlessInteger() || isa<IndexType>();
 }
 
 bool Type::isSignlessIntOrIndexOrFloat() {
-  return isa<IndexType>() || isSignlessInteger() || isa<FloatType>();
+  return isSignlessInteger() || isa<IndexType, FloatType>();
 }
 
 bool Type::isSignlessIntOrFloat() {
@@ -85,7 +86,7 @@ bool Type::isSignlessIntOrFloat() {
 
 bool Type::isIntOrIndex() { return isa<IntegerType>() || isIndex(); }
 
-bool Type::isIntOrFloat() { return isa<IntegerType>() || isa<FloatType>(); }
+bool Type::isIntOrFloat() { return isa<IntegerType, FloatType>(); }
 
 bool Type::isIntOrIndexOrFloat() { return isIntOrFloat() || isIndex(); }
 
@@ -130,10 +131,10 @@ IntegerType::verifyConstructionInvariants(Location loc, unsigned width,
   return success();
 }
 
-unsigned IntegerType::getWidth() const { return getImpl()->getWidth(); }
+unsigned IntegerType::getWidth() const { return getImpl()->width; }
 
 IntegerType::SignednessSemantics IntegerType::getSignedness() const {
-  return getImpl()->getSignedness();
+  return getImpl()->signedness;
 }
 
 //===----------------------------------------------------------------------===//
@@ -200,7 +201,7 @@ int64_t ShapedType::getNumElements() const {
 int64_t ShapedType::getRank() const { return getShape().size(); }
 
 bool ShapedType::hasRank() const {
-  return !isa<UnrankedMemRefType>() && !isa<UnrankedTensorType>();
+  return !isa<UnrankedMemRefType, UnrankedTensorType>();
 }
 
 int64_t ShapedType::getDimSize(unsigned idx) const {
@@ -230,25 +231,25 @@ int64_t ShapedType::getSizeInBits() const {
   if (elementType.isIntOrFloat())
     return elementType.getIntOrFloatBitWidth() * getNumElements();
 
+  if (auto complexType = elementType.dyn_cast<ComplexType>()) {
+    elementType = complexType.getElementType();
+    return elementType.getIntOrFloatBitWidth() * getNumElements() * 2;
+  }
+
   // Tensors can have vectors and other tensors as elements, other shaped types
   // cannot.
   assert(isa<TensorType>() && "unsupported element type");
-  assert((elementType.isa<VectorType>() || elementType.isa<TensorType>()) &&
+  assert((elementType.isa<VectorType, TensorType>()) &&
          "unsupported tensor element type");
   return getNumElements() * elementType.cast<ShapedType>().getSizeInBits();
 }
 
 ArrayRef<int64_t> ShapedType::getShape() const {
-  switch (getKind()) {
-  case StandardTypes::Vector:
-    return cast<VectorType>().getShape();
-  case StandardTypes::RankedTensor:
-    return cast<RankedTensorType>().getShape();
-  case StandardTypes::MemRef:
-    return cast<MemRefType>().getShape();
-  default:
-    llvm_unreachable("not a ShapedType or not ranked");
-  }
+  if (auto vectorType = dyn_cast<VectorType>())
+    return vectorType.getShape();
+  if (auto tensorType = dyn_cast<RankedTensorType>())
+    return tensorType.getShape();
+  return cast<MemRefType>().getShape();
 }
 
 int64_t ShapedType::getNumDynamicDims() const {
@@ -300,11 +301,21 @@ ArrayRef<int64_t> VectorType::getShape() const { return getImpl()->getShape(); }
 
 // Check if "elementType" can be an element type of a tensor. Emit errors if
 // location is not nullptr.  Returns failure if check failed.
-static inline LogicalResult checkTensorElementType(Location location,
-                                                   Type elementType) {
+static LogicalResult checkTensorElementType(Location location,
+                                            Type elementType) {
   if (!TensorType::isValidElementType(elementType))
     return emitError(location, "invalid tensor element type");
   return success();
+}
+
+/// Return true if the specified element type is ok in a tensor.
+bool TensorType::isValidElementType(Type type) {
+  // Note: Non standard/builtin types are allowed to exist within tensor
+  // types. Dialects are expected to verify that tensor types have a valid
+  // element type within that dialect.
+  return type.isa<ComplexType, FloatType, IntegerType, OpaqueType, VectorType,
+                  IndexType>() ||
+         !type.getDialect().getNamespace().empty();
 }
 
 //===----------------------------------------------------------------------===//
@@ -397,9 +408,7 @@ MemRefType MemRefType::getImpl(ArrayRef<int64_t> shape, Type elementType,
                                Optional<Location> location) {
   auto *context = elementType.getContext();
 
-  // Check that memref is formed from allowed types.
-  if (!elementType.isIntOrFloat() && !elementType.isa<VectorType>() &&
-      !elementType.isa<ComplexType>())
+  if (!BaseMemRefType::isValidElementType(elementType))
     return emitOptionalError(location, "invalid memref element type"),
            MemRefType();
 
@@ -475,9 +484,7 @@ unsigned UnrankedMemRefType::getMemorySpace() const {
 LogicalResult
 UnrankedMemRefType::verifyConstructionInvariants(Location loc, Type elementType,
                                                  unsigned memorySpace) {
-  // Check that memref is formed from allowed types.
-  if (!elementType.isIntOrFloat() && !elementType.isa<VectorType>() &&
-      !elementType.isa<ComplexType>())
+  if (!BaseMemRefType::isValidElementType(elementType))
     return emitError(loc, "invalid memref element type");
   return success();
 }
@@ -550,7 +557,7 @@ LogicalResult mlir::getStridesAndOffset(MemRefType t,
   // For now strides are only computed on a single affine map with a single
   // result (i.e. the closed subset of linearization maps that are compatible
   // with striding semantics).
-  // TODO(ntv): support more forms on a per-need basis.
+  // TODO: support more forms on a per-need basis.
   if (affineMaps.size() > 1)
     return failure();
   if (affineMaps.size() == 1 && affineMaps[0].getNumResults() != 1)
@@ -597,8 +604,8 @@ LogicalResult mlir::getStridesAndOffset(MemRefType t,
 
   /// In practice, a strided memref must be internally non-aliasing. Test
   /// against 0 as a proxy.
-  /// TODO(ntv) static cases can have more advanced checks.
-  /// TODO(ntv) dynamic cases would require a way to compare symbolic
+  /// TODO: static cases can have more advanced checks.
+  /// TODO: dynamic cases would require a way to compare symbolic
   /// expressions and would probably need an affine set context propagated
   /// everywhere.
   if (llvm::any_of(strides, [](AffineExpr e) {
@@ -638,9 +645,12 @@ LogicalResult mlir::getStridesAndOffset(MemRefType t,
 
 /// Get or create a new TupleType with the provided element types. Assumes the
 /// arguments define a well-formed type.
-TupleType TupleType::get(ArrayRef<Type> elementTypes, MLIRContext *context) {
+TupleType TupleType::get(TypeRange elementTypes, MLIRContext *context) {
   return Base::get(context, StandardTypes::Tuple, elementTypes);
 }
+
+/// Get or create an empty tuple type.
+TupleType TupleType::get(MLIRContext *context) { return get({}, context); }
 
 /// Return the elements types for this tuple.
 ArrayRef<Type> TupleType::getTypes() const { return getImpl()->getTypes(); }
@@ -729,19 +739,16 @@ MemRefType mlir::canonicalizeStridedLayout(MemRefType t) {
 AffineExpr mlir::makeCanonicalStridedLayoutExpr(ArrayRef<int64_t> sizes,
                                                 ArrayRef<AffineExpr> exprs,
                                                 MLIRContext *context) {
+  // Size 0 corner case is useful for canonicalizations.
+  if (llvm::is_contained(sizes, 0))
+    return getAffineConstantExpr(0, context);
+
+  auto maps = AffineMap::inferFromExprList(exprs);
+  assert(!maps.empty() && "Expected one non-empty map");
+  unsigned numDims = maps[0].getNumDims(), nSymbols = maps[0].getNumSymbols();
+
   AffineExpr expr;
   bool dynamicPoisonBit = false;
-  unsigned numDims = 0;
-  unsigned nSymbols = 0;
-  // Compute the number of symbols and dimensions of the passed exprs.
-  for (AffineExpr expr : exprs) {
-    expr.walk([&numDims, &nSymbols](AffineExpr d) {
-      if (AffineDimExpr dim = d.dyn_cast<AffineDimExpr>())
-        numDims = std::max(numDims, dim.getPosition() + 1);
-      else if (AffineSymbolExpr symbol = d.dyn_cast<AffineSymbolExpr>())
-        nSymbols = std::max(nSymbols, symbol.getPosition() + 1);
-    });
-  }
   int64_t runningSize = 1;
   for (auto en : llvm::zip(llvm::reverse(exprs), llvm::reverse(sizes))) {
     int64_t size = std::get<1>(en);

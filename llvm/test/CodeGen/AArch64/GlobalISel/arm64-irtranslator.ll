@@ -704,26 +704,6 @@ define float @test_frem(float %arg1, float %arg2) {
   ret float %res
 }
 
-; CHECK-LABEL: name: test_fneg
-; CHECK: [[ARG1:%[0-9]+]]:_(s32) = COPY $s0
-; CHECK-NEXT: [[RES:%[0-9]+]]:_(s32) = G_FNEG [[ARG1]]
-; CHECK-NEXT: $s0 = COPY [[RES]]
-; CHECK-NEXT: RET_ReallyLR implicit $s0
-define float @test_fneg(float %arg1) {
-  %res = fneg float %arg1
-  ret float %res
-}
-
-; CHECK-LABEL: name: test_fneg_fmf
-; CHECK: [[ARG1:%[0-9]+]]:_(s32) = COPY $s0
-; CHECK-NEXT: [[RES:%[0-9]+]]:_(s32) = nnan ninf nsz arcp contract afn reassoc G_FNEG [[ARG1]]
-; CHECK-NEXT: $s0 = COPY [[RES]]
-; CHECK-NEXT: RET_ReallyLR implicit $s0
-define float @test_fneg_fmf(float %arg1) {
-  %res = fneg fast float %arg1
-  ret float %res
-}
-
 ; CHECK-LABEL: name: test_sadd_overflow
 ; CHECK: [[LHS:%[0-9]+]]:_(s32) = COPY $w0
 ; CHECK: [[RHS:%[0-9]+]]:_(s32) = COPY $w1
@@ -1266,6 +1246,17 @@ define float @test_pow_intrin(float %l, float %r) {
   ret float %res
 }
 
+declare float @llvm.powi.f32(float, i32)
+define float @test_powi_intrin(float %l, i32 %r) {
+; CHECK-LABEL: name: test_powi_intrin
+; CHECK: [[LHS:%[0-9]+]]:_(s32) = COPY $s0
+; CHECK: [[RHS:%[0-9]+]]:_(s32) = COPY $w0
+; CHECK: [[RES:%[0-9]+]]:_(s32) = nnan ninf nsz arcp contract afn reassoc G_FPOWI [[LHS]], [[RHS]]
+; CHECK: $s0 = COPY [[RES]]
+  %res = call nnan ninf nsz arcp contract afn reassoc float @llvm.powi.f32(float %l, i32 %r)
+  ret float %res
+}
+
 declare float @llvm.fma.f32(float, float, float)
 define float @test_fma_intrin(float %a, float %b, float %c) {
 ; CHECK-LABEL: name: test_fma_intrin
@@ -1380,6 +1371,16 @@ define float @test_intrinsic_round(float %a) {
   ret float %res
 }
 
+declare i32 @llvm.lrint.i32.f32(float)
+define i32 @test_intrinsic_lrint(float %a) {
+; CHECK-LABEL: name: test_intrinsic_lrint
+; CHECK: [[A:%[0-9]+]]:_(s32) = COPY $s0
+; CHECK: [[RES:%[0-9]+]]:_(s32) = G_INTRINSIC_LRINT [[A]]
+; CHECK: $w0 = COPY [[RES]]
+  %res = call i32 @llvm.lrint.i32.f32(float %a)
+  ret i32 %res
+}
+
 declare i32 @llvm.ctlz.i32(i32, i1)
 define i32 @test_ctlz_intrinsic_zero_not_undef(i32 %a) {
 ; CHECK-LABEL: name: test_ctlz_intrinsic_zero_not_undef
@@ -1486,7 +1487,7 @@ define float @test_fneg_f32(float %x) {
 ; CHECK: [[ARG:%[0-9]+]]:_(s32) = COPY $s0
 ; CHECK: [[RES:%[0-9]+]]:_(s32) = G_FNEG [[ARG]]
 ; CHECK: $s0 = COPY [[RES]](s32)
-  %neg = fsub float -0.000000e+00, %x
+  %neg = fneg float %x
   ret float %neg
 }
 
@@ -1495,7 +1496,7 @@ define float @test_fneg_f32_fmf(float %x) {
 ; CHECK: [[ARG:%[0-9]+]]:_(s32) = COPY $s0
 ; CHECK: [[RES:%[0-9]+]]:_(s32) = nnan ninf nsz arcp contract afn reassoc G_FNEG [[ARG]]
 ; CHECK: $s0 = COPY [[RES]](s32)
-  %neg = fsub fast float -0.000000e+00, %x
+  %neg = fneg fast float %x
   ret float %neg
 }
 
@@ -1504,7 +1505,7 @@ define double @test_fneg_f64(double %x) {
 ; CHECK: [[ARG:%[0-9]+]]:_(s64) = COPY $d0
 ; CHECK: [[RES:%[0-9]+]]:_(s64) = G_FNEG [[ARG]]
 ; CHECK: $d0 = COPY [[RES]](s64)
-  %neg = fsub double -0.000000e+00, %x
+  %neg = fneg double %x
   ret double %neg
 }
 
@@ -1513,7 +1514,7 @@ define double @test_fneg_f64_fmf(double %x) {
 ; CHECK: [[ARG:%[0-9]+]]:_(s64) = COPY $d0
 ; CHECK: [[RES:%[0-9]+]]:_(s64) = nnan ninf nsz arcp contract afn reassoc G_FNEG [[ARG]]
 ; CHECK: $d0 = COPY [[RES]](s64)
-  %neg = fsub fast double -0.000000e+00, %x
+  %neg = fneg fast double %x
   ret double %neg
 }
 
@@ -1961,6 +1962,32 @@ entry:
   br label %repeat
 repeat:
   %val_success = cmpxchg i32* %addr, i32 0, i32 1 monotonic monotonic
+  %value_loaded = extractvalue { i32, i1 } %val_success, 0
+  %success = extractvalue { i32, i1 } %val_success, 1
+  br i1 %success, label %done, label %repeat
+done:
+  ret i32 %value_loaded
+}
+
+; Try one cmpxchg
+define i32 @test_weak_atomic_cmpxchg_1(i32* %addr) {
+; CHECK-LABEL: name: test_weak_atomic_cmpxchg_1
+; CHECK:       bb.1.entry:
+; CHECK-NEXT:  successors: %bb.{{[^)]+}}
+; CHECK-NEXT:  liveins: $x0
+; CHECK:         [[ADDR:%[0-9]+]]:_(p0) = COPY $x0
+; CHECK-NEXT:    [[OLDVAL:%[0-9]+]]:_(s32) = G_CONSTANT i32 0
+; CHECK-NEXT:    [[NEWVAL:%[0-9]+]]:_(s32) = G_CONSTANT i32 1
+; CHECK:       bb.2.repeat:
+; CHECK-NEXT:    successors: %bb.3({{[^)]+}}), %bb.2({{[^)]+}})
+; CHECK:         [[OLDVALRES:%[0-9]+]]:_(s32), [[SUCCESS:%[0-9]+]]:_(s1) = G_ATOMIC_CMPXCHG_WITH_SUCCESS [[ADDR]](p0), [[OLDVAL]], [[NEWVAL]] :: (load store monotonic monotonic 4 on %ir.addr)
+; CHECK-NEXT:    G_BRCOND [[SUCCESS]](s1), %bb.3
+; CHECK-NEXT:    G_BR %bb.2
+; CHECK:       bb.3.done:
+entry:
+  br label %repeat
+repeat:
+  %val_success = cmpxchg weak i32* %addr, i32 0, i32 1 monotonic monotonic
   %value_loaded = extractvalue { i32, i1 } %val_success, 0
   %success = extractvalue { i32, i1 } %val_success, 1
   br i1 %success, label %done, label %repeat

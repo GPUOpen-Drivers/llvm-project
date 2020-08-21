@@ -1663,6 +1663,20 @@ TEST_F(FormatTest, MultiLineControlStatements) {
             "  foo();\n"
             "}",
             format("for(int i=0;i<10;++i){foo();}", Style));
+  EXPECT_EQ("foreach (int i,\n"
+            "         list)\n"
+            "{\n"
+            "  foo();\n"
+            "}",
+            format("foreach(int i, list){foo();}", Style));
+  Style.ColumnLimit =
+      40; // to concentrate at brace wrapping, not line wrap due to column limit
+  EXPECT_EQ("foreach (int i, list) {\n"
+            "  foo();\n"
+            "}",
+            format("foreach(int i, list){foo();}", Style));
+  Style.ColumnLimit =
+      20; // to concentrate at brace wrapping, not line wrap due to column limit
   EXPECT_EQ("while (foo || bar ||\n"
             "       baz)\n"
             "{\n"
@@ -2165,6 +2179,33 @@ TEST_F(FormatTest, FormatsBitfields) {
                "  uchar : 8;\n"
                "  uchar other;\n"
                "};");
+  FormatStyle Style = getLLVMStyle();
+  Style.BitFieldColonSpacing = FormatStyle::BFCS_None;
+  verifyFormat("struct Bitfields {\n"
+               "  unsigned sClass:8;\n"
+               "  unsigned ValueKind:2;\n"
+               "  uchar other;\n"
+               "};",
+               Style);
+  verifyFormat("struct A {\n"
+               "  int aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1,\n"
+               "      bbbbbbbbbbbbbbbbbbbbbbbbb:2;\n"
+               "};",
+               Style);
+  Style.BitFieldColonSpacing = FormatStyle::BFCS_Before;
+  verifyFormat("struct Bitfields {\n"
+               "  unsigned sClass :8;\n"
+               "  unsigned ValueKind :2;\n"
+               "  uchar other;\n"
+               "};",
+               Style);
+  Style.BitFieldColonSpacing = FormatStyle::BFCS_After;
+  verifyFormat("struct Bitfields {\n"
+               "  unsigned sClass: 8;\n"
+               "  unsigned ValueKind: 2;\n"
+               "  uchar other;\n"
+               "};",
+               Style);
 }
 
 TEST_F(FormatTest, FormatsNamespaces) {
@@ -5325,7 +5366,7 @@ TEST_F(FormatTest, DeductionGuides) {
   verifyFormat("template <class... Ts> S(Ts...) -> S<Ts...>;");
   verifyFormat(
       "template <class... T>\n"
-      "array(T &&... t) -> array<std::common_type_t<T...>, sizeof...(T)>;");
+      "array(T &&...t) -> array<std::common_type_t<T...>, sizeof...(T)>;");
   verifyFormat("template <class T> A() -> A<decltype(p->foo<3>())>;");
   verifyFormat("template <class T> A() -> A<decltype(foo<traits<1>>)>;");
   verifyFormat("template <class T> A() -> A<sizeof(p->foo<1>)>;");
@@ -8179,13 +8220,20 @@ TEST_F(FormatTest, AttributePenaltyBreaking) {
 }
 
 TEST_F(FormatTest, UnderstandsEllipsis) {
+  FormatStyle Style = getLLVMStyle();
   verifyFormat("int printf(const char *fmt, ...);");
   verifyFormat("template <class... Ts> void Foo(Ts... ts) { Foo(ts...); }");
-  verifyFormat("template <class... Ts> void Foo(Ts *... ts) {}");
+  verifyFormat("template <class... Ts> void Foo(Ts *...ts) {}");
 
-  FormatStyle PointersLeft = getLLVMStyle();
-  PointersLeft.PointerAlignment = FormatStyle::PAS_Left;
-  verifyFormat("template <class... Ts> void Foo(Ts*... ts) {}", PointersLeft);
+  verifyFormat("template <int *...PP> a;", Style);
+
+  Style.PointerAlignment = FormatStyle::PAS_Left;
+  verifyFormat("template <class... Ts> void Foo(Ts*... ts) {}", Style);
+
+  verifyFormat("template <int*... PP> a;", Style);
+
+  Style.PointerAlignment = FormatStyle::PAS_Middle;
+  verifyFormat("template <int *... PP> a;", Style);
 }
 
 TEST_F(FormatTest, AdaptivelyFormatsPointersAndReferences) {
@@ -12149,6 +12197,21 @@ TEST_F(FormatTest, AlignConsecutiveBitFields) {
                "int       oneTwoThree : 23 = 0;",
                Alignment);
 
+  Alignment.BitFieldColonSpacing = FormatStyle::BFCS_None;
+  verifyFormat("int const a          :5;\n"
+               "int       oneTwoThree:23;",
+               Alignment);
+
+  Alignment.BitFieldColonSpacing = FormatStyle::BFCS_Before;
+  verifyFormat("int const a           :5;\n"
+               "int       oneTwoThree :23;",
+               Alignment);
+
+  Alignment.BitFieldColonSpacing = FormatStyle::BFCS_After;
+  verifyFormat("int const a          : 5;\n"
+               "int       oneTwoThree: 23;",
+               Alignment);
+
   // Known limitations: ':' is only recognized as a bitfield colon when
   // followed by a number.
   /*
@@ -12979,9 +13042,7 @@ TEST_F(FormatTest, WhitesmithsBraceBreaking) {
                "  }\n",
                WhitesmithsBraceStyle);
 
-  // FIXME: the block and the break under case 2 in this test don't get indented
-  // correctly
-  /*
+  WhitesmithsBraceStyle.IndentCaseBlocks = true;
   verifyFormat("void switchTest1(int a)\n"
                "  {\n"
                "  switch (a)\n"
@@ -12989,35 +13050,101 @@ TEST_F(FormatTest, WhitesmithsBraceBreaking) {
                "    case 2:\n"
                "      {\n"
                "      }\n"
-               "      break;\n"
+               "    break;\n"
                "    }\n"
                "  }\n",
                WhitesmithsBraceStyle);
-  */
 
-  // FIXME: the block and the break under case 2 in this test don't get indented
-  // correctly
-  /*
   verifyFormat("void switchTest2(int a)\n"
                "  {\n"
                "  switch (a)\n"
                "    {\n"
-               "  case 0:\n"
+               "    case 0:\n"
                "    break;\n"
-               "  case 1:\n"
-               "    {\n"
+               "    case 1:\n"
+               "      {\n"
+               "      break;\n"
+               "      }\n"
+               "    case 2:\n"
+               "      {\n"
+               "      }\n"
                "    break;\n"
-               "    }\n"
-               "  case 2:\n"
-               "    {\n"
-               "    }\n"
-               "    break;\n"
-               "  default:\n"
+               "    default:\n"
                "    break;\n"
                "    }\n"
                "  }\n",
                WhitesmithsBraceStyle);
-  */
+
+  verifyFormat("void switchTest3(int a)\n"
+               "  {\n"
+               "  switch (a)\n"
+               "    {\n"
+               "    case 0:\n"
+               "      {\n"
+               "      foo(x);\n"
+               "      }\n"
+               "    break;\n"
+               "    default:\n"
+               "      {\n"
+               "      foo(1);\n"
+               "      }\n"
+               "    break;\n"
+               "    }\n"
+               "  }\n",
+               WhitesmithsBraceStyle);
+
+  WhitesmithsBraceStyle.IndentCaseBlocks = false;
+
+  verifyFormat("void switchTest4(int a)\n"
+               "  {\n"
+               "  switch (a)\n"
+               "    {\n"
+               "    case 2:\n"
+               "    {\n"
+               "    }\n"
+               "    break;\n"
+               "    }\n"
+               "  }\n",
+               WhitesmithsBraceStyle);
+
+  verifyFormat("void switchTest5(int a)\n"
+               "  {\n"
+               "  switch (a)\n"
+               "    {\n"
+               "    case 0:\n"
+               "    break;\n"
+               "    case 1:\n"
+               "    {\n"
+               "    foo();\n"
+               "    break;\n"
+               "    }\n"
+               "    case 2:\n"
+               "    {\n"
+               "    }\n"
+               "    break;\n"
+               "    default:\n"
+               "    break;\n"
+               "    }\n"
+               "  }\n",
+               WhitesmithsBraceStyle);
+
+  verifyFormat("void switchTest6(int a)\n"
+               "  {\n"
+               "  switch (a)\n"
+               "    {\n"
+               "    case 0:\n"
+               "    {\n"
+               "    foo(x);\n"
+               "    }\n"
+               "    break;\n"
+               "    default:\n"
+               "    {\n"
+               "    foo(1);\n"
+               "    }\n"
+               "    break;\n"
+               "    }\n"
+               "  }\n",
+               WhitesmithsBraceStyle);
 
   verifyFormat("enum X\n"
                "  {\n"
@@ -13933,6 +14060,16 @@ TEST_F(FormatTest, ParsesConfiguration) {
   CHECK_PARSE("IndentExternBlock: false", IndentExternBlock,
               FormatStyle::IEBS_NoIndent);
 
+  Style.BitFieldColonSpacing = FormatStyle::BFCS_None;
+  CHECK_PARSE("BitFieldColonSpacing: Both", BitFieldColonSpacing,
+              FormatStyle::BFCS_Both);
+  CHECK_PARSE("BitFieldColonSpacing: None", BitFieldColonSpacing,
+              FormatStyle::BFCS_None);
+  CHECK_PARSE("BitFieldColonSpacing: Before", BitFieldColonSpacing,
+              FormatStyle::BFCS_Before);
+  CHECK_PARSE("BitFieldColonSpacing: After", BitFieldColonSpacing,
+              FormatStyle::BFCS_After);
+
   // FIXME: This is required because parsing a configuration simply overwrites
   // the first N elements of the list instead of resetting it.
   Style.ForEachMacros.clear();
@@ -13956,6 +14093,19 @@ TEST_F(FormatTest, ParsesConfiguration) {
               std::vector<std::string>{"TESTSUITE"});
   CHECK_PARSE("NamespaceMacros: [TESTSUITE, SUITE]", NamespaceMacros,
               std::vector<std::string>({"TESTSUITE", "SUITE"}));
+
+  Style.WhitespaceSensitiveMacros.clear();
+  CHECK_PARSE("WhitespaceSensitiveMacros: [STRINGIZE]",
+              WhitespaceSensitiveMacros, std::vector<std::string>{"STRINGIZE"});
+  CHECK_PARSE("WhitespaceSensitiveMacros: [STRINGIZE, ASSERT]",
+              WhitespaceSensitiveMacros,
+              std::vector<std::string>({"STRINGIZE", "ASSERT"}));
+  Style.WhitespaceSensitiveMacros.clear();
+  CHECK_PARSE("WhitespaceSensitiveMacros: ['STRINGIZE']",
+              WhitespaceSensitiveMacros, std::vector<std::string>{"STRINGIZE"});
+  CHECK_PARSE("WhitespaceSensitiveMacros: ['STRINGIZE', 'ASSERT']",
+              WhitespaceSensitiveMacros,
+              std::vector<std::string>({"STRINGIZE", "ASSERT"}));
 
   Style.IncludeStyle.IncludeCategories.clear();
   std::vector<tooling::IncludeStyle::IncludeCategory> ExpectedCategories = {
@@ -16464,6 +16614,36 @@ TEST_F(FormatTest, OperatorPassedAsAFunctionPtr) {
   verifyFormat("foo(-42, operator--);", Style);
   verifyFormat("foo(-42, operator, );", Style);
   verifyFormat("foo(operator, , -42);", Style);
+}
+
+TEST_F(FormatTest, WhitespaceSensitiveMacros) {
+  FormatStyle Style = getLLVMStyle();
+  Style.WhitespaceSensitiveMacros.push_back("FOO");
+
+  // Don't use the helpers here, since 'mess up' will change the whitespace
+  // and these are all whitespace sensitive by definition
+  EXPECT_EQ("FOO(String-ized&Messy+But(: :Still)=Intentional);",
+            format("FOO(String-ized&Messy+But(: :Still)=Intentional);", Style));
+  EXPECT_EQ(
+      "FOO(String-ized&Messy+But\\(: :Still)=Intentional);",
+      format("FOO(String-ized&Messy+But\\(: :Still)=Intentional);", Style));
+  EXPECT_EQ("FOO(String-ized&Messy+But,: :Still=Intentional);",
+            format("FOO(String-ized&Messy+But,: :Still=Intentional);", Style));
+  EXPECT_EQ("FOO(String-ized&Messy+But,: :\n"
+            "       Still=Intentional);",
+            format("FOO(String-ized&Messy+But,: :\n"
+                   "       Still=Intentional);",
+                   Style));
+  Style.AlignConsecutiveAssignments = true;
+  EXPECT_EQ("FOO(String-ized=&Messy+But,: :\n"
+            "       Still=Intentional);",
+            format("FOO(String-ized=&Messy+But,: :\n"
+                   "       Still=Intentional);",
+                   Style));
+
+  Style.ColumnLimit = 21;
+  EXPECT_EQ("FOO(String-ized&Messy+But: :Still=Intentional);",
+            format("FOO(String-ized&Messy+But: :Still=Intentional);", Style));
 }
 
 TEST_F(FormatTest, VeryLongNamespaceCommentSplit) {

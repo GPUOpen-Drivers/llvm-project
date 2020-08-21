@@ -794,6 +794,10 @@ public:
     return CIInsts;
   }
 
+  /// \returns true if the target has integer add/sub instructions that do not
+  /// produce a carry-out. This includes v_add_[iu]32, v_sub_[iu]32,
+  /// v_add_[iu]16, and v_sub_[iu]16, all of which support the clamp modifier
+  /// for saturation.
   bool hasAddNoCarry() const {
     return AddNoCarryInsts;
   }
@@ -1048,10 +1052,6 @@ public:
     return CIInsts;
   }
 
-  bool hasSMovFedHazard() const {
-    return getGeneration() == AMDGPUSubtarget::GFX9;
-  }
-
   bool hasReadM0MovRelInterpHazard() const {
     return getGeneration() == AMDGPUSubtarget::GFX9;
   }
@@ -1215,6 +1215,10 @@ public:
 
   bool isWave32() const {
     return getWavefrontSize() == 32;
+  }
+
+  bool isWave64() const {
+    return getWavefrontSize() == 64;
   }
 
   const TargetRegisterClass *getBoolRC() const {

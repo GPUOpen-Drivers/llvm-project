@@ -217,6 +217,9 @@ extern char &SIAddIMGInitID;
 void initializeAMDGPUPerfHintAnalysisPass(PassRegistry &);
 extern char &AMDGPUPerfHintAnalysisID;
 
+void initializeAMDGPURegPressAnalysisPass(PassRegistry &);
+extern char &AMDGPURegPressAnalysisID;
+
 // Passes common to R600 and SI
 FunctionPass *createAMDGPUPromoteAlloca();
 void initializeAMDGPUPromoteAllocaPass(PassRegistry&);
@@ -305,8 +308,6 @@ enum TargetIndex {
 };
 }
 
-} // End namespace llvm
-
 /// OpenCL uses address spaces to differentiate between
 /// various memory regions on the hardware. On the CPU
 /// all of the address spaces point to the same memory,
@@ -362,5 +363,18 @@ namespace AMDGPUAS {
     UNKNOWN_ADDRESS_SPACE = ~0u,
   };
 }
+
+namespace AMDGPU {
+
+// FIXME: Missing constant_32bit
+inline bool isFlatGlobalAddrSpace(unsigned AS) {
+  return AS == AMDGPUAS::GLOBAL_ADDRESS ||
+         AS == AMDGPUAS::FLAT_ADDRESS ||
+         AS == AMDGPUAS::CONSTANT_ADDRESS ||
+         AS > AMDGPUAS::MAX_AMDGPU_ADDRESS;
+}
+}
+
+} // End namespace llvm
 
 #endif

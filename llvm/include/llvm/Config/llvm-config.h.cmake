@@ -4,6 +4,8 @@
 /* Exceptions.                                                                */
 /* See https://llvm.org/LICENSE.txt for license information.                  */
 /* SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception                    */
+/* Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved. */
+/* Notified per clause 4(b) of the license. */
 /*                                                                            */
 /*===----------------------------------------------------------------------===*/
 
@@ -13,6 +15,9 @@
 
 #ifndef LLVM_CONFIG_H
 #define LLVM_CONFIG_H
+
+/* Indicate that this is LLVM compiled from the amd-gfx branch. */
+#define LLVM_HAVE_BRANCH_AMD_GFX
 
 /* Define if LLVM_ENABLE_DUMP is enabled */
 #cmakedefine LLVM_ENABLE_DUMP
@@ -78,5 +83,14 @@
  * PrintStatistics() or PrintStatisticsJSON()
  */
 #cmakedefine01 LLVM_FORCE_ENABLE_STATS
+
+/* Define if we have z3 and want to build it */
+#cmakedefine LLVM_WITH_Z3 ${LLVM_WITH_Z3}
+
+/* Define if LLVM was built with a dependency to the libtensorflow dynamic library */
+#cmakedefine LLVM_HAVE_TF_API
+
+/* Define if LLVM was built with a dependency to the tensorflow compiler */
+#cmakedefine LLVM_HAVE_TF_AOT
 
 #endif

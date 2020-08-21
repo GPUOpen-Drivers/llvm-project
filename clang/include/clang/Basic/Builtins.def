@@ -65,6 +65,7 @@
 // & -> reference (optionally followed by an address space number)
 // C -> const
 // D -> volatile
+// R -> restrict
 
 // The third value provided to the macro specifies information about attributes
 // of the function.  These must be kept in sync with the predicates in the
@@ -393,6 +394,9 @@ BUILTIN(__builtin_ctanl, "XLdXLd", "Fne")
 BUILTIN(__builtin_ctanh, "XdXd", "Fne")
 BUILTIN(__builtin_ctanhf, "XfXf", "Fne")
 BUILTIN(__builtin_ctanhl, "XLdXLd", "Fne")
+
+// GCC-compatible C99 CMPLX implementation.
+BUILTIN(__builtin_complex, "v.", "nct")
 
 // FP Comparisons.
 BUILTIN(__builtin_isgreater     , "i.", "Fnct")

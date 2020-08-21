@@ -91,6 +91,7 @@ public:
   std::chrono::seconds GetUtilityExpressionTimeout() const;
   bool GetOSPluginReportsAllThreads() const;
   void SetOSPluginReportsAllThreads(bool does_report);
+  bool GetSteppingRunsAllThreads() const;
 
 protected:
   Process *m_process; // Can be nullptr for global ProcessProperties
@@ -737,7 +738,7 @@ public:
   ///
   /// \return
   ///     Returns an error object.
-  virtual Status ConnectRemote(Stream *strm, llvm::StringRef remote_url);
+  virtual Status ConnectRemote(llvm::StringRef remote_url);
 
   bool GetShouldDetach() const { return m_should_detach; }
 
@@ -925,7 +926,7 @@ public:
   ///
   /// \return
   ///     Returns an error object.
-  virtual Status DoConnectRemote(Stream *strm, llvm::StringRef remote_url) {
+  virtual Status DoConnectRemote(llvm::StringRef remote_url) {
     Status error;
     error.SetErrorString("remote connections are not supported");
     return error;

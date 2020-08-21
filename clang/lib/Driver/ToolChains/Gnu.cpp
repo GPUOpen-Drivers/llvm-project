@@ -37,13 +37,11 @@ using namespace llvm::opt;
 using tools::addMultilibFlag;
 using tools::addPathIfExists;
 
-void tools::GnuTool::anchor() {}
-
 static bool forwardToGCC(const Option &O) {
-  // Don't forward inputs from the original command line.  They are added from
-  // InputInfoList.
-  return O.getKind() != Option::InputClass &&
-         !O.hasFlag(options::DriverOption) && !O.hasFlag(options::LinkerInput);
+  // LinkerInput options have been forwarded. Don't duplicate.
+  if (O.hasFlag(options::LinkerInput))
+    return false;
+  return O.matches(options::OPT_Link_Group) || O.hasFlag(options::LinkOption);
 }
 
 // Switch CPU names not recognized by GNU assembler to a close CPU that it does
@@ -77,23 +75,6 @@ void tools::gcc::Common::ConstructJob(Compilation &C, const JobAction &JA,
       // platforms using a generic gcc, even if we are just using gcc
       // to get to the assembler.
       A->claim();
-
-      // Don't forward any -g arguments to assembly steps.
-      if (isa<AssembleJobAction>(JA) &&
-          A->getOption().matches(options::OPT_g_Group))
-        continue;
-
-      // Don't forward any -W arguments to assembly and link steps.
-      if ((isa<AssembleJobAction>(JA) || isa<LinkJobAction>(JA)) &&
-          A->getOption().matches(options::OPT_W_Group))
-        continue;
-
-      // Don't forward -mno-unaligned-access since GCC doesn't understand
-      // it and because it doesn't affect the assembly or link steps.
-      if ((isa<AssembleJobAction>(JA) || isa<LinkJobAction>(JA)) &&
-          (A->getOption().matches(options::OPT_munaligned_access) ||
-           A->getOption().matches(options::OPT_mno_unaligned_access)))
-        continue;
 
       A->render(Args, CmdArgs);
     }
@@ -190,7 +171,8 @@ void tools::gcc::Common::ConstructJob(Compilation &C, const JobAction &JA,
     GCCName = "gcc";
 
   const char *Exec = Args.MakeArgString(getToolChain().GetProgramPath(GCCName));
-  C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
 }
 
 void tools::gcc::Preprocessor::RenderExtraToolArgs(
@@ -359,12 +341,17 @@ void tools::gnutools::StaticLibTool::ConstructJob(
   // Silence warnings when linking C code with a C++ '-stdlib' argument.
   Args.ClaimAllArgs(options::OPT_stdlib_EQ);
 
-  // GNU ar tool command "ar <options> <output_file> <input_files>".
+  // ar tool command "llvm-ar <options> <output_file> <input_files>".
   ArgStringList CmdArgs;
   // Create and insert file members with a deterministic index.
   CmdArgs.push_back("rcsD");
   CmdArgs.push_back(Output.getFilename());
-  AddLinkerInputs(getToolChain(), Inputs, Args, CmdArgs, JA);
+
+  for (const auto &II : Inputs) {
+    if (II.isFilename()) {
+       CmdArgs.push_back(II.getFilename());
+    }
+  }
 
   // Delete old output archive file if it already exists before generating a new
   // archive file.
@@ -377,7 +364,8 @@ void tools::gnutools::StaticLibTool::ConstructJob(
   }
 
   const char *Exec = Args.MakeArgString(getToolChain().GetStaticLibToolPath());
-  C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
 }
 
 void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
@@ -673,7 +661,8 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddAllArgs(CmdArgs, options::OPT_T);
 
   const char *Exec = Args.MakeArgString(ToolChain.GetLinkerPath());
-  C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
 }
 
 void tools::gnutools::Assembler::ConstructJob(Compilation &C,
@@ -940,7 +929,8 @@ void tools::gnutools::Assembler::ConstructJob(Compilation &C,
 
   const char *Exec =
       Args.MakeArgString(getToolChain().GetProgramPath(DefaultAssembler));
-  C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileCurCP(), Exec, CmdArgs, Inputs));
 
   // Handle the debug info splitting at object creation time if we're
   // creating an object.
@@ -1550,15 +1540,21 @@ static bool findMSP430Multilibs(const Driver &D,
                                 StringRef Path, const ArgList &Args,
                                 DetectedMultilibs &Result) {
   FilterNonExistent NonExistent(Path, "/crtbegin.o", D.getVFS());
-  Multilib MSP430Multilib = makeMultilib("/430");
+  Multilib WithoutExceptions = makeMultilib("/430").flag("-exceptions");
+  Multilib WithExceptions = makeMultilib("/430/exceptions").flag("+exceptions");
+
   // FIXME: when clang starts to support msp430x ISA additional logic
   // to select between multilib must be implemented
   // Multilib MSP430xMultilib = makeMultilib("/large");
 
-  Result.Multilibs.push_back(MSP430Multilib);
+  Result.Multilibs.push_back(WithoutExceptions);
+  Result.Multilibs.push_back(WithExceptions);
   Result.Multilibs.FilterOut(NonExistent);
 
   Multilib::flags_list Flags;
+  addMultilibFlag(Args.hasFlag(options::OPT_fexceptions,
+                               options::OPT_fno_exceptions, false),
+                  "exceptions", Flags);
   if (Result.Multilibs.select(Flags, Result.SelectedMultilib))
     return true;
 
@@ -2656,6 +2652,7 @@ void Generic_GCC::printVerboseInfo(raw_ostream &OS) const {
   // Print the information about how we detected the GCC installation.
   GCCInstallation.print(OS);
   CudaInstallation.print(OS);
+  RocmInstallation.print(OS);
 }
 
 bool Generic_GCC::IsUnwindTablesDefault(const ArgList &Args) const {

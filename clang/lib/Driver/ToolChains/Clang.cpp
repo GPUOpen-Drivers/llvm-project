@@ -721,38 +721,6 @@ static void addDashXForInput(const ArgList &Args, const InputInfo &Input,
   }
 }
 
-static void appendUserToPath(SmallVectorImpl<char> &Result) {
-#ifdef LLVM_ON_UNIX
-  const char *Username = getenv("LOGNAME");
-#else
-  const char *Username = getenv("USERNAME");
-#endif
-  if (Username) {
-    // Validate that LoginName can be used in a path, and get its length.
-    size_t Len = 0;
-    for (const char *P = Username; *P; ++P, ++Len) {
-      if (!clang::isAlphanumeric(*P) && *P != '_') {
-        Username = nullptr;
-        break;
-      }
-    }
-
-    if (Username && Len > 0) {
-      Result.append(Username, Username + Len);
-      return;
-    }
-  }
-
-// Fallback to user id.
-#ifdef LLVM_ON_UNIX
-  std::string UID = llvm::utostr(getuid());
-#else
-  // FIXME: Windows seems to have an 'SID' that might work.
-  std::string UID = "9999";
-#endif
-  Result.append(UID.begin(), UID.end());
-}
-
 static void addPGOAndCoverageFlags(const ToolChain &TC, Compilation &C,
                                    const Driver &D, const InputInfo &Output,
                                    const ArgList &Args,
@@ -1747,6 +1715,21 @@ void Clang::AddAArch64TargetArgs(const ArgList &Args,
     if (IndirectBranches)
       CmdArgs.push_back("-mbranch-target-enforce");
   }
+
+  // Handle -msve_vector_bits=<bits>
+  if (Arg *A = Args.getLastArg(options::OPT_msve_vector_bits_EQ)) {
+    StringRef Val = A->getValue();
+    const Driver &D = getToolChain().getDriver();
+    if (Val.equals("128") || Val.equals("256") || Val.equals("512") ||
+        Val.equals("1024") || Val.equals("2048"))
+      CmdArgs.push_back(
+          Args.MakeArgString(llvm::Twine("-msve-vector-bits=") + Val));
+    // Silently drop requests for vector-length agnostic code as it's implied.
+    else if (!Val.equals("scalable"))
+      // Handle the unsupported values passed to msve-vector-bits.
+      D.Diag(diag::err_drv_unsupported_option_argument)
+          << A->getOption().getName() << Val;
+  }
 }
 
 void Clang::AddMIPSTargetArgs(const ArgList &Args,
@@ -1900,19 +1883,8 @@ void Clang::AddPPCTargetArgs(const ArgList &Args,
   if (T.isOSBinFormatELF()) {
     switch (getToolChain().getArch()) {
     case llvm::Triple::ppc64: {
-      // When targeting a processor that supports QPX, or if QPX is
-      // specifically enabled, default to using the ABI that supports QPX (so
-      // long as it is not specifically disabled).
-      bool HasQPX = false;
-      if (Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
-        HasQPX = A->getValue() == StringRef("a2q");
-      HasQPX = Args.hasFlag(options::OPT_mqpx, options::OPT_mno_qpx, HasQPX);
-      if (HasQPX) {
-        ABIName = "elfv1-qpx";
-        break;
-      }
-
-      if (T.isMusl() || (T.isOSFreeBSD() && T.getOSMajorVersion() >= 13))
+      if ((T.isOSFreeBSD() && T.getOSMajorVersion() >= 13) ||
+          T.isOSOpenBSD() || T.isMusl())
         ABIName = "elfv2";
       else
         ABIName = "elfv1";
@@ -2998,7 +2970,8 @@ static void RenderSCPOptions(const ToolChain &TC, const ArgList &Args,
   if (!EffectiveTriple.isOSLinux())
     return;
 
-  if (!EffectiveTriple.isX86() && !EffectiveTriple.isSystemZ())
+  if (!EffectiveTriple.isX86() && !EffectiveTriple.isSystemZ() &&
+      !EffectiveTriple.isPPC64())
     return;
 
   if (Args.hasFlag(options::OPT_fstack_clash_protection,
@@ -3201,11 +3174,13 @@ static void RenderBuiltinOptions(const ToolChain &TC, const llvm::Triple &T,
     CmdArgs.push_back("-fno-math-builtin");
 }
 
-void Driver::getDefaultModuleCachePath(SmallVectorImpl<char> &Result) {
-  llvm::sys::path::system_temp_directory(/*erasedOnReboot=*/false, Result);
-  llvm::sys::path::append(Result, "org.llvm.clang.");
-  appendUserToPath(Result);
-  llvm::sys::path::append(Result, "ModuleCache");
+bool Driver::getDefaultModuleCachePath(SmallVectorImpl<char> &Result) {
+  if (llvm::sys::path::cache_directory(Result)) {
+    llvm::sys::path::append(Result, "clang");
+    llvm::sys::path::append(Result, "ModuleCache");
+    return true;
+  }
+  return false;
 }
 
 static void RenderModulesOptions(Compilation &C, const Driver &D,
@@ -3262,6 +3237,7 @@ static void RenderModulesOptions(Compilation &C, const Driver &D,
     if (Arg *A = Args.getLastArg(options::OPT_fmodules_cache_path))
       Path = A->getValue();
 
+    bool HasPath = true;
     if (C.isForDiagnostics()) {
       // When generating crash reports, we want to emit the modules along with
       // the reproduction sources, so we ignore any provided module path.
@@ -3270,12 +3246,16 @@ static void RenderModulesOptions(Compilation &C, const Driver &D,
       llvm::sys::path::append(Path, "modules");
     } else if (Path.empty()) {
       // No module path was provided: use the default.
-      Driver::getDefaultModuleCachePath(Path);
+      HasPath = Driver::getDefaultModuleCachePath(Path);
     }
 
-    const char Arg[] = "-fmodules-cache-path=";
-    Path.insert(Path.begin(), Arg, Arg + strlen(Arg));
-    CmdArgs.push_back(Args.MakeArgString(Path));
+    // `HasPath` will only be false if getDefaultModuleCachePath() fails.
+    // That being said, that failure is unlikely and not caching is harmless.
+    if (HasPath) {
+      const char Arg[] = "-fmodules-cache-path=";
+      Path.insert(Path.begin(), Arg, Arg + strlen(Arg));
+      CmdArgs.push_back(Args.MakeArgString(Path));
+    }
   }
 
   if (HaveModules) {
@@ -3772,10 +3752,9 @@ static void RenderDebugOptions(const ToolChain &TC, const Driver &D,
   // not to include any column info.
   if (const Arg *A = Args.getLastArg(options::OPT_gcolumn_info))
     (void)checkDebugInfoOption(A, Args, D, TC);
-  if (Args.hasFlag(options::OPT_gcolumn_info, options::OPT_gno_column_info,
-                   /*Default=*/!EmitCodeView &&
-                       DebuggerTuning != llvm::DebuggerKind::SCE))
-    CmdArgs.push_back("-dwarf-column-info");
+  if (!Args.hasFlag(options::OPT_gcolumn_info, options::OPT_gno_column_info,
+                    !EmitCodeView && DebuggerTuning != llvm::DebuggerKind::SCE))
+    CmdArgs.push_back("-gno-column-info");
 
   // FIXME: Move backend command line options to the module.
   // If -gline-tables-only or -gline-directives-only is the last option it wins.
@@ -3976,7 +3955,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
   }
 
-  const llvm::Triple *AuxTriple = IsCuda ? TC.getAuxTriple() : nullptr;
+  const llvm::Triple *AuxTriple =
+      (IsCuda || IsHIP) ? TC.getAuxTriple() : nullptr;
   bool IsWindowsMSVC = RawTriple.isWindowsMSVCEnvironment();
   bool IsIAMCU = RawTriple.isOSIAMCU();
 
@@ -4066,9 +4046,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Triple.isOSWindows() && (Triple.getArch() == llvm::Triple::arm ||
                                Triple.getArch() == llvm::Triple::thumb)) {
     unsigned Offset = Triple.getArch() == llvm::Triple::arm ? 4 : 6;
-    unsigned Version;
-    Triple.getArchName().substr(Offset).getAsInteger(10, Version);
-    if (Version < 7)
+    unsigned Version = 0;
+    bool Failure =
+        Triple.getArchName().substr(Offset).consumeInteger(10, Version);
+    if (Failure || Version < 7)
       D.Diag(diag::err_target_unsupported_arch) << Triple.getArchName()
                                                 << TripleStr;
   }
@@ -4321,8 +4302,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         II.getInputArg().renderAsInput(Args, CmdArgs);
     }
 
-    C.addCommand(std::make_unique<Command>(JA, *this, D.getClangProgramPath(),
-                                            CmdArgs, Inputs));
+    C.addCommand(
+        std::make_unique<Command>(JA, *this, ResponseFileSupport::AtFileUTF8(),
+                                  D.getClangProgramPath(), CmdArgs, Inputs));
     return;
   }
 
@@ -4578,8 +4560,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back(FPKeepKindStr);
 
   if (!Args.hasFlag(options::OPT_fzero_initialized_in_bss,
-                    options::OPT_fno_zero_initialized_in_bss))
-    CmdArgs.push_back("-mno-zero-initialized-in-bss");
+                    options::OPT_fno_zero_initialized_in_bss, true))
+    CmdArgs.push_back("-fno-zero-initialized-in-bss");
 
   bool OFastEnabled = isOptimizationLevelFast(Args);
   // If -Ofast is the optimization level, then -fstrict-aliasing should be
@@ -4889,10 +4871,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                   options::OPT_finstrument_functions_after_inlining,
                   options::OPT_finstrument_function_entry_bare);
 
-  // NVPTX doesn't support PGO or coverage. There's no runtime support for
-  // sampling, overhead of call arc collection is way too high and there's no
-  // way to collect the output.
-  if (!Triple.isNVPTX())
+  // NVPTX/AMDGCN doesn't support PGO or coverage. There's no runtime support
+  // for sampling, overhead of call arc collection is way too high and there's
+  // no way to collect the output.
+  if (!Triple.isNVPTX() && !Triple.isAMDGCN())
     addPGOAndCoverageFlags(TC, C, D, Output, Args, CmdArgs);
 
   Args.AddLastArg(CmdArgs, options::OPT_fclang_abi_compat_EQ);
@@ -5011,6 +4993,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
     Args.AddLastArg(CmdArgs, options::OPT_ftrigraphs,
                     options::OPT_fno_trigraphs);
+
+    // HIP headers has minimum C++ standard requirements. Therefore set the
+    // default language standard.
+    if (IsHIP)
+      CmdArgs.push_back(IsWindowsMSVC ? "-std=c++14" : "-std=c++11");
   }
 
   // GCC's behavior for -Wwrite-strings is a bit strange:
@@ -5419,8 +5406,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // Forward -cl options to -cc1
   RenderOpenCLOptions(Args, CmdArgs);
 
-  if (Args.hasFlag(options::OPT_fhip_new_launch_api,
-                   options::OPT_fno_hip_new_launch_api, false))
+  if (IsHIP && Args.hasFlag(options::OPT_fhip_new_launch_api,
+                            options::OPT_fno_hip_new_launch_api, true))
     CmdArgs.push_back("-fhip-new-launch-api");
 
   if (Arg *A = Args.getLastArg(options::OPT_fcf_protection_EQ)) {
@@ -5642,6 +5629,12 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasFlag(options::OPT_fpch_instantiate_templates,
                    options::OPT_fno_pch_instantiate_templates, false))
     CmdArgs.push_back("-fpch-instantiate-templates");
+  if (Args.hasFlag(options::OPT_fpch_codegen, options::OPT_fno_pch_codegen,
+                   false))
+    CmdArgs.push_back("-fmodules-codegen");
+  if (Args.hasFlag(options::OPT_fpch_debuginfo, options::OPT_fno_pch_debuginfo,
+                   false))
+    CmdArgs.push_back("-fmodules-debuginfo");
 
   Args.AddLastArg(CmdArgs, options::OPT_fexperimental_new_pass_manager,
                   options::OPT_fno_experimental_new_pass_manager);
@@ -6240,19 +6233,21 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     auto CLCommand =
         getCLFallback()->GetCommand(C, JA, Output, Inputs, Args, LinkingOutput);
     C.addCommand(std::make_unique<FallbackCommand>(
-        JA, *this, Exec, CmdArgs, Inputs, std::move(CLCommand)));
+        JA, *this, ResponseFileSupport::AtFileUTF8(), Exec, CmdArgs, Inputs,
+        std::move(CLCommand)));
   } else if (Args.hasArg(options::OPT__SLASH_fallback) &&
              isa<PrecompileJobAction>(JA)) {
     // In /fallback builds, run the main compilation even if the pch generation
     // fails, so that the main compilation's fallback to cl.exe runs.
-    C.addCommand(std::make_unique<ForceSuccessCommand>(JA, *this, Exec,
-                                                        CmdArgs, Inputs));
+    C.addCommand(std::make_unique<ForceSuccessCommand>(
+        JA, *this, ResponseFileSupport::AtFileUTF8(), Exec, CmdArgs, Inputs));
   } else if (D.CC1Main && !D.CCGenDiagnostics) {
     // Invoke the CC1 directly in this process
-    C.addCommand(
-        std::make_unique<CC1Command>(JA, *this, Exec, CmdArgs, Inputs));
+    C.addCommand(std::make_unique<CC1Command>(
+        JA, *this, ResponseFileSupport::AtFileUTF8(), Exec, CmdArgs, Inputs));
   } else {
-    C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+    C.addCommand(std::make_unique<Command>(
+        JA, *this, ResponseFileSupport::AtFileUTF8(), Exec, CmdArgs, Inputs));
   }
 
   // Make the compile command echo its inputs for /showFilenames.
@@ -6287,7 +6282,7 @@ Clang::Clang(const ToolChain &TC)
     // CAUTION! The first constructor argument ("clang") is not arbitrary,
     // as it is for other tools. Some operations on a Tool actually test
     // whether that tool is Clang based on the Tool's Name as a string.
-    : Tool("clang", "clang frontend", TC, RF_Full) {}
+    : Tool("clang", "clang frontend", TC) {}
 
 Clang::~Clang() {}
 
@@ -6990,7 +6985,8 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back(Input.getFilename());
 
   const char *Exec = getToolChain().getDriver().getClangProgramPath();
-  C.addCommand(std::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+  C.addCommand(std::make_unique<Command>(
+      JA, *this, ResponseFileSupport::AtFileUTF8(), Exec, CmdArgs, Inputs));
 }
 
 // Begin OffloadBundler
@@ -7074,7 +7070,7 @@ void OffloadBundler::ConstructJob(Compilation &C, const JobAction &JA,
 
   // All the inputs are encoded as commands.
   C.addCommand(std::make_unique<Command>(
-      JA, *this,
+      JA, *this, ResponseFileSupport::None(),
       TCArgs.MakeArgString(getToolChain().GetProgramPath(getShortName())),
       CmdArgs, None));
 }
@@ -7140,7 +7136,7 @@ void OffloadBundler::ConstructJobMultipleOutputs(
 
   // All the inputs are encoded as commands.
   C.addCommand(std::make_unique<Command>(
-      JA, *this,
+      JA, *this, ResponseFileSupport::None(),
       TCArgs.MakeArgString(getToolChain().GetProgramPath(getShortName())),
       CmdArgs, None));
 }
@@ -7170,7 +7166,7 @@ void OffloadWrapper::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   C.addCommand(std::make_unique<Command>(
-      JA, *this,
+      JA, *this, ResponseFileSupport::None(),
       Args.MakeArgString(getToolChain().GetProgramPath(getShortName())),
       CmdArgs, Inputs));
 }

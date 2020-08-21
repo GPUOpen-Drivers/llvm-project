@@ -3,7 +3,7 @@
 import os
 import site
 
-config.cxx_under_test           = "@LIBCXXABI_COMPILER@"
+config.cxx_under_test           = "@CMAKE_CXX_COMPILER@"
 config.project_obj_root         = "@CMAKE_BINARY_DIR@"
 config.libcxxabi_src_root       = "@LIBCXXABI_SOURCE_DIR@"
 config.libcxxabi_obj_root       = "@LIBCXXABI_BINARY_DIR@"
@@ -54,15 +54,11 @@ config.recursiveExpansionLimit = 10
 # Infer the test_exec_root from the build directory.
 config.test_exec_root = os.path.join(config.libcxxabi_obj_root, 'test')
 
+import libcxx.test.format
+config.test_format = libcxx.test.format.CxxStandardLibraryTest()
+
 lit_config.note('Using configuration variant: libcxxabi')
 import libcxxabi.test.config
 configuration = libcxxabi.test.config.Configuration(lit_config, config)
 configuration.configure()
 configuration.print_config_info()
-if lit_config.params.get('use_old_format', False):
-    lit_config.note("Using the old libc++ testing format")
-    config.test_format = configuration.get_test_format()
-else:
-    lit_config.note("Using the new libc++ testing format")
-    import libcxx.test.newformat
-    config.test_format = libcxx.test.newformat.CxxStandardLibraryTest()

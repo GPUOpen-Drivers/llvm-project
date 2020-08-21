@@ -966,19 +966,19 @@ static Value *UpgradeX86PSRLDQIntrinsics(IRBuilder<> &Builder, Value *Op,
 
 static Value *getX86MaskVec(IRBuilder<> &Builder, Value *Mask,
                             unsigned NumElts) {
+  assert(isPowerOf2_32(NumElts) && "Expected power-of-2 mask elements");
   llvm::VectorType *MaskTy = FixedVectorType::get(
       Builder.getInt1Ty(), cast<IntegerType>(Mask->getType())->getBitWidth());
   Mask = Builder.CreateBitCast(Mask, MaskTy);
 
-  // If we have less than 8 elements, then the starting mask was an i8 and
-  // we need to extract down to the right number of elements.
-  if (NumElts < 8) {
+  // If we have less than 8 elements (1, 2 or 4), then the starting mask was an
+  // i8 and we need to extract down to the right number of elements.
+  if (NumElts <= 4) {
     int Indices[4];
     for (unsigned i = 0; i != NumElts; ++i)
       Indices[i] = i;
-    Mask = Builder.CreateShuffleVector(Mask, Mask,
-                                       makeArrayRef(Indices, NumElts),
-                                       "extract");
+    Mask = Builder.CreateShuffleVector(
+        Mask, Mask, makeArrayRef(Indices, NumElts), "extract");
   }
 
   return Mask;
@@ -3757,10 +3757,10 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
     auto *MemCI = cast<MemIntrinsic>(NewCall);
     // All mem intrinsics support dest alignment.
     const ConstantInt *Align = cast<ConstantInt>(CI->getArgOperand(3));
-    MemCI->setDestAlignment(Align->getZExtValue());
+    MemCI->setDestAlignment(Align->getMaybeAlignValue());
     // Memcpy/Memmove also support source alignment.
     if (auto *MTI = dyn_cast<MemTransferInst>(MemCI))
-      MTI->setSourceAlignment(Align->getZExtValue());
+      MTI->setSourceAlignment(Align->getMaybeAlignValue());
     break;
   }
   }
@@ -4167,7 +4167,7 @@ void llvm::UpgradeSectionAttributes(Module &M) {
   }
 }
 
-
+namespace {
 // Prior to LLVM 10.0, the strictfp attribute could be used on individual
 // callsites within a function that did not also have the strictfp attribute.
 // Since 10.0, if strict FP semantics are needed within a function, the
@@ -4185,7 +4185,7 @@ struct StrictFPUpgradeVisitor : public InstVisitor<StrictFPUpgradeVisitor> {
   void visitCallBase(CallBase &Call) {
     if (!Call.isStrictFP())
       return;
-    if (dyn_cast<ConstrainedFPIntrinsic>(&Call))
+    if (isa<ConstrainedFPIntrinsic>(&Call))
       return;
     // If we get here, the caller doesn't have the strictfp attribute
     // but this callsite does. Replace the strictfp attribute with nobuiltin.
@@ -4193,6 +4193,7 @@ struct StrictFPUpgradeVisitor : public InstVisitor<StrictFPUpgradeVisitor> {
     Call.addAttribute(AttributeList::FunctionIndex, Attribute::NoBuiltin);
   }
 };
+} // namespace
 
 void llvm::UpgradeFunctionAttributes(Function &F) {
   // If a function definition doesn't have the strictfp attribute,

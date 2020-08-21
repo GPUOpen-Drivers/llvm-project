@@ -1,6 +1,7 @@
 ; RUN: llc -mtriple=aarch64-linux-gnu -mattr=+sve,+bf16 < %s 2>%t | FileCheck %s
 ; RUN: FileCheck --check-prefix=WARN --allow-empty %s <%t
 
+; If this check fails please read test/CodeGen/AArch64/README for instructions on how to resolve it.
 ; WARN-NOT: warning
 
 ;
@@ -44,7 +45,7 @@ define void @st2h_f16(<vscale x 8 x half> %v0, <vscale x 8 x half> %v1, <vscale 
   ret void
 }
 
-define void @st2h_bf16(<vscale x 8 x bfloat> %v0, <vscale x 8 x bfloat> %v1, <vscale x 8 x i1> %pred, bfloat* %addr) {
+define void @st2h_bf16(<vscale x 8 x bfloat> %v0, <vscale x 8 x bfloat> %v1, <vscale x 8 x i1> %pred, bfloat* %addr) #0 {
 ; CHECK-LABEL: st2h_bf16:
 ; CHECK: st2h { z0.h, z1.h }, p0, [x0]
 ; CHECK-NEXT: ret
@@ -151,7 +152,7 @@ define void @st3h_f16(<vscale x 8 x half> %v0, <vscale x 8 x half> %v1, <vscale 
   ret void
 }
 
-define void @st3h_bf16(<vscale x 8 x bfloat> %v0, <vscale x 8 x bfloat> %v1, <vscale x 8 x bfloat> %v2, <vscale x 8 x i1> %pred, bfloat* %addr) {
+define void @st3h_bf16(<vscale x 8 x bfloat> %v0, <vscale x 8 x bfloat> %v1, <vscale x 8 x bfloat> %v2, <vscale x 8 x i1> %pred, bfloat* %addr) #0 {
 ; CHECK-LABEL: st3h_bf16:
 ; CHECK: st3h { z0.h, z1.h, z2.h }, p0, [x0]
 ; CHECK-NEXT: ret
@@ -266,7 +267,7 @@ define void @st4h_f16(<vscale x 8 x half> %v0, <vscale x 8 x half> %v1, <vscale 
   ret void
 }
 
-define void @st4h_bf16(<vscale x 8 x bfloat> %v0, <vscale x 8 x bfloat> %v1, <vscale x 8 x bfloat> %v2, <vscale x 8 x bfloat> %v3, <vscale x 8 x i1> %pred, bfloat* %addr) {
+define void @st4h_bf16(<vscale x 8 x bfloat> %v0, <vscale x 8 x bfloat> %v1, <vscale x 8 x bfloat> %v2, <vscale x 8 x bfloat> %v3, <vscale x 8 x i1> %pred, bfloat* %addr) #0 {
 ; CHECK-LABEL: st4h_bf16:
 ; CHECK: st4h { z0.h, z1.h, z2.h, z3.h }, p0, [x0]
 ; CHECK-NEXT: ret
@@ -377,6 +378,16 @@ define void @stnt1h_f16(<vscale x 8 x half> %data, <vscale x 8 x i1> %pred, half
   ret void
 }
 
+define void @stnt1h_bf16(<vscale x 8 x bfloat> %data, <vscale x 8 x i1> %pred, bfloat* %addr) #0 {
+; CHECK-LABEL: stnt1h_bf16:
+; CHECK: stnt1h { z0.h }, p0, [x0]
+; CHECK-NEXT: ret
+  call void @llvm.aarch64.sve.stnt1.nxv8bf16(<vscale x 8 x bfloat> %data,
+                                             <vscale x 8 x i1> %pred,
+                                             bfloat* %addr)
+  ret void
+}
+
 ;
 ; STNT1W
 ;
@@ -458,5 +469,9 @@ declare void @llvm.aarch64.sve.stnt1.nxv8i16(<vscale x 8 x i16>, <vscale x 8 x i
 declare void @llvm.aarch64.sve.stnt1.nxv4i32(<vscale x 4 x i32>, <vscale x 4 x i1>, i32*)
 declare void @llvm.aarch64.sve.stnt1.nxv2i64(<vscale x 2 x i64>, <vscale x 2 x i1>, i64*)
 declare void @llvm.aarch64.sve.stnt1.nxv8f16(<vscale x 8 x half>, <vscale x 8 x i1>, half*)
+declare void @llvm.aarch64.sve.stnt1.nxv8bf16(<vscale x 8 x bfloat>, <vscale x 8 x i1>, bfloat*)
 declare void @llvm.aarch64.sve.stnt1.nxv4f32(<vscale x 4 x float>, <vscale x 4 x i1>, float*)
 declare void @llvm.aarch64.sve.stnt1.nxv2f64(<vscale x 2 x double>, <vscale x 2 x i1>, double*)
+
+; +bf16 is required for the bfloat version.
+attributes #0 = { "target-features"="+sve,+bf16" }

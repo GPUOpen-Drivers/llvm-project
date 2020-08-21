@@ -15,6 +15,7 @@
 #include "llvm/IR/CallingConv.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TargetParser.h"
@@ -481,6 +482,39 @@ void decodeHwreg(unsigned Val, unsigned &Id, unsigned &Offset, unsigned &Width);
 
 } // namespace Hwreg
 
+namespace MTBUFFormat {
+
+LLVM_READNONE
+int64_t encodeDfmtNfmt(unsigned Dfmt, unsigned Nfmt);
+
+void decodeDfmtNfmt(unsigned Format, unsigned &Dfmt, unsigned &Nfmt);
+
+int64_t getDfmt(const StringRef Name);
+
+StringRef getDfmtName(unsigned Id);
+
+int64_t getNfmt(const StringRef Name, const MCSubtargetInfo &STI);
+
+StringRef getNfmtName(unsigned Id, const MCSubtargetInfo &STI);
+
+bool isValidDfmtNfmt(unsigned Val, const MCSubtargetInfo &STI);
+
+bool isValidNfmt(unsigned Val, const MCSubtargetInfo &STI);
+
+int64_t getUnifiedFormat(const StringRef Name);
+
+StringRef getUnifiedFormatName(unsigned Id);
+
+bool isValidUnifiedFormat(unsigned Val);
+
+int64_t convertDfmtNfmt2Ufmt(unsigned Dfmt, unsigned Nfmt);
+
+bool isValidFormatEncoding(unsigned Val, const MCSubtargetInfo &STI);
+
+unsigned getDefaultFormatEncoding(const MCSubtargetInfo &STI);
+
+} // namespace MTBUFFormat
+
 namespace SendMsg {
 
 LLVM_READONLY
@@ -692,7 +726,8 @@ Optional<int64_t> getSMRDEncodedLiteralOffset32(const MCSubtargetInfo &ST,
 bool isLegalSMRDImmOffset(const MCSubtargetInfo &ST, int64_t ByteOffset);
 
 bool splitMUBUFOffset(uint32_t Imm, uint32_t &SOffset, uint32_t &ImmOffset,
-                      const GCNSubtarget *Subtarget, uint32_t Align = 4);
+                      const GCNSubtarget *Subtarget,
+                      Align Alignment = Align(4));
 
 /// \returns true if the intrinsic is divergent
 bool isIntrinsicSourceOfDivergence(unsigned IntrID);

@@ -34,8 +34,10 @@ struct X86_64 : TargetInfo {
   void writeStubHelperEntry(uint8_t *buf, const DylibSymbol &,
                             uint64_t entryAddr) const override;
 
-  void prepareSymbolRelocation(lld::macho::Symbol &, uint8_t type) override;
-  uint64_t getSymbolVA(const lld::macho::Symbol &, uint8_t type) const override;
+  void prepareSymbolRelocation(lld::macho::Symbol &, const InputSection *,
+                               const Reloc &) override;
+  uint64_t resolveSymbolVA(uint8_t *buf, const lld::macho::Symbol &,
+                           uint8_t type) const override;
 };
 
 } // namespace
@@ -71,6 +73,11 @@ uint64_t X86_64::getImplicitAddend(MemoryBufferRef mb, const section_64 &sec,
                                    const relocation_info &rel) const {
   auto *buf = reinterpret_cast<const uint8_t *>(mb.getBufferStart());
   const uint8_t *loc = buf + sec.offset + rel.r_address;
+
+  if (isThreadLocalVariables(sec.flags) && rel.r_type != X86_64_RELOC_UNSIGNED)
+    error("relocations in thread-local variable sections must be "
+          "X86_64_RELOC_UNSIGNED");
+
   switch (rel.r_type) {
   case X86_64_RELOC_BRANCH:
     // XXX: ld64 also supports r_length = 0 here but I'm not sure when such a
@@ -83,6 +90,7 @@ uint64_t X86_64::getImplicitAddend(MemoryBufferRef mb, const section_64 &sec,
   case X86_64_RELOC_SIGNED_4:
   case X86_64_RELOC_GOT_LOAD:
   case X86_64_RELOC_GOT:
+  case X86_64_RELOC_TLV:
     if (!rel.r_pcrel)
       fatal(getErrorLocation(mb, sec, rel) + ": relocations of type " +
             std::to_string(rel.r_type) + " must be pcrel");
@@ -122,6 +130,7 @@ void X86_64::relocateOne(uint8_t *loc, const Reloc &r, uint64_t val) const {
   case X86_64_RELOC_SIGNED_4:
   case X86_64_RELOC_GOT_LOAD:
   case X86_64_RELOC_GOT:
+  case X86_64_RELOC_TLV:
     // These types are only used for pc-relative relocations, so offset by 4
     // since the RIP has advanced by 4 at this point. This is only valid when
     // r_length = 2, which is enforced by validateLength().
@@ -208,35 +217,52 @@ void X86_64::writeStubHelperEntry(uint8_t *buf, const DylibSymbol &sym,
                    in.stubHelper->addr);
 }
 
-void X86_64::prepareSymbolRelocation(lld::macho::Symbol &sym, uint8_t type) {
-  switch (type) {
+void X86_64::prepareSymbolRelocation(lld::macho::Symbol &sym,
+                                     const InputSection *isec, const Reloc &r) {
+  switch (r.type) {
   case X86_64_RELOC_GOT_LOAD:
     // TODO: implement mov -> lea relaxation for non-dynamic symbols
   case X86_64_RELOC_GOT:
     in.got->addEntry(sym);
     break;
   case X86_64_RELOC_BRANCH: {
+    // TODO: weak dysyms should go into the weak binding section instead
     if (auto *dysym = dyn_cast<DylibSymbol>(&sym))
       in.stubs->addEntry(*dysym);
     break;
   }
-  case X86_64_RELOC_UNSIGNED:
+  case X86_64_RELOC_UNSIGNED: {
+    if (auto *dysym = dyn_cast<DylibSymbol>(&sym)) {
+      if (r.length != 3) {
+        error("X86_64_RELOC_UNSIGNED referencing the dynamic symbol " +
+              dysym->getName() + " must have r_length = 3");
+        return;
+      }
+      in.binding->addEntry(dysym, isec, r.offset, r.addend);
+    }
+    break;
+  }
   case X86_64_RELOC_SIGNED:
   case X86_64_RELOC_SIGNED_1:
   case X86_64_RELOC_SIGNED_2:
   case X86_64_RELOC_SIGNED_4:
     break;
-  case X86_64_RELOC_SUBTRACTOR:
   case X86_64_RELOC_TLV:
-    fatal("TODO: handle relocation type " + std::to_string(type));
+    if (auto *dysym = dyn_cast<DylibSymbol>(&sym))
+      error("relocations to thread-local dylib symbols not yet implemented");
+    else
+      assert(isa<Defined>(&sym));
+    break;
+  case X86_64_RELOC_SUBTRACTOR:
+    fatal("TODO: handle relocation type " + std::to_string(r.type));
     break;
   default:
     llvm_unreachable("unexpected relocation type");
   }
 }
 
-uint64_t X86_64::getSymbolVA(const lld::macho::Symbol &sym,
-                             uint8_t type) const {
+uint64_t X86_64::resolveSymbolVA(uint8_t *buf, const lld::macho::Symbol &sym,
+                                 uint8_t type) const {
   switch (type) {
   case X86_64_RELOC_GOT_LOAD:
   case X86_64_RELOC_GOT:
@@ -251,8 +277,18 @@ uint64_t X86_64::getSymbolVA(const lld::macho::Symbol &sym,
   case X86_64_RELOC_SIGNED_2:
   case X86_64_RELOC_SIGNED_4:
     return sym.getVA();
+  case X86_64_RELOC_TLV: {
+    if (auto *dysym = dyn_cast<DylibSymbol>(&sym))
+      error("relocations to thread-local dylib symbols not yet implemented");
+
+    // Convert the movq to a leaq.
+    assert(isa<Defined>(&sym));
+    if (buf[-2] != 0x8b)
+      error("X86_64_RELOC_TLV must be used with movq instructions");
+    buf[-2] = 0x8d;
+    return sym.getVA();
+  }
   case X86_64_RELOC_SUBTRACTOR:
-  case X86_64_RELOC_TLV:
     fatal("TODO: handle relocation type " + std::to_string(type));
   default:
     llvm_unreachable("Unexpected relocation type");

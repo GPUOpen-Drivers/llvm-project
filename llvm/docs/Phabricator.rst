@@ -49,7 +49,7 @@ The tool to create and review patches in Phabricator is called
 *Differential*.
 
 Note that you can upload patches created through git, but using `arc` on the
-command line (see previous section) is prefered: it adds more metadata to
+command line (see previous section) is preferred: it adds more metadata to
 Phabricator which are useful for the pre-merge testing system and for
 propagating attribution on commits when someone else has to push it for you.
 
@@ -82,8 +82,7 @@ To upload a new patch:
 * Add reviewers (see below for advice). (If you set the Repository field
   correctly, llvm-commits or cfe-commits will be subscribed automatically;
   otherwise, you will have to manually subscribe them.)
-* In the Repository field, enter the name of the project (LLVM, Clang,
-  etc.) to which the review should be sent.
+* In the Repository field, enter "rG LLVM Github Monorepo".
 * Click *Save*.
 
 To submit an updated patch:

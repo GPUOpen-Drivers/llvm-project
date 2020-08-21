@@ -19,6 +19,7 @@
 //
 
 #include "AMDGPU.h"
+#include "AMDGPURegPressAnalysis.h"
 #include "AMDGPUSubtarget.h"
 #include "SIInstrInfo.h"
 #include "SIRegisterInfo.h"
@@ -124,6 +125,8 @@ private:
   const SIInstrInfo *TII = nullptr;
   const SIRegisterInfo *TRI = nullptr;
   MachineRegisterInfo *MRI = nullptr;
+  AMDGPURegPressAnalysis *RP = nullptr;
+  bool HighPressure = false;
 
 public:
   static char ID;
@@ -140,10 +143,11 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
+    AU.addRequired<AMDGPURegPressAnalysis>();
 
     MachineFunctionPass::getAnalysisUsage(AU);
   }
-  
+
   unsigned getMaxSize(unsigned int size);
   void processSubSection(const SmallVector<SimpleMI, 8> &Candidates,
                          unsigned StartIdx, unsigned EndIdx, unsigned Size,
@@ -156,6 +160,7 @@ public:
 
 INITIALIZE_PASS_BEGIN(SIBufMemMerge, DEBUG_TYPE,
                       "SI Memory operation coalescer", false, false)
+INITIALIZE_PASS_DEPENDENCY(AMDGPURegPressAnalysis)
 INITIALIZE_PASS_END(SIBufMemMerge, DEBUG_TYPE,
                     "SI Memory operation coalescer", false, false)
 
@@ -228,13 +233,17 @@ bool DenseMapInfo<SimpleMI>::isEqual(SimpleMI LHS, SimpleMI RHS) {
            LHS.getSize(TII) == RHS.getSize(TII) &&
            LHS.Phase == RHS.Phase;
   }
-  
+
   return false;
 }
 
 unsigned SIBufMemMerge::getMaxSize(unsigned int size) {
-  if (size >= 16) return 16;
-  if (size >= 8) return 8;
+  // Limit the size to dwordx4 if HighPressure is set
+  if (!HighPressure) {
+    if (size >= 16) return 16;
+    if (size >= 8) return 8;
+  }
+
   if (size >= 4) return 4;
   if (size >= 2) return 2;
   if (size >= 1) return 1;
@@ -487,10 +496,26 @@ bool SIBufMemMerge::runOnMachineFunction(MachineFunction &MF) {
   ST = &MF.getSubtarget<GCNSubtarget>();
   TII = ST->getInstrInfo();
   TRI = &TII->getRegisterInfo();
+  RP = &getAnalysis<AMDGPURegPressAnalysis>();
+
+  const Function &F = MF.getFunction();
+  unsigned MergeThreshold = AMDGPU::getIntegerAttribute(F, "amdgpu-bufmem-merge-threshold", 85);
 
   LLVM_DEBUG(dbgs() << "Running SIBufMemMerge\n");
 
   bool Modified = false;
+
+  GCNRegPressure MaxPressure = RP->getMaxPressure();
+  HighPressure = false;
+  if (MaxPressure.getSGPRTuplesWeight() > MergeThreshold) {
+    // Don't do so much merging - can cause more fragmentation and increase spilling
+    HighPressure = true;
+  }
+
+  LLVM_DEBUG(
+    dbgs() << "Max pressure : ";
+    MaxPressure.print(dbgs(), ST);
+  );
 
   for (MachineBasicBlock &MBB : MF)
     Modified |= optimizeBlock(MBB);

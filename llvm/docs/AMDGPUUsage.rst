@@ -21,7 +21,7 @@ User Guide for AMDGPU Backend
    AMDGPUOperandSyntax
    AMDGPUInstructionSyntax
    AMDGPUInstructionNotation
-   AMDGPUDwarfProposalForHeterogeneousDebugging
+   AMDGPUDwarfExtensionsForHeterogeneousDebugging
 
 Introduction
 ============
@@ -225,11 +225,11 @@ names from both the *Processor* and *Alternative Processor* can be used.
                                                                                  names.
      ``gfx906``                  ``amdgcn``   dGPU  - xnack                   - Radeon Instinct MI50
                                                       [off]                   - Radeon Instinct MI60
-                                                                              - Radeon VII
-                                                                              - Radeon Pro VII
+                                                    - sram-ecc                - Radeon VII
+                                                      [off]                   - Radeon Pro VII
      ``gfx908``                  ``amdgcn``   dGPU  - xnack                   *TBA*
                                                       [off]
-                                                      sram-ecc
+                                                    - sram-ecc
                                                       [on]
                                                                               .. TODO::
                                                                                  Add product
@@ -260,6 +260,15 @@ names from both the *Processor* and *Alternative Processor* can be used.
                                                     - cumode
                                                       [off]
      ``gfx1030``                 ``amdgcn``   dGPU  - wavefrontsize64         *TBA*
+                                                      [off]
+                                                    - cumode
+                                                      [off]
+                                                                              .. TODO
+                                                                                 Add product
+                                                                                 names.
+     ``gfx1031``                 ``amdgcn``   dGPU  - xnack                   *TBA*
+                                                      [off]
+                                                    - wavefrontsize64
                                                       [off]
                                                     - cumode
                                                       [off]
@@ -810,6 +819,7 @@ The AMDGPU backend uses the following ELF header:
      ``EF_AMDGPU_MACH_AMDGCN_GFX1011`` 0x034      ``gfx1011``
      ``EF_AMDGPU_MACH_AMDGCN_GFX1012`` 0x035      ``gfx1012``
      ``EF_AMDGPU_MACH_AMDGCN_GFX1030`` 0x036      ``gfx1030``
+     ``EF_AMDGPU_MACH_AMDGCN_GFX1031`` 0x037      ``gfx1031``
      ================================= ========== =============================
 
 Sections
@@ -1129,7 +1139,7 @@ The loaded code object path URI syntax is defined by the following BNF syntax:
 **file_path**
   Is the file's path specified as a URI encoded UTF-8 string. In URI encoding,
   every character that is not in the regular expression ``[a-zA-Z0-9/_.~-]`` is
-  encoded as two uppercase hexidecimal digits proceeded by "%".  Directories in
+  encoded as two uppercase hexadecimal digits proceeded by "%".  Directories in
   the path are separated by "/".
 
 **offset**
@@ -1160,14 +1170,14 @@ DWARF Debug Information
 
 .. warning::
 
-   This section describes a **provisional proposal** for AMDGPU DWARF [DWARF]_
-   that is not currently fully implemented and is subject to change.
+   This section describes **provisional support** for AMDGPU DWARF [DWARF]_ that
+   is not currently fully implemented and is subject to change.
 
 AMDGPU generates DWARF [DWARF]_ debugging information ELF sections (see
 :ref:`amdgpu-elf-code-object`) which contain information that maps the code
 object executable code and data to the source language constructs. It can be
 used by tools such as debuggers and profilers. It uses features defined in
-:doc:`AMDGPUDwarfProposalForHeterogeneousDebugging` that are made available in
+:doc:`AMDGPUDwarfExtensionsForHeterogeneousDebugging` that are made available in
 DWARF Version 4 and DWARF Version 5 as an LLVM vendor extension.
 
 This section defines the AMDGPU target architecture specific DWARF mappings.
@@ -1212,7 +1222,8 @@ mapping.
                                              frame.
    1              EXEC_MASK_32      32       Execution Mask Register when
                                              executing in wavefront 32 mode.
-   2-15           *Reserved*
+   2-15           *Reserved*                 *Reserved for highly accessed
+                                             registers using DWARF shortcut.*
    16             PC_64             64       Program Counter (PC) when
                                              executing in a 64-bit process
                                              address space. Used in the CFI to
@@ -1220,31 +1231,55 @@ mapping.
                                              frame.
    17             EXEC_MASK_64      64       Execution Mask Register when
                                              executing in wavefront 64 mode.
-   18-31          *Reserved*
+   18-31          *Reserved*                 *Reserved for highly accessed
+                                             registers using DWARF shortcut.*
    32-95          SGPR0-SGPR63      32       Scalar General Purpose
                                              Registers.
-   96-127         *Reserved*
-   128-511        *Reserved*
-   512-1023       *Reserved*
-   1024-1087      *Reserved*
-   1088-1129      SGPR64-SGPR105    32       Scalar General Purpose Registers
-   1130-1535      *Reserved*
+   96-127         *Reserved*                 *Reserved for frequently accessed
+                                             registers using DWARF 1-byte ULEB.*
+   128            SCC               32       Scalar Condition Code Register.
+   129-511        *Reserved*                 *Reserved for future Scalar
+                                             Architectural Registers.*
+   512            VCC_32            32       Vector Condition Code Register
+                                             when executing in wavefront 32
+                                             mode.
+   513-1023       *Reserved*                 *Reserved for future Vector
+                                             Architectural Registers when
+                                             executing in wavefront 32 mode.*
+   768            VCC_64            32       Vector Condition Code Register
+                                             when executing in wavefront 64
+                                             mode.
+   769-1023       *Reserved*                 *Reserved for future Vector
+                                             Architectural Registers when
+                                             executing in wavefront 64 mode.*
+   1024-1087      *Reserved*                 *Reserved for padding.*
+   1088-1129      SGPR64-SGPR105    32       Scalar General Purpose Registers.
+   1130-1535      *Reserved*                 *Reserved for future Scalar
+                                             General Purpose Registers.*
    1536-1791      VGPR0-VGPR255     32*32    Vector General Purpose Registers
                                              when executing in wavefront 32
                                              mode.
-   1792-2047      *Reserved*
+   1792-2047      *Reserved*                 *Reserved for future Vector
+                                             General Purpose Registers when
+                                             executing in wavefront 32 mode.*
    2048-2303      AGPR0-AGPR255     32*32    Vector Accumulation Registers
                                              when executing in wavefront 32
-                                             ode.
-   2304-2559      *Reserved*
+                                             mode.
+   2304-2559      *Reserved*                 *Reserved for future Vector
+                                             Accumulation Registers when
+                                             executing in wavefront 32 mode.*
    2560-2815      VGPR0-VGPR255     64*32    Vector General Purpose Registers
                                              when executing in wavefront 64
                                              mode.
-   2816-3071      *Reserved*
+   2816-3071      *Reserved*                 *Reserved for future Vector
+                                             General Purpose Registers when
+                                             executing in wavefront 64 mode.*
    3072-3327      AGPR0-AGPR255     64*32    Vector Accumulation Registers
                                              when executing in wavefront 64
                                              mode.
-   3328-3583      *Reserved*
+   3328-3583      *Reserved*                 *Reserved for future Vector
+                                             Accumulation Registers when
+                                             executing in wavefront 64 mode.*
    ============== ================= ======== ==================================
 
 The vector registers are represented as the full size for the wavefront. They
@@ -1274,8 +1309,8 @@ Address Class Identifier
 ------------------------
 
 The DWARF address class represents the source language memory space. See DWARF
-Version 5 section 2.12 which is updated by the propoal in
-:ref:`amdgpu-dwarf-segment_addresses`.
+Version 5 section 2.12 which is updated by the *DWARF Extensions For
+Heterogeneous Debugging* section :ref:`amdgpu-dwarf-segment_addresses`.
 
 The DWARF address class mapping used for AMDGPU is defined in
 :ref:`amdgpu-dwarf-address-class-mapping-table`.
@@ -1296,8 +1331,8 @@ The DWARF address class mapping used for AMDGPU is defined in
    ``DW_ADDR_AMDGPU_region`` 0x8000 Region (GDS)
    ========================= ====== =================
 
-The DWARF address class values defined in the proposal at
-:ref:`amdgpu-dwarf-segment_addresses` are used.
+The DWARF address class values defined in the *DWARF Extensions For
+Heterogeneous Debugging* section :ref:`amdgpu-dwarf-segment_addresses` are used.
 
 In addition, ``DW_ADDR_AMDGPU_region`` is encoded as a vendor extension. This is
 available for use for the AMD extension for access to the hardware GDS memory
@@ -1316,8 +1351,8 @@ Address Space Identifier
 ------------------------
 
 DWARF address spaces correspond to target architecture specific linear
-addressable memory areas. See DWARF Version 5 section 2.12 and
-:ref:`amdgpu-dwarf-segment_addresses`.
+addressable memory areas. See DWARF Version 5 section 2.12 and *DWARF Extensions
+For Heterogeneous Debugging* section :ref:`amdgpu-dwarf-segment_addresses`.
 
 The DWARF address space mapping used for AMDGPU is defined in
 :ref:`amdgpu-dwarf-address-space-mapping-table`.
@@ -1342,10 +1377,6 @@ The DWARF address space mapping used for AMDGPU is defined in
    *Reserved*                              0x04
    ``DW_ASPACE_AMDGPU_private_lane``       0x05  4       4        Private (Scratch) *focused lane*
    ``DW_ASPACE_AMDGPU_private_wave``       0x06  4       4        Private (Scratch) *unswizzled wavefront*
-   *Reserved*                              0x07-
-                                           0x1F
-   ``DW_ASPACE_AMDGPU_private_lane<0-63>`` 0x20- 4       4        Private (Scratch) *specific lane*
-                                           0x5F
    ======================================= ===== ======= ======== ================= =======================
 
 See :ref:`amdgpu-address-spaces` for information on the AMDGPU address spaces
@@ -1417,12 +1448,6 @@ address may have to be converted as the size of a
 ``DW_ASPACE_AMDGPU_private_lane`` address may be smaller than the size of a
 ``DW_ASPACE_AMDGPU_private_wave`` address.
 
-The ``DW_ASPACE_AMDGPU_private_lane<N>`` address space allows location
-expressions to specify the private address space corresponding to a specific
-lane N. For example, this can be used when the compiler spills scalar registers
-to scratch memory, with each scalar register being saved to a different lane's
-scratch memory.
-
 .. _amdgpu-dwarf-lane-identifier:
 
 Lane identifier
@@ -1432,8 +1457,8 @@ DWARF lane identifies specify a target architecture lane position for hardware
 that executes in a SIMD or SIMT manner, and on which a source language maps its
 threads of execution onto those lanes. The DWARF lane identifier is pushed by
 the ``DW_OP_LLVM_push_lane`` DWARF expression operation. See DWARF Version 5
-section 2.5 which is updated by the proposal in
-:ref:`amdgpu-dwarf-operation-expressions`.
+section 2.5 which is updated by *DWARF Extensions For Heterogeneous Debugging*
+section :ref:`amdgpu-dwarf-operation-expressions`.
 
 For AMDGPU, the lane identifier corresponds to the hardware lane ID of a
 wavefront. It is numbered from 0 to the wavefront size minus 1.
@@ -1468,7 +1493,8 @@ Debugger Information Entry Attributes
 
 This section describes how certain debugger information entry attributes are
 used by AMDGPU. See the sections in DWARF Version 5 section 2 which are updated
-by the proposal in :ref:`amdgpu-dwarf-debugging-information-entry-attributes`.
+by *DWARF Extensions For Heterogeneous Debugging* section
+:ref:`amdgpu-dwarf-debugging-information-entry-attributes`.
 
 .. _amdgpu-dwarf-dw-at-llvm-lane-pc:
 
@@ -1631,7 +1657,7 @@ The following provides an example using pseudo LLVM MIR.
         DW_AT_name = "__divergent_lane_pc_1_then";
         DW_AT_location = DIExpression[
           DW_OP_call_ref %__divergent_lane_pc;
-          DW_OP_xaddr &lex_1_start;
+          DW_OP_addrx &lex_1_start;
           DW_OP_stack_value;
           DW_OP_LLVM_extend 64, 64;
           DW_OP_call_ref %__lex_1_save_exec;
@@ -1654,7 +1680,7 @@ The following provides an example using pseudo LLVM MIR.
           DW_AT_name = "__divergent_lane_pc_1_1_then";
           DW_AT_location = DIExpression[
             DW_OP_call_ref %__divergent_lane_pc_1_then;
-            DW_OP_xaddr &lex_1_1_start;
+            DW_OP_addrx &lex_1_1_start;
             DW_OP_stack_value;
             DW_OP_LLVM_extend 64, 64;
             DW_OP_call_ref %__lex_1_1_save_exec;
@@ -1673,7 +1699,7 @@ The following provides an example using pseudo LLVM MIR.
           DW_AT_name = "__divergent_lane_pc_1_1_else";
           DW_AT_location = DIExpression[
             DW_OP_call_ref %__divergent_lane_pc_1_then;
-            DW_OP_xaddr &lex_1_1_end;
+            DW_OP_addrx &lex_1_1_end;
             DW_OP_stack_value;
             DW_OP_LLVM_extend 64, 64;
             DW_OP_call_ref %__lex_1_1_save_exec;
@@ -1699,7 +1725,7 @@ The following provides an example using pseudo LLVM MIR.
         DW_AT_name = "__divergent_lane_pc_1_else";
         DW_AT_location = DIExpression[
           DW_OP_call_ref %__divergent_lane_pc;
-          DW_OP_xaddr &lex_1_end;
+          DW_OP_addrx &lex_1_end;
           DW_OP_stack_value;
           DW_OP_LLVM_extend 64, 64;
           DW_OP_call_ref %__lex_1_save_exec;
@@ -1923,8 +1949,8 @@ DWARF Version 5 section 6.2.4):
 
 Source text for online-compiled programs (for example, those compiled by the
 OpenCL language runtime) may be embedded into the DWARF Version 5 line table.
-See DWARF Version 5 section 6.2.4.1 which is updated by the proposal in
-:ref:`DW_LNCT_LLVM_source
+See DWARF Version 5 section 6.2.4.1 which is updated by *DWARF Extensions For
+Heterogeneous Debugging* section :ref:`DW_LNCT_LLVM_source
 <amdgpu-dwarf-line-number-information-dw-lnct-llvm-source>`.
 
 The Clang option used to control source embedding in AMDGPU is defined in
@@ -2293,29 +2319,10 @@ non-AMD key names should be prefixed by "*vendor-name*.".
                                                   multi-grid synchronization is
                                                   passed in the kernarg.
 
-     "ValueType"       string         Required  Kernel argument value type. Only
-                                                present if "ValueKind" is
-                                                "ByValue". For vector data
-                                                types, the value is for the
-                                                element type. Values include:
+     "ValueType"       string                   Unused and deprecated. This should no longer
+                                                be emitted, but is accepted for compatibility.
 
-                                                - "Struct"
-                                                - "I8"
-                                                - "U8"
-                                                - "I16"
-                                                - "U16"
-                                                - "F16"
-                                                - "I32"
-                                                - "U32"
-                                                - "F32"
-                                                - "I64"
-                                                - "U64"
-                                                - "F64"
 
-                                                .. TODO::
-                                                   How can it be determined if a
-                                                   vector type, and what size
-                                                   vector?
      "PointeeAlign"    integer                  Alignment in bytes of pointee
                                                 type for pointer type kernel
                                                 argument. Must be a power
@@ -2792,29 +2799,9 @@ same *vendor-name*.
                                                        multi-grid synchronization is
                                                        passed in the kernarg.
 
-     ".value_type"          string         Required  Kernel argument value type. Only
-                                                     present if ".value_kind" is
-                                                     "by_value". For vector data
-                                                     types, the value is for the
-                                                     element type. Values include:
+     ".value_type"          string                    Unused and deprecated. This should no longer
+                                                      be emitted, but is accepted for compatibility.
 
-                                                     - "struct"
-                                                     - "i8"
-                                                     - "u8"
-                                                     - "i16"
-                                                     - "u16"
-                                                     - "f16"
-                                                     - "i32"
-                                                     - "u32"
-                                                     - "f32"
-                                                     - "i64"
-                                                     - "u64"
-                                                     - "f64"
-
-                                                     .. TODO::
-                                                        How can it be determined if a
-                                                        vector type, and what size
-                                                        vector?
      ".pointee_align"       integer                  Alignment in bytes of pointee
                                                      type for pointer type kernel
                                                      argument. Must be a power
@@ -6581,7 +6568,7 @@ On exit from a function:
       VGPR232-239
       VGPR248-255
 
-        *Except the argument registers, the VGPR cloberred and the preserved
+        *Except the argument registers, the VGPR clobbered and the preserved
         registers are intermixed at regular intervals in order to
         get a better occupancy.*
 

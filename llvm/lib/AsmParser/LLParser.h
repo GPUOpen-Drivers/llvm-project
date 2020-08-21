@@ -272,7 +272,8 @@ namespace llvm {
     void ParseOptionalVisibility(unsigned &Res);
     void ParseOptionalDLLStorageClass(unsigned &Res);
     bool ParseOptionalCallingConv(unsigned &CC);
-    bool ParseOptionalAlignment(MaybeAlign &Alignment);
+    bool ParseOptionalAlignment(MaybeAlign &Alignment,
+                                bool AllowParens = false);
     bool ParseOptionalDerefAttrBytes(lltok::Kind AttrKind, uint64_t &Bytes);
     bool ParseScopeAndOrdering(bool isAtomic, SyncScope::ID &SSID,
                                AtomicOrdering &Ordering);
@@ -332,7 +333,10 @@ namespace llvm {
                                     std::vector<unsigned> &FwdRefAttrGrps,
                                     bool inAttrGrp, LocTy &BuiltinLoc);
     bool ParseByValWithOptionalType(Type *&Result);
+
+    bool ParseRequiredTypeAttr(Type *&Result, lltok::Kind AttrName);
     bool ParsePreallocated(Type *&Result);
+    bool ParseByRef(Type *&Result);
 
     // Module Summary Index Parsing.
     bool SkipModuleSummaryEntry();

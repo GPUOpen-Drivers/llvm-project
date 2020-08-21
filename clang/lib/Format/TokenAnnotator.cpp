@@ -27,7 +27,7 @@ namespace format {
 namespace {
 
 /// Returns \c true if the token can be used as an identifier in
-/// an Objective-C \c @selector, \c false otherwise.
+/// an Objective-C \c \@selector, \c false otherwise.
 ///
 /// Because getFormattingLangOpts() always lexes source code as
 /// Objective-C++, C++ keywords like \c new and \c delete are
@@ -160,6 +160,27 @@ private:
     return false;
   }
 
+  bool parseUntouchableParens() {
+    while (CurrentToken) {
+      CurrentToken->Finalized = true;
+      switch (CurrentToken->Tok.getKind()) {
+      case tok::l_paren:
+        next();
+        if (!parseUntouchableParens())
+          return false;
+        continue;
+      case tok::r_paren:
+        next();
+        return true;
+      default:
+        // no-op
+        break;
+      }
+      next();
+    }
+    return false;
+  }
+
   bool parseParens(bool LookForDecls = false) {
     if (!CurrentToken)
       return false;
@@ -170,6 +191,11 @@ private:
     // FIXME: This is a bit of a hack. Do better.
     Contexts.back().ColonIsForRangeExpr =
         Contexts.size() == 2 && Contexts[0].ColonIsForRangeExpr;
+
+    if (Left->Previous && Left->Previous->is(TT_UntouchableMacroFunc)) {
+      Left->Finalized = true;
+      return parseUntouchableParens();
+    }
 
     bool StartsObjCMethodExpr = false;
     if (FormatToken *MaybeSel = Left->Previous) {
@@ -317,11 +343,11 @@ private:
           CurrentToken->setType(TT_AttributeSquare);
 
         if (!HasMultipleLines)
-          Left->PackingKind = PPK_Inconclusive;
+          Left->setPackingKind(PPK_Inconclusive);
         else if (HasMultipleParametersOnALine)
-          Left->PackingKind = PPK_BinPacked;
+          Left->setPackingKind(PPK_BinPacked);
         else
-          Left->PackingKind = PPK_OnePerLine;
+          Left->setPackingKind(PPK_OnePerLine);
 
         next();
         return true;
@@ -678,7 +704,7 @@ private:
 
       ScopedContextCreator ContextCreator(*this, tok::l_brace, 1);
       Contexts.back().ColonIsDictLiteral = true;
-      if (Left->BlockKind == BK_BracedInit)
+      if (Left->is(BK_BracedInit))
         Contexts.back().IsExpression = true;
       if (Style.Language == FormatStyle::LK_JavaScript && Left->Previous &&
           Left->Previous->is(TT_JsTypeColon))
@@ -725,7 +751,7 @@ private:
     // For ObjC methods, the number of parameters is calculated differently as
     // method declarations have a different structure (the parameters are not
     // inside a bracket scope).
-    if (Current->is(tok::l_brace) && Current->BlockKind == BK_Block)
+    if (Current->is(tok::l_brace) && Current->is(BK_Block))
       ++Left->BlockParameterCount;
     if (Current->is(tok::comma)) {
       ++Left->ParameterCount;
@@ -1311,7 +1337,7 @@ private:
             TT_TypenameMacro, TT_FunctionLBrace, TT_ImplicitStringLiteral,
             TT_InlineASMBrace, TT_JsFatArrow, TT_LambdaArrow, TT_NamespaceMacro,
             TT_OverloadedOperator, TT_RegexLiteral, TT_TemplateString,
-            TT_ObjCStringLiteral))
+            TT_ObjCStringLiteral, TT_UntouchableMacroFunc))
       CurrentToken->setType(TT_Unknown);
     CurrentToken->Role.reset();
     CurrentToken->MatchingParen = nullptr;
@@ -2394,7 +2420,7 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) {
     if (isFunctionDeclarationName(*Current, Line))
       Current->setType(TT_FunctionDeclarationName);
     if (Current->is(TT_LineComment)) {
-      if (Current->Previous->BlockKind == BK_BracedInit &&
+      if (Current->Previous->is(BK_BracedInit) &&
           Current->Previous->opensScope())
         Current->SpacesRequiredBefore =
             (Style.Cpp11BracedListStyle && !Style.SpacesInParentheses) ? 0 : 1;
@@ -2729,8 +2755,8 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
   if (Left.isOneOf(tok::hashhash, tok::hash))
     return Right.is(tok::hash);
   if ((Left.is(tok::l_paren) && Right.is(tok::r_paren)) ||
-      (Left.is(tok::l_brace) && Left.BlockKind != BK_Block &&
-       Right.is(tok::r_brace) && Right.BlockKind != BK_Block))
+      (Left.is(tok::l_brace) && Left.isNot(BK_Block) &&
+       Right.is(tok::r_brace) && Right.isNot(BK_Block)))
     return Style.SpaceInEmptyParentheses;
   if (Style.SpacesInConditionalStatement) {
     if (Left.is(tok::l_paren) && Left.Previous &&
@@ -2810,7 +2836,7 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     return Right.Tok.isLiteral() || Right.is(TT_BlockComment) ||
            (Right.isOneOf(Keywords.kw_override, Keywords.kw_final) &&
             !Right.is(TT_StartOfName)) ||
-           (Right.is(tok::l_brace) && Right.BlockKind == BK_Block) ||
+           (Right.is(tok::l_brace) && Right.is(BK_Block)) ||
            (!Right.isOneOf(TT_PointerOrReference, TT_ArraySubscriptLSquare,
                            tok::l_paren) &&
             (Style.PointerAlignment != FormatStyle::PAS_Right &&
@@ -2818,6 +2844,11 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
             Left.Previous &&
             !Left.Previous->isOneOf(tok::l_paren, tok::coloncolon,
                                     tok::l_square));
+  // Ensure right pointer alignement with ellipsis e.g. int *...P
+  if (Left.is(tok::ellipsis) && Left.Previous &&
+      Left.Previous->isOneOf(tok::star, tok::amp, tok::ampamp))
+    return Style.PointerAlignment != FormatStyle::PAS_Right;
+
   if (Right.is(tok::star) && Left.is(tok::l_paren))
     return false;
   if (Left.is(tok::star) && Right.isOneOf(tok::star, tok::amp, tok::ampamp))
@@ -2890,9 +2921,9 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     return false;
   if (Left.is(tok::l_brace) && Right.is(tok::r_brace))
     return !Left.Children.empty(); // No spaces in "{}".
-  if ((Left.is(tok::l_brace) && Left.BlockKind != BK_Block) ||
+  if ((Left.is(tok::l_brace) && Left.isNot(BK_Block)) ||
       (Right.is(tok::r_brace) && Right.MatchingParen &&
-       Right.MatchingParen->BlockKind != BK_Block))
+       Right.MatchingParen->isNot(BK_Block)))
     return Style.Cpp11BracedListStyle ? Style.SpacesInParentheses : true;
   if (Left.is(TT_BlockComment))
     // No whitespace in x(/*foo=*/1), except for JavaScript.
@@ -2936,7 +2967,7 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
                     tok::r_paren) ||
        Left.isSimpleTypeSpecifier()) &&
       Right.is(tok::l_brace) && Right.getNextNonComment() &&
-      Right.BlockKind != BK_Block)
+      Right.isNot(BK_Block))
     return false;
   if (Left.is(tok::period) || Right.is(tok::period))
     return false;
@@ -2978,7 +3009,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
   if (Style.isCpp()) {
     if (Left.is(tok::kw_operator))
       return Right.is(tok::coloncolon);
-    if (Right.is(tok::l_brace) && Right.BlockKind == BK_BracedInit &&
+    if (Right.is(tok::l_brace) && Right.is(BK_BracedInit) &&
         !Left.opensScope() && Style.SpaceBeforeCpp11BracedList)
       return true;
   } else if (Style.Language == FormatStyle::LK_Proto ||
@@ -3220,6 +3251,9 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
   if (Right.is(TT_RangeBasedForLoopColon) &&
       !Style.SpaceBeforeRangeBasedForLoopColon)
     return false;
+  if (Left.is(TT_BitFieldColon))
+    return Style.BitFieldColonSpacing == FormatStyle::BFCS_Both ||
+           Style.BitFieldColonSpacing == FormatStyle::BFCS_After;
   if (Right.is(tok::colon)) {
     if (Line.First->isOneOf(tok::kw_case, tok::kw_default) ||
         !Right.getNextNonComment() || Right.getNextNonComment()->is(tok::semi))
@@ -3236,6 +3270,9 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
       return false;
     if (Right.is(TT_CSharpNamedArgumentColon))
       return false;
+    if (Right.is(TT_BitFieldColon))
+      return Style.BitFieldColonSpacing == FormatStyle::BFCS_Both ||
+             Style.BitFieldColonSpacing == FormatStyle::BFCS_Before;
     return true;
   }
   if (Left.is(TT_UnaryOperator)) {
@@ -3325,7 +3362,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
 
 // Returns 'true' if 'Tok' is a brace we'd want to break before in Allman style.
 static bool isAllmanBrace(const FormatToken &Tok) {
-  return Tok.is(tok::l_brace) && Tok.BlockKind == BK_Block &&
+  return Tok.is(tok::l_brace) && Tok.is(BK_Block) &&
          !Tok.isOneOf(TT_ObjCBlockLBrace, TT_LambdaLBrace, TT_DictLiteral);
 }
 
@@ -3361,7 +3398,7 @@ static bool isOneChildWithoutMustBreakBefore(const FormatToken &Tok) {
   return true;
 }
 static bool isAllmanLambdaBrace(const FormatToken &Tok) {
-  return (Tok.is(tok::l_brace) && Tok.BlockKind == BK_Block &&
+  return (Tok.is(tok::l_brace) && Tok.is(BK_Block) &&
           !Tok.isOneOf(TT_ObjCBlockLBrace, TT_DictLiteral));
 }
 
@@ -3461,7 +3498,7 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
     if ((Left.isOneOf(tok::l_brace, TT_ArrayInitializerLSquare) ||
          (Style.Language == FormatStyle::LK_JavaScript &&
           Left.is(tok::l_paren))) &&
-        Left.BlockKind != BK_Block && Left.MatchingParen)
+        Left.isNot(BK_Block) && Left.MatchingParen)
       BeforeClosingBrace = Left.MatchingParen->Previous;
     else if (Right.MatchingParen &&
              (Right.MatchingParen->isOneOf(tok::l_brace,
@@ -3475,8 +3512,7 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
   }
 
   if (Right.is(tok::comment))
-    return Left.BlockKind != BK_BracedInit &&
-           Left.isNot(TT_CtorInitializerColon) &&
+    return Left.isNot(BK_BracedInit) && Left.isNot(TT_CtorInitializerColon) &&
            (Right.NewlinesBefore > 0 && Right.HasUnescapedNewline);
   if (Left.isTrailingComment())
     return true;
@@ -3785,7 +3821,7 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
     // The first comment in a braced lists is always interpreted as belonging to
     // the first list element. Otherwise, it should be placed outside of the
     // list.
-    return Left.BlockKind == BK_BracedInit ||
+    return Left.is(BK_BracedInit) ||
            (Left.is(TT_CtorInitializerColon) &&
             Style.BreakConstructorInitializers == FormatStyle::BCIS_AfterColon);
   if (Left.is(tok::question) && Right.is(tok::colon))
@@ -3886,7 +3922,7 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
   // We only break before r_brace if there was a corresponding break before
   // the l_brace, which is tracked by BreakBeforeClosingBrace.
   if (Right.is(tok::r_brace))
-    return Right.MatchingParen && Right.MatchingParen->BlockKind == BK_Block;
+    return Right.MatchingParen && Right.MatchingParen->is(BK_Block);
 
   // Allow breaking after a trailing annotation, e.g. after a method
   // declaration.
@@ -3970,10 +4006,10 @@ void TokenAnnotator::printDebugInfo(const AnnotatedLine &Line) {
                  << " C=" << Tok->CanBreakBefore
                  << " T=" << getTokenTypeName(Tok->getType())
                  << " S=" << Tok->SpacesRequiredBefore
-                 << " B=" << Tok->BlockParameterCount
-                 << " BK=" << Tok->BlockKind << " P=" << Tok->SplitPenalty
+                 << " F=" << Tok->Finalized << " B=" << Tok->BlockParameterCount
+                 << " BK=" << Tok->getBlockKind() << " P=" << Tok->SplitPenalty
                  << " Name=" << Tok->Tok.getName() << " L=" << Tok->TotalLength
-                 << " PPK=" << Tok->PackingKind << " FakeLParens=";
+                 << " PPK=" << Tok->getPackingKind() << " FakeLParens=";
     for (unsigned i = 0, e = Tok->FakeLParens.size(); i != e; ++i)
       llvm::errs() << Tok->FakeLParens[i] << "/";
     llvm::errs() << " FakeRParens=" << Tok->FakeRParens;

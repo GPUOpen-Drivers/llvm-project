@@ -25,6 +25,26 @@ namespace llvm {
 
 namespace AArch64ISD {
 
+// For predicated nodes where the result is a vector, the operation is
+// controlled by a governing predicate and the inactive lanes are explicitly
+// defined with a value, please stick the following naming convention:
+//
+//    _MERGE_OP<n>        The result value is a vector with inactive lanes equal
+//                        to source operand OP<n>.
+//
+//    _MERGE_ZERO         The result value is a vector with inactive lanes
+//                        actively zeroed.
+//
+//    _MERGE_PASSTHRU     The result value is a vector with inactive lanes equal
+//                        to the last source operand which only purpose is being
+//                        a passthru value.
+//
+// For other cases where no explicit action is needed to set the inactive lanes,
+// or when the result is not a vector and it is needed or helpful to
+// distinguish a node from similar unpredicated nodes, use:
+//
+//    _PRED
+//
 enum NodeType : unsigned {
   FIRST_NUMBER = ISD::BUILTIN_OP_END,
   WrapperLarge, // 4-instruction MOVZ/MOVK sequence for 64-bit addresses.
@@ -52,17 +72,25 @@ enum NodeType : unsigned {
   ADC,
   SBC, // adc, sbc instructions
 
-  // Arithmetic instructions
+  // Predicated instructions where inactive lanes produce undefined results.
+  ADD_PRED,
+  FADD_PRED,
+  FDIV_PRED,
+  FMA_PRED,
+  FMUL_PRED,
+  FSUB_PRED,
+  MUL_PRED,
   SDIV_PRED,
-  UDIV_PRED,
-  SMIN_PRED,
-  UMIN_PRED,
-  SMAX_PRED,
-  UMAX_PRED,
   SHL_PRED,
-  SRL_PRED,
+  SMAX_PRED,
+  SMIN_PRED,
   SRA_PRED,
-  SETCC_PRED,
+  SRL_PRED,
+  UDIV_PRED,
+  UMAX_PRED,
+  UMIN_PRED,
+
+  SETCC_MERGE_ZERO,
 
   // Arithmetic instructions which write flags.
   ADDS,
@@ -164,6 +192,14 @@ enum NodeType : unsigned {
   SADDV,
   UADDV,
 
+  // Vector halving addition
+  SHADD,
+  UHADD,
+
+  // Vector rounding halving addition
+  SRHADD,
+  URHADD,
+
   // Vector across-lanes min/max
   // Only the lower result lane is defined.
   SMINV,
@@ -241,80 +277,81 @@ enum NodeType : unsigned {
   PTEST,
   PTRUE,
 
-  DUP_PRED,
+  DUP_MERGE_PASSTHRU,
   INDEX_VECTOR,
 
   REINTERPRET_CAST,
 
-  LD1,
-  LD1S,
-  LDNF1,
-  LDNF1S,
-  LDFF1,
-  LDFF1S,
-  LD1RQ,
-  LD1RO,
+  LD1_MERGE_ZERO,
+  LD1S_MERGE_ZERO,
+  LDNF1_MERGE_ZERO,
+  LDNF1S_MERGE_ZERO,
+  LDFF1_MERGE_ZERO,
+  LDFF1S_MERGE_ZERO,
+  LD1RQ_MERGE_ZERO,
+  LD1RO_MERGE_ZERO,
 
   // Structured loads.
-  SVE_LD2,
-  SVE_LD3,
-  SVE_LD4,
+  SVE_LD2_MERGE_ZERO,
+  SVE_LD3_MERGE_ZERO,
+  SVE_LD4_MERGE_ZERO,
 
   // Unsigned gather loads.
-  GLD1,
-  GLD1_SCALED,
-  GLD1_UXTW,
-  GLD1_SXTW,
-  GLD1_UXTW_SCALED,
-  GLD1_SXTW_SCALED,
-  GLD1_IMM,
+  GLD1_MERGE_ZERO,
+  GLD1_SCALED_MERGE_ZERO,
+  GLD1_UXTW_MERGE_ZERO,
+  GLD1_SXTW_MERGE_ZERO,
+  GLD1_UXTW_SCALED_MERGE_ZERO,
+  GLD1_SXTW_SCALED_MERGE_ZERO,
+  GLD1_IMM_MERGE_ZERO,
 
   // Signed gather loads
-  GLD1S,
-  GLD1S_SCALED,
-  GLD1S_UXTW,
-  GLD1S_SXTW,
-  GLD1S_UXTW_SCALED,
-  GLD1S_SXTW_SCALED,
-  GLD1S_IMM,
+  GLD1S_MERGE_ZERO,
+  GLD1S_SCALED_MERGE_ZERO,
+  GLD1S_UXTW_MERGE_ZERO,
+  GLD1S_SXTW_MERGE_ZERO,
+  GLD1S_UXTW_SCALED_MERGE_ZERO,
+  GLD1S_SXTW_SCALED_MERGE_ZERO,
+  GLD1S_IMM_MERGE_ZERO,
 
   // Unsigned gather loads.
-  GLDFF1,
-  GLDFF1_SCALED,
-  GLDFF1_UXTW,
-  GLDFF1_SXTW,
-  GLDFF1_UXTW_SCALED,
-  GLDFF1_SXTW_SCALED,
-  GLDFF1_IMM,
+  GLDFF1_MERGE_ZERO,
+  GLDFF1_SCALED_MERGE_ZERO,
+  GLDFF1_UXTW_MERGE_ZERO,
+  GLDFF1_SXTW_MERGE_ZERO,
+  GLDFF1_UXTW_SCALED_MERGE_ZERO,
+  GLDFF1_SXTW_SCALED_MERGE_ZERO,
+  GLDFF1_IMM_MERGE_ZERO,
 
   // Signed gather loads.
-  GLDFF1S,
-  GLDFF1S_SCALED,
-  GLDFF1S_UXTW,
-  GLDFF1S_SXTW,
-  GLDFF1S_UXTW_SCALED,
-  GLDFF1S_SXTW_SCALED,
-  GLDFF1S_IMM,
+  GLDFF1S_MERGE_ZERO,
+  GLDFF1S_SCALED_MERGE_ZERO,
+  GLDFF1S_UXTW_MERGE_ZERO,
+  GLDFF1S_SXTW_MERGE_ZERO,
+  GLDFF1S_UXTW_SCALED_MERGE_ZERO,
+  GLDFF1S_SXTW_SCALED_MERGE_ZERO,
+  GLDFF1S_IMM_MERGE_ZERO,
 
   // Non-temporal gather loads
-  GLDNT1,
-  GLDNT1_INDEX,
-  GLDNT1S,
+  GLDNT1_MERGE_ZERO,
+  GLDNT1_INDEX_MERGE_ZERO,
+  GLDNT1S_MERGE_ZERO,
 
-  ST1,
+  // Contiguous masked store.
+  ST1_PRED,
 
   // Scatter store
-  SST1,
-  SST1_SCALED,
-  SST1_UXTW,
-  SST1_SXTW,
-  SST1_UXTW_SCALED,
-  SST1_SXTW_SCALED,
-  SST1_IMM,
+  SST1_PRED,
+  SST1_SCALED_PRED,
+  SST1_UXTW_PRED,
+  SST1_SXTW_PRED,
+  SST1_UXTW_SCALED_PRED,
+  SST1_SXTW_SCALED_PRED,
+  SST1_IMM_PRED,
 
   // Non-temporal scatter store
-  SSTNT1,
-  SSTNT1_INDEX,
+  SSTNT1_PRED,
+  SSTNT1_INDEX_PRED,
 
   // Strict (exception-raising) floating point comparison
   STRICT_FCMP = ISD::FIRST_TARGET_STRICTFP_OPCODE,
@@ -401,7 +438,8 @@ public:
     return MVT::getIntegerVT(64);
   }
 
-  bool targetShrinkDemandedConstant(SDValue Op, const APInt &Demanded,
+  bool targetShrinkDemandedConstant(SDValue Op, const APInt &DemandedBits,
+                                    const APInt &DemandedElts,
                                     TargetLoweringOpt &TLO) const override;
 
   MVT getScalarShiftAmountTy(const DataLayout &DL, EVT) const override;
@@ -424,12 +462,6 @@ public:
   const char *getTargetNodeName(unsigned Opcode) const override;
 
   SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const override;
-
-  /// Returns true if a cast between SrcAS and DestAS is a noop.
-  bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override {
-    // Addrspacecasts are always noops.
-    return true;
-  }
 
   /// This method returns a target specific FastISel object, or null if the
   /// target does not support "fast" ISel.
@@ -480,7 +512,7 @@ public:
   bool shouldSinkOperands(Instruction *I,
                           SmallVectorImpl<Use *> &Ops) const override;
 
-  bool hasPairedLoad(EVT LoadedType, unsigned &RequiredAligment) const override;
+  bool hasPairedLoad(EVT LoadedType, Align &RequiredAligment) const override;
 
   unsigned getMaxSupportedInterleaveFactor() const override { return 4; }
 
@@ -705,6 +737,16 @@ public:
 
   bool fallBackToDAGISel(const Instruction &Inst) const override;
 
+  /// SVE code generation for fixed length vectors does not custom lower
+  /// BUILD_VECTOR. This makes BUILD_VECTOR legalisation a source of stores to
+  /// merge. However, merging them creates a BUILD_VECTOR that is just as
+  /// illegal as the original, thus leading to an infinite legalisation loop.
+  /// NOTE: Once BUILD_VECTOR is legal or can be custom lowered for all legal
+  /// vector types this override can be removed.
+  bool mergeStoresAfterLegalization(EVT VT) const override {
+    return !useSVEForFixedLengthVectors();
+  }
+
 private:
   /// Keep a pointer to the AArch64Subtarget around so that we can
   /// make the right decision when generating code for different targets.
@@ -818,9 +860,13 @@ private:
   SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSPLAT_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerDUPQLane(SDValue Op, SelectionDAG &DAG) const;
-  SDValue LowerToPredicatedOp(SDValue Op, SelectionDAG &DAG,
-                              unsigned NewOp) const;
+  SDValue LowerToPredicatedOp(SDValue Op, SelectionDAG &DAG, unsigned NewOp,
+                              bool OverrideNEON = false) const;
+  SDValue LowerToScalableOp(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerEXTRACT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerINSERT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerDIV(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerMUL(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVectorSRA_SRL_SHL(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerShiftLeftParts(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerShiftRightParts(SDValue Op, SelectionDAG &DAG) const;
@@ -835,9 +881,11 @@ private:
   SDValue LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVectorOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerXOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerCONCAT_VECTORS(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFSINCOS(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVSCALE(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerTRUNCATE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVECREDUCE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerATOMIC_LOAD_SUB(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerATOMIC_LOAD_AND(SDValue Op, SelectionDAG &DAG) const;
@@ -850,6 +898,8 @@ private:
 
   SDValue LowerFixedLengthVectorLoadToSVE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFixedLengthVectorStoreToSVE(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerFixedLengthVectorTruncateToSVE(SDValue Op,
+                                              SelectionDAG &DAG) const;
 
   SDValue BuildSDIVPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
                         SmallVectorImpl<SDNode *> &Created) const override;
@@ -916,7 +966,10 @@ private:
                       const TargetTransformInfo *TTI) const override;
 
   bool useSVEForFixedLengthVectors() const;
-  bool useSVEForFixedLengthVectorVT(EVT VT) const;
+  // Normally SVE is only used for byte size vectors that do not fit within a
+  // NEON vector. This changes when OverrideNEON is true, allowing SVE to be
+  // used for 64bit and 128bit vectors as well.
+  bool useSVEForFixedLengthVectorVT(EVT VT, bool OverrideNEON = false) const;
 };
 
 namespace AArch64 {

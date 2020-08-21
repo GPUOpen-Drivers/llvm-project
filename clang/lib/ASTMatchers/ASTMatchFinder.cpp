@@ -45,7 +45,9 @@ static const unsigned MaxMemoizationEntries = 10000;
 
 enum class MatchType {
   Ancestors,
-  Descendants
+
+  Descendants,
+  Child,
 };
 
 // We use memoization to avoid running the same matcher on the same
@@ -126,6 +128,9 @@ public:
       traverse(*T);
     else if (const auto *C = DynNode.get<CXXCtorInitializer>())
       traverse(*C);
+    else if (const TemplateArgumentLoc *TALoc =
+                 DynNode.get<TemplateArgumentLoc>())
+      traverse(*TALoc);
     // FIXME: Add other base types after adding tests.
 
     // It's OK to always overwrite the bound nodes, as if there was
@@ -222,6 +227,10 @@ public:
     ScopedIncrement ScopedDepth(&CurrentDepth);
     return traverse(*CtorInit);
   }
+  bool TraverseTemplateArgumentLoc(TemplateArgumentLoc TAL) {
+    ScopedIncrement ScopedDepth(&CurrentDepth);
+    return traverse(TAL);
+  }
   bool TraverseLambdaExpr(LambdaExpr *Node) {
     if (Finder->getASTContext().getParentMapContext().getTraversalKind() !=
         TK_IgnoreUnlessSpelledInSource)
@@ -301,6 +310,9 @@ private:
   bool baseTraverse(const CXXCtorInitializer &CtorInit) {
     return VisitorBase::TraverseConstructorInitializer(
         const_cast<CXXCtorInitializer *>(&CtorInit));
+  }
+  bool baseTraverse(TemplateArgumentLoc TAL) {
+    return VisitorBase::TraverseTemplateArgumentLoc(TAL);
   }
 
   // Sets 'Matched' to true if 'Matcher' matches 'Node' and:
@@ -445,6 +457,7 @@ public:
   bool TraverseNestedNameSpecifier(NestedNameSpecifier *NNS);
   bool TraverseNestedNameSpecifierLoc(NestedNameSpecifierLoc NNS);
   bool TraverseConstructorInitializer(CXXCtorInitializer *CtorInit);
+  bool TraverseTemplateArgumentLoc(TemplateArgumentLoc TAL);
 
   // Matches children or descendants of 'Node' with 'BaseMatcher'.
   bool memoizedMatchesRecursively(const DynTypedNode &Node, ASTContext &Ctx,
@@ -452,8 +465,7 @@ public:
                                   BoundNodesTreeBuilder *Builder, int MaxDepth,
                                   TraversalKind Traversal, BindKind Bind) {
     // For AST-nodes that don't have an identity, we can't memoize.
-    // When doing a single-level match, we don't need to memoize
-    if (!Node.getMemoizationData() || !Builder->isComparable() || MaxDepth == 1)
+    if (!Node.getMemoizationData() || !Builder->isComparable())
       return matchesRecursively(Node, Matcher, Builder, MaxDepth, Traversal,
                                 Bind);
 
@@ -463,7 +475,8 @@ public:
     // Note that we key on the bindings *before* the match.
     Key.BoundNodes = *Builder;
     Key.Traversal = Ctx.getParentMapContext().getTraversalKind();
-    Key.Type = MatchType::Descendants;
+    // Memoize result even doing a single-level match, it might be expensive.
+    Key.Type = MaxDepth == 1 ? MatchType::Child : MatchType::Descendants;
     MemoizationMap::iterator I = ResultCache.find(Key);
     if (I != ResultCache.end()) {
       *Builder = I->second.Nodes;
@@ -554,6 +567,8 @@ public:
     } else if (auto *N = Node.get<TypeLoc>()) {
       match(*N);
     } else if (auto *N = Node.get<CXXCtorInitializer>()) {
+      match(*N);
+    } else if (auto *N = Node.get<TemplateArgumentLoc>()) {
       match(*N);
     }
   }
@@ -678,6 +693,9 @@ private:
   void matchDispatch(const CXXCtorInitializer *Node) {
     matchWithoutFilter(*Node, Matchers->CtorInit);
   }
+  void matchDispatch(const TemplateArgumentLoc *Node) {
+    matchWithoutFilter(*Node, Matchers->TemplateArgumentLoc);
+  }
   void matchDispatch(const void *) { /* Do nothing. */ }
   /// @}
 
@@ -700,8 +718,10 @@ private:
                                             BoundNodesTreeBuilder *Builder,
                                             AncestorMatchMode MatchMode) {
     // For AST-nodes that don't have an identity, we can't memoize.
-    // When doing a single-level match, we don't need to memoize
-    if (!Builder->isComparable() || MatchMode == AncestorMatchMode::AMM_ParentOnly)
+    // When doing a single-level match, we don't need to memoize because
+    // ParentMap (in ASTContext) already memoizes the result.
+    if (!Builder->isComparable() ||
+        MatchMode == AncestorMatchMode::AMM_ParentOnly)
       return matchesAncestorOfRecursively(Node, Ctx, Matcher, Builder,
                                           MatchMode);
 
@@ -751,7 +771,7 @@ private:
             return D->getKind() == Decl::TranslationUnit;
           })) {
         llvm::errs() << "Tried to match orphan node:\n";
-        Node.dump(llvm::errs(), ActiveASTContext->getSourceManager());
+        Node.dump(llvm::errs(), *ActiveASTContext);
         llvm_unreachable("Parent map should be complete!");
       }
 #endif
@@ -1031,6 +1051,11 @@ bool MatchASTVisitor::TraverseConstructorInitializer(
       CtorInit);
 }
 
+bool MatchASTVisitor::TraverseTemplateArgumentLoc(TemplateArgumentLoc Loc) {
+  match(Loc);
+  return RecursiveASTVisitor<MatchASTVisitor>::TraverseTemplateArgumentLoc(Loc);
+}
+
 class MatchASTConsumer : public ASTConsumer {
 public:
   MatchASTConsumer(MatchFinder *Finder,
@@ -1107,6 +1132,12 @@ void MatchFinder::addMatcher(const CXXCtorInitializerMatcher &NodeMatch,
   Matchers.AllCallbacks.insert(Action);
 }
 
+void MatchFinder::addMatcher(const TemplateArgumentLocMatcher &NodeMatch,
+                             MatchCallback *Action) {
+  Matchers.TemplateArgumentLoc.emplace_back(NodeMatch, Action);
+  Matchers.AllCallbacks.insert(Action);
+}
+
 bool MatchFinder::addDynamicMatcher(const internal::DynTypedMatcher &NodeMatch,
                                     MatchCallback *Action) {
   if (NodeMatch.canConvertTo<Decl>()) {
@@ -1129,6 +1160,9 @@ bool MatchFinder::addDynamicMatcher(const internal::DynTypedMatcher &NodeMatch,
     return true;
   } else if (NodeMatch.canConvertTo<CXXCtorInitializer>()) {
     addMatcher(NodeMatch.convertTo<CXXCtorInitializer>(), Action);
+    return true;
+  } else if (NodeMatch.canConvertTo<TemplateArgumentLoc>()) {
+    addMatcher(NodeMatch.convertTo<TemplateArgumentLoc>(), Action);
     return true;
   }
   return false;

@@ -864,7 +864,7 @@ parser::Message *AttachDeclaration(parser::Message &, const Symbol &);
 parser::Message *AttachDeclaration(parser::Message *, const Symbol &);
 template <typename MESSAGES, typename... A>
 parser::Message *SayWithDeclaration(
-    MESSAGES &messages, const Symbol &symbol, A &&... x) {
+    MESSAGES &messages, const Symbol &symbol, A &&...x) {
   return AttachDeclaration(messages.Say(std::forward<A>(x)...), symbol);
 }
 
@@ -908,6 +908,7 @@ bool IsProcedure(const Symbol &);
 bool IsProcedurePointer(const Symbol &);
 bool IsSaved(const Symbol &); // saved implicitly or explicitly
 bool IsDummy(const Symbol &);
+bool IsFunctionResult(const Symbol &);
 
 // Follow use, host, and construct assocations to a variable, if any.
 const Symbol *GetAssociationRoot(const Symbol &);

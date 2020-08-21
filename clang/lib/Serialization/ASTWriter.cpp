@@ -81,7 +81,7 @@
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
-#include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -1119,7 +1119,6 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Clang min.
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // Relocatable
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // Timestamps
-  MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // PCHHasObjectFile
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1)); // Errors
   MetadataAbbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob)); // SVN branch/tag
   unsigned MetadataAbbrevCode = Stream.EmitAbbrev(std::move(MetadataAbbrev));
@@ -1134,7 +1133,6 @@ void ASTWriter::WriteControlBlock(Preprocessor &PP, ASTContext &Context,
         CLANG_VERSION_MINOR,
         !isysroot.empty(),
         IncludeTimestamps,
-        Context.getLangOpts().BuildingPCHWithObjectFile,
         ASTHasCompilerErrors};
     Stream.EmitRecordWithBlob(MetadataAbbrevCode, Record,
                               getClangFullRepositoryVersion());
@@ -3690,7 +3688,7 @@ ASTWriter::GenerateNameLookupTable(const DeclContext *ConstDC,
 
   // We also build up small sets of the constructor and conversion function
   // names which are visible.
-  llvm::SmallSet<DeclarationName, 8> ConstructorNameSet, ConversionNameSet;
+  llvm::SmallPtrSet<DeclarationName, 8> ConstructorNameSet, ConversionNameSet;
 
   for (auto &Lookup : *DC->buildLookup()) {
     auto &Name = Lookup.first;
@@ -3960,7 +3958,7 @@ void ASTWriter::WriteDeclContextVisibleUpdate(const DeclContext *DC) {
 }
 
 /// Write an FP_PRAGMA_OPTIONS block for the given FPOptions.
-void ASTWriter::WriteFPPragmaOptions(const FPOptions &Opts) {
+void ASTWriter::WriteFPPragmaOptions(const FPOptionsOverride &Opts) {
   RecordData::value_type Record[] = {Opts.getAsOpaqueInt()};
   Stream.EmitRecord(FP_PRAGMA_OPTIONS, Record);
 }
@@ -4790,7 +4788,7 @@ ASTFileSignature ASTWriter::WriteASTCore(Sema &SemaRef, StringRef isysroot,
   WriteReferencedSelectorsPool(SemaRef);
   WriteLateParsedTemplates(SemaRef);
   WriteIdentifierTable(PP, SemaRef.IdResolver, isModule);
-  WriteFPPragmaOptions(SemaRef.getCurFPFeatures());
+  WriteFPPragmaOptions(SemaRef.CurFPFeatureOverrides());
   WriteOpenCLExtensions(SemaRef);
   WriteOpenCLExtensionTypes(SemaRef);
   WriteCUDAPragmas(SemaRef);
@@ -5688,8 +5686,8 @@ void ASTRecordWriter::AddCXXDefinitionData(const CXXRecordDecl *D) {
 
   // getODRHash will compute the ODRHash if it has not been previously computed.
   Record->push_back(D->getODRHash());
-  bool ModulesDebugInfo = Writer->Context->getLangOpts().ModulesDebugInfo &&
-                          Writer->WritingModule && !D->isDependentType();
+  bool ModulesDebugInfo =
+      Writer->Context->getLangOpts().ModulesDebugInfo && !D->isDependentType();
   Record->push_back(ModulesDebugInfo);
   if (ModulesDebugInfo)
     Writer->ModularCodegenDecls.push_back(Writer->GetDeclRef(D));
@@ -6583,8 +6581,13 @@ void OMPClauseWriter::VisitOMPToClause(OMPToClause *C) {
   Record.push_back(C->getTotalComponentListNum());
   Record.push_back(C->getTotalComponentsNum());
   Record.AddSourceLocation(C->getLParenLoc());
+  for (unsigned I = 0; I < NumberOfOMPMotionModifiers; ++I) {
+    Record.push_back(C->getMotionModifier(I));
+    Record.AddSourceLocation(C->getMotionModifierLoc(I));
+  }
   Record.AddNestedNameSpecifierLoc(C->getMapperQualifierLoc());
   Record.AddDeclarationNameInfo(C->getMapperIdInfo());
+  Record.AddSourceLocation(C->getColonLoc());
   for (auto *E : C->varlists())
     Record.AddStmt(E);
   for (auto *E : C->mapperlists())
@@ -6607,8 +6610,13 @@ void OMPClauseWriter::VisitOMPFromClause(OMPFromClause *C) {
   Record.push_back(C->getTotalComponentListNum());
   Record.push_back(C->getTotalComponentsNum());
   Record.AddSourceLocation(C->getLParenLoc());
+  for (unsigned I = 0; I < NumberOfOMPMotionModifiers; ++I) {
+    Record.push_back(C->getMotionModifier(I));
+    Record.AddSourceLocation(C->getMotionModifierLoc(I));
+  }
   Record.AddNestedNameSpecifierLoc(C->getMapperQualifierLoc());
   Record.AddDeclarationNameInfo(C->getMapperIdInfo());
+  Record.AddSourceLocation(C->getColonLoc());
   for (auto *E : C->varlists())
     Record.AddStmt(E);
   for (auto *E : C->mapperlists())
@@ -6772,4 +6780,18 @@ void ASTRecordWriter::writeOMPTraitInfo(const OMPTraitInfo *TI) {
         writeEnum(Property.Kind);
     }
   }
+}
+
+void ASTRecordWriter::writeOMPChildren(OMPChildren *Data) {
+  if (!Data)
+    return;
+  writeUInt32(Data->getNumClauses());
+  writeUInt32(Data->getNumChildren());
+  writeBool(Data->hasAssociatedStmt());
+  for (unsigned I = 0, E = Data->getNumClauses(); I < E; ++I)
+    writeOMPClause(Data->getClauses()[I]);
+  if (Data->hasAssociatedStmt())
+    AddStmt(Data->getAssociatedStmt());
+  for (unsigned I = 0, E = Data->getNumChildren(); I < E; ++I)
+    AddStmt(Data->getChildren()[I]);
 }
