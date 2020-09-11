@@ -747,6 +747,9 @@ defm SI_SPILL_A32  : SI_SPILL_VGPR <AGPR_32, 1>;
 defm SI_SPILL_A64  : SI_SPILL_VGPR <AReg_64, 1>;
 defm SI_SPILL_A96  : SI_SPILL_VGPR <AReg_96, 1>;
 defm SI_SPILL_A128 : SI_SPILL_VGPR <AReg_128, 1>;
+defm SI_SPILL_A160 : SI_SPILL_VGPR <AReg_160, 1>;
+defm SI_SPILL_A192 : SI_SPILL_VGPR <AReg_192, 1>;
+defm SI_SPILL_A256 : SI_SPILL_VGPR <AReg_256, 1>;
 defm SI_SPILL_A512 : SI_SPILL_VGPR <AReg_512, 1>;
 defm SI_SPILL_A1024 : SI_SPILL_VGPR <AReg_1024, 1>;
 
@@ -1629,39 +1632,39 @@ def : GCNPat <
 multiclass SI_WATERFALL_Pattern < ValueType dvt, ValueType svt, string VecSize> {
   def : GCNPat<
     (i32 (int_amdgcn_waterfall_begin svt:$idx)),
-    (!cast<Instruction>("SI_WATERFALL_BEGIN_"#VecSize) $idx)
+    (!cast<Instruction>("SI_WATERFALL_BEGIN_"#VecSize) svt:$idx)
   >;
 
   def : GCNPat<
     (dvt (int_amdgcn_waterfall_readfirstlane i32:$tok, svt:$src)),
-    (!cast<Instruction>("SI_WATERFALL_READFIRSTLANE_"#VecSize) $tok, $src)
+    (!cast<Instruction>("SI_WATERFALL_READFIRSTLANE_"#VecSize) i32:$tok, svt:$src)
   >;
 
   def : GCNPat<
     (svt (int_amdgcn_waterfall_end i32:$tok, svt:$src)),
-    (!cast<Instruction>("SI_WATERFALL_END_"#VecSize) $tok, $src)
+    (!cast<Instruction>("SI_WATERFALL_END_"#VecSize) i32:$tok, svt:$src)
   >;
 }
 
 multiclass SI_WATERFALL_S_Pattern < ValueType svt, string VecSize> {
   def : GCNPat<
     (i32 (int_amdgcn_waterfall_begin svt:$idx)),
-    (!cast<Instruction>("SI_WATERFALL_BEGIN_"#VecSize) $idx)
+    (!cast<Instruction>("SI_WATERFALL_BEGIN_"#VecSize) svt:$idx)
   >;
 
   def : GCNPat<
     (svt (int_amdgcn_waterfall_readfirstlane i32:$tok, svt:$src)),
-    (!cast<Instruction>("SI_WATERFALL_READFIRSTLANE_"#VecSize) $tok, $src)
+    (!cast<Instruction>("SI_WATERFALL_READFIRSTLANE_"#VecSize) i32:$tok, svt:$src)
   >;
 
   def : GCNPat<
     (svt (int_amdgcn_waterfall_end i32:$tok, svt:$src)),
-    (!cast<Instruction>("SI_WATERFALL_END_"#VecSize) $tok, $src)
+    (!cast<Instruction>("SI_WATERFALL_END_"#VecSize) i32:$tok, svt:$src)
   >;
 
   def : GCNPat<
     (svt (int_amdgcn_waterfall_last_use i32:$tok, svt:$src)),
-    (!cast<Instruction>("SI_WATERFALL_LAST_USE_"#VecSize) $tok, $src)
+    (!cast<Instruction>("SI_WATERFALL_LAST_USE_"#VecSize) i32:$tok, svt:$src)
   >;
 }
 

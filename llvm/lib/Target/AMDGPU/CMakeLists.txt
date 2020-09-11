@@ -114,7 +114,6 @@ add_llvm_target(AMDGPUCodeGen
   SIAnnotateControlFlow.cpp
   SIFixScratchSize.cpp
   SIFixSGPRCopies.cpp
-  SIFixupVectorISel.cpp
   SIFixVGPRCopies.cpp
   SIPreAllocateWWMRegs.cpp
   SIFoldOperands.cpp
