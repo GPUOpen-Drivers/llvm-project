@@ -1200,6 +1200,8 @@ void DAGTypeLegalizer::ExpandFloatResult(SDNode *N, unsigned ResNo) {
   case ISD::STRICT_FTRUNC:
   case ISD::FTRUNC:     ExpandFloatRes_FTRUNC(N, Lo, Hi); break;
   case ISD::LOAD:       ExpandFloatRes_LOAD(N, Lo, Hi); break;
+  case ISD::STRICT_SINT_TO_FP:
+  case ISD::STRICT_UINT_TO_FP:
   case ISD::SINT_TO_FP:
   case ISD::UINT_TO_FP: ExpandFloatRes_XINT_TO_FP(N, Lo, Hi); break;
   case ISD::STRICT_FREM:
@@ -1598,10 +1600,13 @@ void DAGTypeLegalizer::ExpandFloatRes_XINT_TO_FP(SDNode *N, SDValue &Lo,
   assert(N->getValueType(0) == MVT::ppcf128 && "Unsupported XINT_TO_FP!");
   EVT VT = N->getValueType(0);
   EVT NVT = TLI.getTypeToTransformTo(*DAG.getContext(), VT);
-  SDValue Src = N->getOperand(0);
+  bool Strict = N->isStrictFPOpcode();
+  SDValue Src = N->getOperand(Strict ? 1 : 0);
   EVT SrcVT = Src.getValueType();
-  bool isSigned = N->getOpcode() == ISD::SINT_TO_FP;
+  bool isSigned = N->getOpcode() == ISD::SINT_TO_FP ||
+                  N->getOpcode() == ISD::STRICT_SINT_TO_FP;
   SDLoc dl(N);
+  SDValue Chain = Strict ? N->getOperand(0) : DAG.getEntryNode();
 
   // First do an SINT_TO_FP, whether the original was signed or unsigned.
   // When promoting partial word types to i32 we must honor the signedness,
@@ -1612,7 +1617,12 @@ void DAGTypeLegalizer::ExpandFloatRes_XINT_TO_FP(SDNode *N, SDValue &Lo,
                       MVT::i32, Src);
     Lo = DAG.getConstantFP(APFloat(DAG.EVTToAPFloatSemantics(NVT),
                                    APInt(NVT.getSizeInBits(), 0)), dl, NVT);
-    Hi = DAG.getNode(ISD::SINT_TO_FP, dl, NVT, Src);
+    if (Strict) {
+      Hi = DAG.getNode(ISD::STRICT_SINT_TO_FP, dl, {NVT, MVT::Other},
+                       {Chain, Src});
+      Chain = Hi.getValue(1);
+    } else
+      Hi = DAG.getNode(ISD::SINT_TO_FP, dl, NVT, Src);
   } else {
     RTLIB::Libcall LC = RTLIB::UNKNOWN_LIBCALL;
     if (SrcVT.bitsLE(MVT::i64)) {
@@ -1627,14 +1637,24 @@ void DAGTypeLegalizer::ExpandFloatRes_XINT_TO_FP(SDNode *N, SDValue &Lo,
 
     TargetLowering::MakeLibCallOptions CallOptions;
     CallOptions.setSExt(true);
-    Hi = TLI.makeLibCall(DAG, LC, VT, Src, CallOptions, dl).first;
-    GetPairElements(Hi, Lo, Hi);
+    std::pair<SDValue, SDValue> Tmp =
+        TLI.makeLibCall(DAG, LC, VT, Src, CallOptions, dl, Chain);
+    if (Strict)
+      Chain = Tmp.second;
+    GetPairElements(Tmp.first, Lo, Hi);
   }
 
-  if (isSigned)
+  if (isSigned) {
+    if (Strict)
+      ReplaceValueWith(SDValue(N, 1), Chain);
+
     return;
+  }
 
   // Unsigned - fix up the SINT_TO_FP value just calculated.
+  // FIXME: For unsigned i128 to ppc_fp128 conversion, we need to carefully
+  // keep semantics correctness if the integer is not exactly representable
+  // here. See ExpandLegalINT_TO_FP.
   Hi = DAG.getNode(ISD::BUILD_PAIR, dl, VT, Lo, Hi);
   SrcVT = Src.getValueType();
 
@@ -1659,10 +1679,15 @@ void DAGTypeLegalizer::ExpandFloatRes_XINT_TO_FP(SDNode *N, SDValue &Lo,
   }
 
   // TODO: Are there fast-math-flags to propagate to this FADD?
-  Lo = DAG.getNode(ISD::FADD, dl, VT, Hi,
-                   DAG.getConstantFP(APFloat(APFloat::PPCDoubleDouble(),
-                                             APInt(128, Parts)),
-                                     dl, MVT::ppcf128));
+  SDValue NewLo = DAG.getConstantFP(
+      APFloat(APFloat::PPCDoubleDouble(), APInt(128, Parts)), dl, MVT::ppcf128);
+  if (Strict) {
+    Lo = DAG.getNode(ISD::STRICT_FADD, dl, {VT, MVT::Other},
+                     {Chain, Hi, NewLo});
+    Chain = Lo.getValue(1);
+    ReplaceValueWith(SDValue(N, 1), Chain);
+  } else
+    Lo = DAG.getNode(ISD::FADD, dl, VT, Hi, NewLo);
   Lo = DAG.getSelectCC(dl, Src, DAG.getConstant(0, dl, SrcVT),
                        Lo, Hi, ISD::SETLT);
   GetPairElements(Lo, Lo, Hi);
@@ -1752,17 +1777,18 @@ void DAGTypeLegalizer::FloatExpandSetCCOperands(SDValue &NewLHS,
   // The following can be improved, but not that much.
   SDValue Tmp1, Tmp2, Tmp3, OutputChain;
   Tmp1 = DAG.getSetCC(dl, getSetCCResultType(LHSHi.getValueType()), LHSHi,
-                      RHSHi, ISD::SETOEQ, Chain, IsSignaling);
+                      RHSHi, ISD::SETOEQ, SDNodeFlags(), Chain, IsSignaling);
   OutputChain = Tmp1->getNumValues() > 1 ? Tmp1.getValue(1) : SDValue();
   Tmp2 = DAG.getSetCC(dl, getSetCCResultType(LHSLo.getValueType()), LHSLo,
-                      RHSLo, CCCode, OutputChain, IsSignaling);
+                      RHSLo, CCCode, SDNodeFlags(), OutputChain, IsSignaling);
   OutputChain = Tmp2->getNumValues() > 1 ? Tmp2.getValue(1) : SDValue();
   Tmp3 = DAG.getNode(ISD::AND, dl, Tmp1.getValueType(), Tmp1, Tmp2);
-  Tmp1 = DAG.getSetCC(dl, getSetCCResultType(LHSHi.getValueType()), LHSHi,
-                      RHSHi, ISD::SETUNE, OutputChain, IsSignaling);
+  Tmp1 =
+      DAG.getSetCC(dl, getSetCCResultType(LHSHi.getValueType()), LHSHi, RHSHi,
+                   ISD::SETUNE, SDNodeFlags(), OutputChain, IsSignaling);
   OutputChain = Tmp1->getNumValues() > 1 ? Tmp1.getValue(1) : SDValue();
   Tmp2 = DAG.getSetCC(dl, getSetCCResultType(LHSHi.getValueType()), LHSHi,
-                      RHSHi, CCCode, OutputChain, IsSignaling);
+                      RHSHi, CCCode, SDNodeFlags(), OutputChain, IsSignaling);
   OutputChain = Tmp2->getNumValues() > 1 ? Tmp2.getValue(1) : SDValue();
   Tmp1 = DAG.getNode(ISD::AND, dl, Tmp1.getValueType(), Tmp1, Tmp2);
   NewLHS = DAG.getNode(ISD::OR, dl, Tmp1.getValueType(), Tmp1, Tmp3);

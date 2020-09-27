@@ -390,8 +390,10 @@ static bool checkTargetOptions(const TargetOptions &TargetOpts,
   // We can tolerate different CPUs in many cases, notably when one CPU
   // supports a strict superset of another. When allowing compatible
   // differences skip this check.
-  if (!AllowCompatibleDifferences)
+  if (!AllowCompatibleDifferences) {
     CHECK_TARGET_OPT(CPU, "target CPU");
+    CHECK_TARGET_OPT(TuneCPU, "tune CPU");
+  }
 
 #undef CHECK_TARGET_OPT
 
@@ -3720,7 +3722,9 @@ ASTReader::ReadASTBlock(ModuleFile &F, unsigned ClientLoadCapabilities) {
     }
 
     case LATE_PARSED_TEMPLATE:
-      LateParsedTemplates.append(Record.begin(), Record.end());
+      LateParsedTemplates.emplace_back(
+          std::piecewise_construct, std::forward_as_tuple(&F),
+          std::forward_as_tuple(Record.begin(), Record.end()));
       break;
 
     case OPTIMIZE_PRAGMA_OPTIONS:
@@ -4987,10 +4991,10 @@ void ASTReader::InitializeContext() {
                         /*ImportLoc=*/Import.ImportLoc);
       if (Import.ImportLoc.isValid())
         PP.makeModuleVisible(Imported, Import.ImportLoc);
-      // FIXME: should we tell Sema to make the module visible too?
+      // This updates visibility for Preprocessor only. For Sema, which can be
+      // nullptr here, we do the same later, in UpdateSema().
     }
   }
-  ImportedModules.clear();
 }
 
 void ASTReader::finalizeForWriting() {
@@ -5779,6 +5783,7 @@ bool ASTReader::ParseTargetOptions(const RecordData &Record, bool Complain,
   TargetOptions TargetOpts;
   TargetOpts.Triple = ReadString(Record, Idx);
   TargetOpts.CPU = ReadString(Record, Idx);
+  TargetOpts.TuneCPU = ReadString(Record, Idx);
   TargetOpts.ABI = ReadString(Record, Idx);
   for (unsigned N = Record[Idx++]; N; --N) {
     TargetOpts.FeaturesAsWritten.push_back(ReadString(Record, Idx));
@@ -7943,6 +7948,15 @@ void ASTReader::UpdateSema() {
       SemaObj->FpPragmaStack.CurrentPragmaLocation = FpPragmaCurrentLocation;
     }
   }
+
+  // For non-modular AST files, restore visiblity of modules.
+  for (auto &Import : ImportedModules) {
+    if (Import.ImportLoc.isInvalid())
+      continue;
+    if (Module *Imported = getSubmodule(Import.ID)) {
+      SemaObj->makeModuleVisible(Imported, Import.ImportLoc);
+    }
+  }
 }
 
 IdentifierInfo *ASTReader::get(StringRef Name) {
@@ -8377,25 +8391,28 @@ void ASTReader::ReadPendingInstantiations(
 void ASTReader::ReadLateParsedTemplates(
     llvm::MapVector<const FunctionDecl *, std::unique_ptr<LateParsedTemplate>>
         &LPTMap) {
-  for (unsigned Idx = 0, N = LateParsedTemplates.size(); Idx < N;
-       /* In loop */) {
-    FunctionDecl *FD = cast<FunctionDecl>(GetDecl(LateParsedTemplates[Idx++]));
+  for (auto &LPT : LateParsedTemplates) {
+    ModuleFile *FMod = LPT.first;
+    RecordDataImpl &LateParsed = LPT.second;
+    for (unsigned Idx = 0, N = LateParsed.size(); Idx < N;
+         /* In loop */) {
+      FunctionDecl *FD =
+          cast<FunctionDecl>(GetLocalDecl(*FMod, LateParsed[Idx++]));
 
-    auto LT = std::make_unique<LateParsedTemplate>();
-    LT->D = GetDecl(LateParsedTemplates[Idx++]);
+      auto LT = std::make_unique<LateParsedTemplate>();
+      LT->D = GetLocalDecl(*FMod, LateParsed[Idx++]);
 
-    ModuleFile *F = getOwningModuleFile(LT->D);
-    assert(F && "No module");
+      ModuleFile *F = getOwningModuleFile(LT->D);
+      assert(F && "No module");
 
-    unsigned TokN = LateParsedTemplates[Idx++];
-    LT->Toks.reserve(TokN);
-    for (unsigned T = 0; T < TokN; ++T)
-      LT->Toks.push_back(ReadToken(*F, LateParsedTemplates, Idx));
+      unsigned TokN = LateParsed[Idx++];
+      LT->Toks.reserve(TokN);
+      for (unsigned T = 0; T < TokN; ++T)
+        LT->Toks.push_back(ReadToken(*F, LateParsed, Idx));
 
-    LPTMap.insert(std::make_pair(FD, std::move(LT)));
+      LPTMap.insert(std::make_pair(FD, std::move(LT)));
+    }
   }
-
-  LateParsedTemplates.clear();
 }
 
 void ASTReader::LoadSelector(Selector Sel) {
@@ -8941,7 +8958,7 @@ ASTReader::ReadSourceRange(ModuleFile &F, const RecordData &Record,
   return SourceRange(beg, end);
 }
 
-static FixedPointSemantics
+static llvm::FixedPointSemantics
 ReadFixedPointSemantics(const SmallVectorImpl<uint64_t> &Record,
                         unsigned &Idx) {
   unsigned Width = Record[Idx++];
@@ -8950,8 +8967,8 @@ ReadFixedPointSemantics(const SmallVectorImpl<uint64_t> &Record,
   bool IsSigned = Tmp & 0x1;
   bool IsSaturated = Tmp & 0x2;
   bool HasUnsignedPadding = Tmp & 0x4;
-  return FixedPointSemantics(Width, Scale, IsSigned, IsSaturated,
-                             HasUnsignedPadding);
+  return llvm::FixedPointSemantics(Width, Scale, IsSigned, IsSaturated,
+                                   HasUnsignedPadding);
 }
 
 static const llvm::fltSemantics &
@@ -8974,8 +8991,8 @@ APValue ASTRecordReader::readAPValue() {
     return APValue(readAPFloat(FloatSema));
   }
   case APValue::FixedPoint: {
-    FixedPointSemantics FPSema = ReadFixedPointSemantics(Record, Idx);
-    return APValue(APFixedPoint(readAPInt(), FPSema));
+    llvm::FixedPointSemantics FPSema = ReadFixedPointSemantics(Record, Idx);
+    return APValue(llvm::APFixedPoint(readAPInt(), FPSema));
   }
   case APValue::ComplexInt: {
     llvm::APSInt First = readAPSInt();

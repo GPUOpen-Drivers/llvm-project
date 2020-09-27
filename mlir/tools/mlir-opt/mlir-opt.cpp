@@ -45,9 +45,11 @@ void registerTestAllReduceLoweringPass();
 void registerTestBufferPlacementPreparationPass();
 void registerTestCallGraphPass();
 void registerTestConstantFold();
+void registerTestConvVectorization();
 void registerTestConvertGPUKernelToCubinPass();
 void registerTestConvertGPUKernelToHsacoPass();
 void registerTestDominancePass();
+void registerTestDialect(DialectRegistry &);
 void registerTestExpandTanhPass();
 void registerTestFunc();
 void registerTestGpuMemoryPromotionPass();
@@ -65,6 +67,8 @@ void registerTestMemRefDependenceCheck();
 void registerTestMemRefStrideCalculation();
 void registerTestOpaqueLoc();
 void registerTestPreparationPassWithAllowedMemrefResults();
+void registerTestPrintDefUsePass();
+void registerTestPrintNestingPass();
 void registerTestRecursiveTypesPass();
 void registerTestReducer();
 void registerTestSpirvEntryPointABIPass();
@@ -90,6 +94,7 @@ void registerTestPasses() {
   registerTestAffineLoopUnswitchingPass();
   registerTestLoopPermutationPass();
   registerTestCallGraphPass();
+  registerTestConvVectorization();
   registerTestConstantFold();
 #if MLIR_CUDA_CONVERSIONS_ENABLED
   registerTestConvertGPUKernelToCubinPass();
@@ -114,6 +119,8 @@ void registerTestPasses() {
   registerTestMemRefStrideCalculation();
   registerTestOpaqueLoc();
   registerTestPreparationPassWithAllowedMemrefResults();
+  registerTestPrintDefUsePass();
+  registerTestPrintNestingPass();
   registerTestRecursiveTypesPass();
   registerTestReducer();
   registerTestGpuParallelLoopMappingPass();
@@ -130,5 +137,12 @@ int main(int argc, char **argv) {
 #ifdef MLIR_INCLUDE_TESTS
   registerTestPasses();
 #endif
-  return failed(MlirOptMain(argc, argv, "MLIR modular optimizer driver"));
+  DialectRegistry registry;
+  registerAllDialects(registry);
+#ifdef MLIR_INCLUDE_TESTS
+  registerTestDialect(registry);
+#endif
+  return failed(MlirOptMain(argc, argv, "MLIR modular optimizer driver\n",
+                            registry,
+                            /*preloadDialectsInContext=*/false));
 }

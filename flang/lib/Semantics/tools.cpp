@@ -739,7 +739,6 @@ bool InProtectedContext(const Symbol &symbol, const Scope &currentScope) {
 }
 
 // C1101 and C1158
-// TODO Need to check for a coindexed object (why? C1103?)
 std::optional<parser::MessageFixedText> WhyNotModifiable(
     const Symbol &symbol, const Scope &scope) {
   const Symbol *root{GetAssociationRoot(symbol)};
@@ -965,8 +964,7 @@ SymbolVector OrderParameterDeclarations(const Symbol &typeSymbol) {
 const DeclTypeSpec &FindOrInstantiateDerivedType(Scope &scope,
     DerivedTypeSpec &&spec, SemanticsContext &semanticsContext,
     DeclTypeSpec::Category category) {
-  spec.CookParameters(semanticsContext.foldingContext());
-  spec.EvaluateParameters(semanticsContext.foldingContext());
+  spec.EvaluateParameters(semanticsContext);
   if (const DeclTypeSpec *
       type{scope.FindInstantiatedDerivedType(spec, category)}) {
     return *type;
@@ -1303,6 +1301,11 @@ bool HasAlternateReturns(const Symbol &subprogram) {
     }
   }
   return false;
+}
+
+bool InCommonBlock(const Symbol &symbol) {
+  const auto *details{symbol.detailsIf<ObjectEntityDetails>()};
+  return details && details->commonBlock();
 }
 
 } // namespace Fortran::semantics

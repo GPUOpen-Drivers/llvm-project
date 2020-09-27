@@ -36,8 +36,9 @@
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/DAGCombine.h"
-#include "llvm/CodeGen/ISDOpcodes.h"
+#include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GlobalISel/GISelKnownBits.h"
+#include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -1399,14 +1400,43 @@ bool SITargetLowering::allowsMisalignedMemoryAccessesImpl(
 
   if (AddrSpace == AMDGPUAS::LOCAL_ADDRESS ||
       AddrSpace == AMDGPUAS::REGION_ADDRESS) {
-    // ds_read/write_b64 require 8-byte alignment, but we can do a 4 byte
-    // aligned, 8 byte access in a single operation using ds_read2/write2_b32
-    // with adjacent offsets.
-    bool AlignedBy4 = Alignment >= Align(4);
-    if (IsFast)
-      *IsFast = AlignedBy4;
+    // Check if alignment requirements for ds_read/write instructions are
+    // disabled.
+    if (Subtarget->hasUnalignedDSAccessEnabled() &&
+        !Subtarget->hasLDSMisalignedBug()) {
+      if (IsFast)
+        *IsFast = true;
+      return true;
+    }
 
-    return AlignedBy4;
+    if (Size == 64) {
+      // ds_read/write_b64 require 8-byte alignment, but we can do a 4 byte
+      // aligned, 8 byte access in a single operation using ds_read2/write2_b32
+      // with adjacent offsets.
+      bool AlignedBy4 = Alignment >= Align(4);
+      if (IsFast)
+        *IsFast = AlignedBy4;
+
+      return AlignedBy4;
+    }
+    if (Size == 96) {
+      // ds_read/write_b96 require 16-byte alignment on gfx8 and older.
+      bool Aligned = Alignment >= Align(16);
+      if (IsFast)
+        *IsFast = Aligned;
+
+      return Aligned;
+    }
+    if (Size == 128) {
+      // ds_read/write_b128 require 16-byte alignment on gfx8 and older, but we
+      // can do a 8 byte aligned, 16 byte access in a single operation using
+      // ds_read2/write2_b64.
+      bool Aligned = Alignment >= Align(8);
+      if (IsFast)
+        *IsFast = Aligned;
+
+      return Aligned;
+    }
   }
 
   // FIXME: We have to be conservative here and assume that flat operations
@@ -1422,7 +1452,9 @@ bool SITargetLowering::allowsMisalignedMemoryAccessesImpl(
     return AlignedBy4;
   }
 
-  if (Subtarget->hasUnalignedBufferAccess()) {
+  if (Subtarget->hasUnalignedBufferAccessEnabled() &&
+      !(AddrSpace == AMDGPUAS::LOCAL_ADDRESS ||
+        AddrSpace == AMDGPUAS::REGION_ADDRESS)) {
     // If we have an uniform constant load, it still requires using a slow
     // buffer instruction if unaligned.
     if (IsFast) {
@@ -1929,26 +1961,26 @@ void SITargetLowering::allocateHSAUserSGPRs(CCState &CCInfo,
                                             const SIRegisterInfo &TRI,
                                             SIMachineFunctionInfo &Info) const {
   if (Info.hasImplicitBufferPtr()) {
-    unsigned ImplicitBufferPtrReg = Info.addImplicitBufferPtr(TRI);
+    Register ImplicitBufferPtrReg = Info.addImplicitBufferPtr(TRI);
     MF.addLiveIn(ImplicitBufferPtrReg, &AMDGPU::SGPR_64RegClass);
     CCInfo.AllocateReg(ImplicitBufferPtrReg);
   }
 
   // FIXME: How should these inputs interact with inreg / custom SGPR inputs?
   if (Info.hasPrivateSegmentBuffer()) {
-    unsigned PrivateSegmentBufferReg = Info.addPrivateSegmentBuffer(TRI);
+    Register PrivateSegmentBufferReg = Info.addPrivateSegmentBuffer(TRI);
     MF.addLiveIn(PrivateSegmentBufferReg, &AMDGPU::SGPR_128RegClass);
     CCInfo.AllocateReg(PrivateSegmentBufferReg);
   }
 
   if (Info.hasDispatchPtr()) {
-    unsigned DispatchPtrReg = Info.addDispatchPtr(TRI);
+    Register DispatchPtrReg = Info.addDispatchPtr(TRI);
     MF.addLiveIn(DispatchPtrReg, &AMDGPU::SGPR_64RegClass);
     CCInfo.AllocateReg(DispatchPtrReg);
   }
 
   if (Info.hasQueuePtr()) {
-    unsigned QueuePtrReg = Info.addQueuePtr(TRI);
+    Register QueuePtrReg = Info.addQueuePtr(TRI);
     MF.addLiveIn(QueuePtrReg, &AMDGPU::SGPR_64RegClass);
     CCInfo.AllocateReg(QueuePtrReg);
   }
@@ -1963,13 +1995,13 @@ void SITargetLowering::allocateHSAUserSGPRs(CCState &CCInfo,
   }
 
   if (Info.hasDispatchID()) {
-    unsigned DispatchIDReg = Info.addDispatchID(TRI);
+    Register DispatchIDReg = Info.addDispatchID(TRI);
     MF.addLiveIn(DispatchIDReg, &AMDGPU::SGPR_64RegClass);
     CCInfo.AllocateReg(DispatchIDReg);
   }
 
   if (Info.hasFlatScratchInit()) {
-    unsigned FlatScratchInitReg = Info.addFlatScratchInit(TRI);
+    Register FlatScratchInitReg = Info.addFlatScratchInit(TRI);
     MF.addLiveIn(FlatScratchInitReg, &AMDGPU::SGPR_64RegClass);
     CCInfo.AllocateReg(FlatScratchInitReg);
   }
@@ -1985,25 +2017,25 @@ void SITargetLowering::allocateSystemSGPRs(CCState &CCInfo,
                                            CallingConv::ID CallConv,
                                            bool IsShader) const {
   if (Info.hasWorkGroupIDX()) {
-    unsigned Reg = Info.addWorkGroupIDX();
+    Register Reg = Info.addWorkGroupIDX();
     MF.addLiveIn(Reg, &AMDGPU::SGPR_32RegClass);
     CCInfo.AllocateReg(Reg);
   }
 
   if (Info.hasWorkGroupIDY()) {
-    unsigned Reg = Info.addWorkGroupIDY();
+    Register Reg = Info.addWorkGroupIDY();
     MF.addLiveIn(Reg, &AMDGPU::SGPR_32RegClass);
     CCInfo.AllocateReg(Reg);
   }
 
   if (Info.hasWorkGroupIDZ()) {
-    unsigned Reg = Info.addWorkGroupIDZ();
+    Register Reg = Info.addWorkGroupIDZ();
     MF.addLiveIn(Reg, &AMDGPU::SGPR_32RegClass);
     CCInfo.AllocateReg(Reg);
   }
 
   if (Info.hasWorkGroupInfo()) {
-    unsigned Reg = Info.addWorkGroupInfo();
+    Register Reg = Info.addWorkGroupInfo();
     MF.addLiveIn(Reg, &AMDGPU::SGPR_32RegClass);
     CCInfo.AllocateReg(Reg);
   }
@@ -4229,21 +4261,16 @@ MachineBasicBlock *SITargetLowering::EmitInstrWithCustomInserter(
 
     // The dedicated instructions can only set the whole denorm or round mode at
     // once, not a subset of bits in either.
-    if (Width == 8 && (SetMask & (AMDGPU::Hwreg::FP_ROUND_MASK |
-                                  AMDGPU::Hwreg::FP_DENORM_MASK)) == SetMask) {
+    if (SetMask ==
+        (AMDGPU::Hwreg::FP_ROUND_MASK | AMDGPU::Hwreg::FP_DENORM_MASK)) {
       // If this fully sets both the round and denorm mode, emit the two
       // dedicated instructions for these.
-      assert(Offset == 0);
       SetRoundOp = AMDGPU::S_ROUND_MODE;
       SetDenormOp = AMDGPU::S_DENORM_MODE;
-    } else if (Width == 4) {
-      if ((SetMask & AMDGPU::Hwreg::FP_ROUND_MASK) == SetMask) {
-        SetRoundOp = AMDGPU::S_ROUND_MODE;
-        assert(Offset == 0);
-      } else if ((SetMask & AMDGPU::Hwreg::FP_DENORM_MASK) == SetMask) {
-        SetDenormOp = AMDGPU::S_DENORM_MODE;
-        assert(Offset == 4);
-      }
+    } else if (SetMask == AMDGPU::Hwreg::FP_ROUND_MASK) {
+      SetRoundOp = AMDGPU::S_ROUND_MODE;
+    } else if (SetMask == AMDGPU::Hwreg::FP_DENORM_MASK) {
+      SetDenormOp = AMDGPU::S_DENORM_MODE;
     }
 
     if (SetRoundOp || SetDenormOp) {
@@ -4302,6 +4329,12 @@ MVT SITargetLowering::getScalarShiftAmountTy(const DataLayout &, EVT VT) const {
   // TODO: Should i16 be used always if legal? For now it would force VALU
   // shifts.
   return (VT == MVT::i16) ? MVT::i16 : MVT::i32;
+}
+
+LLT SITargetLowering::getPreferredShiftAmountTy(LLT Ty) const {
+  return (Ty.getScalarSizeInBits() <= 16 && Subtarget->has16BitInsts())
+             ? Ty.changeElementSize(16)
+             : Ty.changeElementSize(32);
 }
 
 // Answering this is somewhat tricky and depends on the specific device which
@@ -5019,7 +5052,7 @@ SDValue SITargetLowering::LowerRETURNADDR(SDValue Op,
 
   const SIRegisterInfo *TRI = getSubtarget()->getRegisterInfo();
   // Get the return address reg and mark it as an implicit live-in
-  unsigned Reg = MF.addLiveIn(TRI->getReturnAddressReg(MF), getRegClassFor(VT, Op.getNode()->isDivergent()));
+  Register Reg = MF.addLiveIn(TRI->getReturnAddressReg(MF), getRegClassFor(VT, Op.getNode()->isDivergent()));
 
   return DAG.getCopyFromReg(DAG.getEntryNode(), DL, Reg, VT);
 }
@@ -5115,7 +5148,7 @@ SDValue SITargetLowering::lowerTRAP(SDValue Op, SelectionDAG &DAG) const {
 
   MachineFunction &MF = DAG.getMachineFunction();
   SIMachineFunctionInfo *Info = MF.getInfo<SIMachineFunctionInfo>();
-  unsigned UserSGPR = Info->getQueuePtrUserSGPR();
+  Register UserSGPR = Info->getQueuePtrUserSGPR();
   assert(UserSGPR != AMDGPU::NoRegister);
   SDValue QueuePtr = CreateLiveInRegister(
     DAG, &AMDGPU::SReg_64RegClass, UserSGPR, MVT::i64);
@@ -5557,7 +5590,9 @@ buildPCRelGlobalAddress(SelectionDAG &DAG, const GlobalValue *GV,
   // variable, but since the encoding of $symbol starts 4 bytes after the start
   // of the s_add_u32 instruction, we end up with an offset that is 4 bytes too
   // small. This requires us to add 4 to the global variable offset in order to
-  // compute the correct address.
+  // compute the correct address. Similarly for the s_addc_u32 instruction, the
+  // encoding of $symbol starts 12 bytes after the start of the s_add_u32
+  // instruction.
   SDValue PtrLo =
       DAG.getTargetGlobalAddress(GV, DL, MVT::i32, Offset + 4, GAFlags);
   SDValue PtrHi;
@@ -5565,7 +5600,7 @@ buildPCRelGlobalAddress(SelectionDAG &DAG, const GlobalValue *GV,
     PtrHi = DAG.getTargetConstant(0, DL, MVT::i32);
   } else {
     PtrHi =
-        DAG.getTargetGlobalAddress(GV, DL, MVT::i32, Offset + 4, GAFlags + 1);
+        DAG.getTargetGlobalAddress(GV, DL, MVT::i32, Offset + 12, GAFlags + 1);
   }
   return DAG.getNode(AMDGPUISD::PC_ADD_REL_OFFSET, DL, PtrVT, PtrLo, PtrHi);
 }
@@ -5574,15 +5609,32 @@ SDValue SITargetLowering::LowerGlobalAddress(AMDGPUMachineFunction *MFI,
                                              SDValue Op,
                                              SelectionDAG &DAG) const {
   GlobalAddressSDNode *GSD = cast<GlobalAddressSDNode>(Op);
+  SDLoc DL(GSD);
+  EVT PtrVT = Op.getValueType();
+
   const GlobalValue *GV = GSD->getGlobal();
   if ((GSD->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS &&
        shouldUseLDSConstAddress(GV)) ||
       GSD->getAddressSpace() == AMDGPUAS::REGION_ADDRESS ||
-      GSD->getAddressSpace() == AMDGPUAS::PRIVATE_ADDRESS)
+      GSD->getAddressSpace() == AMDGPUAS::PRIVATE_ADDRESS) {
+    if (GSD->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS &&
+        GV->hasExternalLinkage()) {
+      Type *Ty = GV->getValueType();
+      // HIP uses an unsized array `extern __shared__ T s[]` or similar
+      // zero-sized type in other languages to declare the dynamic shared
+      // memory which size is not known at the compile time. They will be
+      // allocated by the runtime and placed directly after the static
+      // allocated ones. They all share the same offset.
+      if (DAG.getDataLayout().getTypeAllocSize(Ty).isZero()) {
+        assert(PtrVT == MVT::i32 && "32-bit pointer is expected.");
+        // Adjust alignment for that dynamic shared memory array.
+        MFI->setDynLDSAlign(DAG.getDataLayout(), *cast<GlobalVariable>(GV));
+        return SDValue(
+            DAG.getMachineNode(AMDGPU::GET_GROUPSTATICSIZE, DL, PtrVT), 0);
+      }
+    }
     return AMDGPUTargetLowering::LowerGlobalAddress(MFI, Op, DAG);
-
-  SDLoc DL(GSD);
-  EVT PtrVT = Op.getValueType();
+  }
 
   if (GSD->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS) {
     SDValue GA = DAG.getTargetGlobalAddress(GV, DL, MVT::i32, GSD->getOffset(),
@@ -7831,6 +7883,8 @@ SDValue SITargetLowering::LowerLOAD(SDValue Op, SelectionDAG &DAG) const {
 
   if (!allowsMemoryAccessForAlignment(*DAG.getContext(), DAG.getDataLayout(),
                                       MemVT, *Load->getMemOperand())) {
+    if (MemVT.isVector() && MemVT.getVectorNumElements() > 1)
+      return SplitVectorLoad(Op, DAG);
     SDValue Ops[2];
     std::tie(Ops[0], Ops[1]) = expandUnalignedLoad(Load, DAG);
     return DAG.getMergeValues(Ops, DL);
@@ -7925,9 +7979,12 @@ SDValue SITargetLowering::LowerLOAD(SDValue Op, SelectionDAG &DAG) const {
       llvm_unreachable("unsupported private_element_size");
     }
   } else if (AS == AMDGPUAS::LOCAL_ADDRESS || AS == AMDGPUAS::REGION_ADDRESS) {
-    // Use ds_read_b128 if possible.
-    if (Subtarget->useDS128() && Load->getAlignment() >= 16 &&
-        MemVT.getStoreSize() == 16)
+    // Use ds_read_b128 or ds_read_b96 when possible.
+    if (Subtarget->hasDS96AndDS128() &&
+        ((Subtarget->useDS128() && MemVT.getStoreSize() == 16) ||
+         MemVT.getStoreSize() == 12) &&
+        allowsMisalignedMemoryAccessesImpl(MemVT.getSizeInBits(), AS,
+                                           Load->getAlign()))
       return SDValue();
 
     if (NumElements > 2)
@@ -8351,6 +8408,8 @@ SDValue SITargetLowering::LowerSTORE(SDValue Op, SelectionDAG &DAG) const {
 
   if (!allowsMemoryAccessForAlignment(*DAG.getContext(), DAG.getDataLayout(),
                                       VT, *Store->getMemOperand())) {
+    if (VT.isVector() && VT.getVectorNumElements() > 1)
+      return SplitVectorStore(Op, DAG);
     return expandUnalignedStore(Store, DAG);
   }
 
@@ -8395,9 +8454,12 @@ SDValue SITargetLowering::LowerSTORE(SDValue Op, SelectionDAG &DAG) const {
       llvm_unreachable("unsupported private_element_size");
     }
   } else if (AS == AMDGPUAS::LOCAL_ADDRESS || AS == AMDGPUAS::REGION_ADDRESS) {
-    // Use ds_write_b128 if possible.
-    if (Subtarget->useDS128() && Store->getAlignment() >= 16 &&
-        VT.getStoreSize() == 16 && NumElements != 3)
+    // Use ds_write_b128 or ds_write_b96 when possible.
+    if (Subtarget->hasDS96AndDS128() &&
+        ((Subtarget->useDS128() && VT.getStoreSize() == 16) ||
+         (VT.getStoreSize() == 12)) &&
+        allowsMisalignedMemoryAccessesImpl(VT.getSizeInBits(), AS,
+                                           Store->getAlign()))
       return SDValue();
 
     if (NumElements > 2)
@@ -10806,8 +10868,7 @@ SDNode *SITargetLowering::legalizeTargetIndependentNode(SDNode *Node,
 
     // Insert a copy to a VReg_1 virtual register so LowerI1Copies doesn't have
     // to try understanding copies to physical registers.
-    if (SrcVal.getValueType() == MVT::i1 &&
-        Register::isPhysicalRegister(DestReg->getReg())) {
+    if (SrcVal.getValueType() == MVT::i1 && DestReg->getReg().isPhysical()) {
       SDLoc SL(Node);
       MachineRegisterInfo &MRI = DAG.getMachineFunction().getRegInfo();
       SDValue VReg = DAG.getRegister(
@@ -10942,8 +11003,7 @@ void SITargetLowering::AdjustInstrPostInstrSelection(MachineInstr &MI,
         MachineOperand &Op = MI.getOperand(I);
         if ((OpInfo[I].RegClass != llvm::AMDGPU::AV_64RegClassID &&
              OpInfo[I].RegClass != llvm::AMDGPU::AV_32RegClassID) ||
-            !Register::isVirtualRegister(Op.getReg()) ||
-            !TRI->isAGPR(MRI, Op.getReg()))
+            !Op.getReg().isVirtual() || !TRI->isAGPR(MRI, Op.getReg()))
           continue;
         auto *Src = MRI.getUniqueVRegDef(Op.getReg());
         if (!Src || !Src->isCopy() ||
@@ -11357,6 +11417,50 @@ void SITargetLowering::computeKnownBitsForFrameIndex(
   // wave. We can't use vaddr in MUBUF instructions if we don't know the address
   // calculation won't overflow, so assume the sign bit is never set.
   Known.Zero.setHighBits(getSubtarget()->getKnownHighZeroBitsForFrameIndex());
+}
+
+static void knownBitsForWorkitemID(const GCNSubtarget &ST, GISelKnownBits &KB,
+                                   KnownBits &Known, unsigned Dim) {
+  unsigned MaxValue =
+      ST.getMaxWorkitemID(KB.getMachineFunction().getFunction(), Dim);
+  Known.Zero.setHighBits(countLeadingZeros(MaxValue));
+}
+
+void SITargetLowering::computeKnownBitsForTargetInstr(
+    GISelKnownBits &KB, Register R, KnownBits &Known, const APInt &DemandedElts,
+    const MachineRegisterInfo &MRI, unsigned Depth) const {
+  const MachineInstr *MI = MRI.getVRegDef(R);
+  switch (MI->getOpcode()) {
+  case AMDGPU::G_INTRINSIC: {
+    switch (MI->getIntrinsicID()) {
+    case Intrinsic::amdgcn_workitem_id_x:
+      knownBitsForWorkitemID(*getSubtarget(), KB, Known, 0);
+      break;
+    case Intrinsic::amdgcn_workitem_id_y:
+      knownBitsForWorkitemID(*getSubtarget(), KB, Known, 1);
+      break;
+    case Intrinsic::amdgcn_workitem_id_z:
+      knownBitsForWorkitemID(*getSubtarget(), KB, Known, 2);
+      break;
+    case Intrinsic::amdgcn_mbcnt_lo:
+    case Intrinsic::amdgcn_mbcnt_hi: {
+      // These return at most the wavefront size - 1.
+      unsigned Size = MRI.getType(R).getSizeInBits();
+      Known.Zero.setHighBits(Size - getSubtarget()->getWavefrontSizeLog2());
+      break;
+    }
+    case Intrinsic::amdgcn_groupstaticsize: {
+      // We can report everything over the maximum size as 0. We can't report
+      // based on the actual size because we don't know if it's accurate or not
+      // at any given point.
+      Known.Zero.setHighBits(countLeadingZeros(getSubtarget()->getLocalMemorySize()));
+      break;
+    }
+    default:
+      break;
+    }
+  }
+  }
 }
 
 Align SITargetLowering::computeKnownAlignForTargetInstr(

@@ -718,7 +718,7 @@ void SelectionDAGLegalize::LegalizeLoadOps(SDNode *Node) {
 
   LLVM_DEBUG(dbgs() << "Legalizing extending load operation\n");
   EVT SrcVT = LD->getMemoryVT();
-  unsigned SrcWidth = SrcVT.getSizeInBits();
+  TypeSize SrcWidth = SrcVT.getSizeInBits();
   MachineMemOperand::Flags MMOFlags = LD->getMemOperand()->getFlags();
   AAMDNodes AAInfo = LD->getAAInfo();
 
@@ -764,14 +764,15 @@ void SelectionDAGLegalize::LegalizeLoadOps(SDNode *Node) {
 
     Value = Result;
     Chain = Ch;
-  } else if (SrcWidth & (SrcWidth - 1)) {
+  } else if (!isPowerOf2_64(SrcWidth.getKnownMinSize())) {
     // If not loading a power-of-2 number of bits, expand as two loads.
     assert(!SrcVT.isVector() && "Unsupported extload!");
-    unsigned LogSrcWidth = Log2_32(SrcWidth);
+    unsigned SrcWidthBits = SrcWidth.getFixedSize();
+    unsigned LogSrcWidth = Log2_32(SrcWidthBits);
     assert(LogSrcWidth < 32);
     unsigned RoundWidth = 1 << LogSrcWidth;
-    assert(RoundWidth < SrcWidth);
-    unsigned ExtraWidth = SrcWidth - RoundWidth;
+    assert(RoundWidth < SrcWidthBits);
+    unsigned ExtraWidth = SrcWidthBits - RoundWidth;
     assert(ExtraWidth < RoundWidth);
     assert(!(RoundWidth % 8) && !(ExtraWidth % 8) &&
            "Load size not an integral number of bytes!");
@@ -1734,12 +1735,16 @@ bool SelectionDAGLegalize::LegalizeSetCCCondCode(
     if (CCCode != ISD::SETO && CCCode != ISD::SETUO) {
       // If we aren't the ordered or unorder operation,
       // then the pattern is (LHS CC1 RHS) Opc (LHS CC2 RHS).
-      SetCC1 = DAG.getSetCC(dl, VT, LHS, RHS, CC1, Chain, IsSignaling);
-      SetCC2 = DAG.getSetCC(dl, VT, LHS, RHS, CC2, Chain, IsSignaling);
+      SetCC1 = DAG.getSetCC(dl, VT, LHS, RHS, CC1, SDNodeFlags(), Chain,
+                            IsSignaling);
+      SetCC2 = DAG.getSetCC(dl, VT, LHS, RHS, CC2, SDNodeFlags(), Chain,
+                            IsSignaling);
     } else {
       // Otherwise, the pattern is (LHS CC1 LHS) Opc (RHS CC2 RHS)
-      SetCC1 = DAG.getSetCC(dl, VT, LHS, LHS, CC1, Chain, IsSignaling);
-      SetCC2 = DAG.getSetCC(dl, VT, RHS, RHS, CC2, Chain, IsSignaling);
+      SetCC1 = DAG.getSetCC(dl, VT, LHS, LHS, CC1, SDNodeFlags(), Chain,
+                            IsSignaling);
+      SetCC2 = DAG.getSetCC(dl, VT, RHS, RHS, CC2, SDNodeFlags(), Chain,
+                            IsSignaling);
     }
     if (Chain)
       Chain = DAG.getNode(ISD::TokenFactor, dl, MVT::Other, SetCC1.getValue(1),

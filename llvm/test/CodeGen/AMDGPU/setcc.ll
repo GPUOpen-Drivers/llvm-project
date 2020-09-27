@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -march=amdgcn -mtriple=amdgcn-- -verify-machineinstrs < %s | FileCheck -allow-deprecated-dag-overlap -check-prefix=GCN -check-prefix=FUNC %s
 ; RUN: llc -march=r600 -mtriple=r600-- -mcpu=redwood -verify-machineinstrs < %s | FileCheck -allow-deprecated-dag-overlap -check-prefix=R600 -check-prefix=FUNC %s
 
