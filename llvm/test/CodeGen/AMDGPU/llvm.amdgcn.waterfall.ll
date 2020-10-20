@@ -91,6 +91,8 @@ define amdgpu_ps <4 x float> @test_waterfall_non_uniform_img(<8 x i32> addrspace
 ; GCN: v_readfirstlane_b32 s[[FIRSTVAL:[0-9]+]], [[INDEX:v[0-9]+]]
 ; GCN-64-DAG: v_cmp_eq_u32_e64 [[EXEC2:s[[0-9]+:[0-9]+]]], s[[FIRSTVAL]], [[INDEX]]
 ; GCN-32-DAG: v_cmp_eq_u32_e64 [[EXEC2:s[0-9]+]], s[[FIRSTVAL]], [[INDEX]]
+; GCN-64: s_and_saveexec_b64 [[EXEC3:s[[0-9]+:[0-9]+]]], [[EXEC2]]
+; GCN-32: s_and_saveexec_b32 [[EXEC3:s[0-9]+]], [[EXEC2]]
 ; GCN-DAG: v_readfirstlane_b32 s[[FIRSTRSRC:[0-9]+]], v[[RSRCSTART]]
 ; GCN-DAG: v_readfirstlane_b32 s[[ENDRSRC:[0-9]+]], v[[RSRCEND]]
 ; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
@@ -99,8 +101,6 @@ define amdgpu_ps <4 x float> @test_waterfall_non_uniform_img(<8 x i32> addrspace
 ; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
 ; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
 ; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
-; GCN-64: s_and_saveexec_b64 [[EXEC3:s[[0-9]+:[0-9]+]]], [[EXEC2]]
-; GCN-32: s_and_saveexec_b32 [[EXEC3:s[0-9]+]], [[EXEC2]]
 ; GCN: image_sample v{{\[}}[[VALSTART:[0-9]+]]:[[VALEND:[0-9]+]]{{\]}}, v{{[0-9]+}}, s{{\[}}[[FIRSTRSRC]]:[[ENDRSRC]]{{\]}}, s[{{[0-9]+:[0-9]+}}] dmask:0xf
 ; GCN-DAG: v_or_b32_e32 v[[DSTSTART]], v[[DSTSTART]], v[[VALSTART]]
 ; GCN-DAG: v_or_b32_e32 v{{[0-9]+}}, v{{[0-9]+}}, v{{[0-9]+}}
@@ -186,12 +186,12 @@ define amdgpu_ps void @test_multiple_groups(i32 addrspace(1)* inreg %out1, i32 a
 ; GCN-32: s_mov_b32 [[EXEC:s[0-9]+]], exec
 ; GCN: {{^}}BB4_1:
 ; GCN: v_readfirstlane_b32 s[[FIRSTVAL:[0-9]+]], [[IDX:v[0-9]+]]
-; GCN-64-DAG: v_cmp_eq_u32_e64 [[EXEC2:s[[0-9]+:[0-9]+]]], s[[FIRSTVAL]], [[IDX]]
-; GCN-32-DAG: v_cmp_eq_u32_e64 [[EXEC2:s[0-9]+]], s[[FIRSTVAL]], [[IDX]]
-; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
+; GCN-64: v_cmp_eq_u32_e64 [[EXEC2:s[[0-9]+:[0-9]+]]], s[[FIRSTVAL]], [[IDX]]
+; GCN-32: v_cmp_eq_u32_e64 [[EXEC2:s[0-9]+]], s[[FIRSTVAL]], [[IDX]]
 ; GCN-64: s_and_saveexec_b64 [[EXEC3:s[[0-9]+:[0-9]+]]], [[EXEC2]]
 ; GCN-32: s_and_saveexec_b32 [[EXEC3:s[0-9]+]], [[EXEC2]]
-; GCN: s_lshl_b64 [[FIRSTVALSHIFTED:s[[0-9]+:[0-9]+]]], s{{\[}}[[FIRSTVAL]]:{{[0-9]+}}], 5
+; GCN-DAG: s_lshl_b64 [[FIRSTVALSHIFTED:s[[0-9]+:[0-9]+]]], s{{\[}}[[FIRSTVAL]]:{{[0-9]+}}], 5
+; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
 ; GCN: s_load_dwordx8 [[PTR:s\[[0-9]+:[0-9]+\]]], [[FIRSTVALSHIFTED]], 0x0
 ; GCN: s_load_dwordx4 [[PTR2:s\[[0-9]+:[0-9]+\]]], s[{{[0-9]+:[0-9]+}}], 0x0 
 ; GCN: s_waitcnt lgkmcnt(0)
@@ -282,6 +282,8 @@ define amdgpu_ps <4 x float> @test_waterfall_non_uni_img_2_idx(<8 x i32> addrspa
 ; GCN: v_readfirstlane_b32 s[[FIRSTVAL:[0-9]+]], [[INDEX:v[0-9]+]]
 ; GCN-64-DAG: v_cmp_eq_u32_e64 [[EXEC2:s[[0-9]+:[0-9]+]]], s[[FIRSTVAL]], [[INDEX]]
 ; GCN-32-DAG: v_cmp_eq_u32_e64 [[EXEC2:s[0-9]+]], s[[FIRSTVAL]], [[INDEX]]
+; GCN-64: s_and_saveexec_b64 [[EXEC3:s[[0-9]+:[0-9]+]]], [[EXEC2]]
+; GCN-32: s_and_saveexec_b32 [[EXEC3:s[0-9]+]], [[EXEC2]]
 ; GCN-DAG: v_readfirstlane_b32 s[[FIRSTRSRC:[0-9]+]], v[[RSRCSTART]]
 ; GCN-DAG: v_readfirstlane_b32 s[[ENDRSRC:[0-9]+]], v[[RSRCEND]]
 ; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
@@ -290,8 +292,6 @@ define amdgpu_ps <4 x float> @test_waterfall_non_uni_img_2_idx(<8 x i32> addrspa
 ; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
 ; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
 ; GCN-DAG: v_readfirstlane_b32 s{{[0-9]+}}, v{{[0-9]+}}
-; GCN-64: s_and_saveexec_b64 [[EXEC3:s[[0-9]+:[0-9]+]]], [[EXEC2]]
-; GCN-32: s_and_saveexec_b32 [[EXEC3:s[0-9]+]], [[EXEC2]]
 ; PRE_GFX10: image_store v[{{[0-9]+:[0-9]+}}], v{{[0-9]+}}, s{{\[}}[[FIRSTRSRC]]:[[ENDRSRC]]{{\]}} dmask:0xf unorm
 ; GFX-10: image_store v[{{[0-9]+:[0-9]+}}], v{{[0-9]+}}, s{{\[}}[[FIRSTRSRC]]:[[ENDRSRC]]{{\]}} dmask:0xf dim:SQ_RSRC_IMG_1D unorm
 ; GCN-64: s_xor_b64 exec, exec, [[EXEC3]]
@@ -418,11 +418,41 @@ define amdgpu_ps void @test_waterfall_sample_with_kill(<8 x i32> addrspace(4)* i
   ret void
 }
 
+; GCN-LABEL: test_waterfall_uniform_buffer:
+; GCN:       ; %bb.0:
+; GCN-NEXT:    s_load_dwordx4 s[0:3], s[0:1], 0x0
+; GCN-NEXT:    v_mov_b32_e32 v0, 0
+; GCN-32-NEXT:  ; implicit-def: $vcc_hi
+; GCN-NEXT:    s_waitcnt lgkmcnt(0)
+; GCN-NEXT:    s_and_b32 s4, s3, 0xfffffff
+; GCN-NEXT:    s_cmp_gt_i32 s3, -1
+; GCN-NEXT:    s_cselect_b32 s3, s4, s3
+; GCN-NEXT:    buffer_load_format_xyzw v[0:3], v0, s[0:3], 0 idxen
+; GCN-NEXT:    s_waitcnt vmcnt(0)
+; GCN-NEXT:    ; return to shader part epilog
+
+define amdgpu_ps <4 x float> @test_waterfall_uniform_buffer(<4 x i32> addrspace(4)* inreg %in) #1 {
+
+  %rsrc = load <4 x i32>, <4 x i32> addrspace(4)* %in, align 16
+  %elem3 = extractelement <4 x i32> %rsrc, i32 3
+  %cmp = icmp sgt i32 %elem3, -1
+  %mask = and i32 %elem3, 268435455
+  %patched = select i1 %cmp, i32 %mask, i32 %elem3
+  %rsrc1 = insertelement <4 x i32> %rsrc, i32 %patched, i32 3
+  %wf_token = call i32 @llvm.amdgcn.waterfall.begin.v4i32(<4 x i32> %rsrc1)
+  %s_idx = call <4 x i32> @llvm.amdgcn.waterfall.readfirstlane.v4i32.v4i32(i32 %wf_token, <4 x i32> %rsrc1)
+  %r = call <4 x float> @llvm.amdgcn.struct.buffer.load.format.v4f32(<4 x i32> %s_idx, i32 0, i32 0, i32 0, i32 0)
+  %r1 = call <4 x float> @llvm.amdgcn.waterfall.end.v4f32(i32 %wf_token, <4 x float> %r)
+  ret <4 x float> %r1
+}
+
 declare i32 @llvm.amdgcn.waterfall.begin.i32(i32) #6
 declare i32 @llvm.amdgcn.waterfall.begin.v2i32(<2 x i32>) #6
+declare i32 @llvm.amdgcn.waterfall.begin.v4i32(<4 x i32>) #6
 declare i32 @llvm.amdgcn.waterfall.readfirstlane.i32.i32(i32, i32) #6
 declare <2 x i32> @llvm.amdgcn.waterfall.readfirstlane.v2i32.v2i32(i32, <2 x i32>) #6
 declare <8 x i32> @llvm.amdgcn.waterfall.readfirstlane.v8i32.v8i32(i32, <8 x i32>) #6
+declare <4 x i32> @llvm.amdgcn.waterfall.readfirstlane.v4i32.v4i32(i32, <4 x i32>) #6
 declare i16 @llvm.amdgcn.waterfall.end.i16(i32, i16) #6
 declare i32 @llvm.amdgcn.waterfall.end.i32(i32, i32) #6
 declare <4 x float> @llvm.amdgcn.waterfall.end.v4f32(i32, <4 x float>) #6
@@ -437,6 +467,7 @@ declare float @llvm.amdgcn.buffer.load.f32(<4 x i32>, i32, i32, i1, i1) #4
 declare <4 x float> @llvm.amdgcn.buffer.load.v4f32(<4 x i32>, i32, i32, i1, i1) #4
 declare i32 @llvm.amdgcn.s.buffer.load.i32(<4 x i32>, i32, i1) #2
 declare <4 x i32> @llvm.amdgcn.s.buffer.load.v4i32(<4 x i32>, i32, i1) #2
+declare <4 x float> @llvm.amdgcn.struct.buffer.load.format.v4f32(<4 x i32>, i32, i32, i32, i32 immarg) #4
 declare void @llvm.amdgcn.buffer.store.short(float, <4 x i32>, i32, i32, i1, i1) #5
 declare void @llvm.amdgcn.buffer.store.f32(float, <4 x i32>, i32, i32, i1, i1) #5
 declare void @llvm.amdgcn.buffer.store.v4f32(<4 x float>, <4 x i32>, i32, i32, i1, i1) #5

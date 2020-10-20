@@ -768,6 +768,40 @@ TEST_F(ValueTrackingTest, isGuaranteedNotToBePoison_exploitBranchCond) {
   }
 }
 
+TEST_F(ValueTrackingTest, isGuaranteedNotToBePoison_phi) {
+  parseAssembly("declare i32 @any_i32(i32)"
+                "define void @test() {\n"
+                "ENTRY:\n"
+                "  br label %LOOP\n"
+                "LOOP:\n"
+                "  %A = phi i32 [0, %ENTRY], [%A.next, %NEXT]\n"
+                "  %A.next = call i32 @any_i32(i32 %A)\n"
+                "  %cond = icmp eq i32 %A.next, 0\n"
+                "  br i1 %cond, label %NEXT, label %EXIT\n"
+                "NEXT:\n"
+                "  br label %LOOP\n"
+                "EXIT:\n"
+                "  ret void\n"
+                "}\n");
+  DominatorTree DT(*F);
+  for (auto &BB : *F) {
+    if (BB.getName() == "LOOP") {
+      EXPECT_EQ(isGuaranteedNotToBePoison(A, A, &DT), true)
+          << "isGuaranteedNotToBePoison does not hold";
+    }
+  }
+}
+
+TEST_F(ValueTrackingTest, isGuaranteedNotToBeUndefOrPoison) {
+  parseAssembly("declare void @f(i32 noundef)"
+                "define void @test(i32 %x) {\n"
+                "  %A = bitcast i32 %x to i32\n"
+                "  call void @f(i32 noundef %x)\n"
+                "  ret void\n"
+                "}\n");
+  EXPECT_EQ(isGuaranteedNotToBeUndefOrPoison(A), true);
+}
+
 TEST(ValueTracking, canCreatePoisonOrUndef) {
   std::string AsmHead =
       "declare i32 @g(i32)\n"
@@ -1055,6 +1089,24 @@ TEST_F(ComputeKnownBitsTest, ComputeKnownBitsPtrToIntZext) {
   AssumptionCache AC(*F);
   KnownBits Known = computeKnownBits(
       A, M->getDataLayout(), /* Depth */ 0, &AC, F->front().getTerminator());
+  EXPECT_EQ(Known.Zero.getZExtValue(), 31u);
+  EXPECT_EQ(Known.One.getZExtValue(), 0u);
+}
+
+TEST_F(ComputeKnownBitsTest, ComputeKnownBitsFreeze) {
+  parseAssembly("define void @test() {\n"
+                "  %m = call i32 @any_num()\n"
+                "  %A = freeze i32 %m\n"
+                "  %n = and i32 %m, 31\n"
+                "  %c = icmp eq i32 %n, 0\n"
+                "  call void @llvm.assume(i1 %c)\n"
+                "  ret void\n"
+                "}\n"
+                "declare void @llvm.assume(i1)\n"
+                "declare i32 @any_num()\n");
+  AssumptionCache AC(*F);
+  KnownBits Known = computeKnownBits(A, M->getDataLayout(), /* Depth */ 0, &AC,
+                                     F->front().getTerminator());
   EXPECT_EQ(Known.Zero.getZExtValue(), 31u);
   EXPECT_EQ(Known.One.getZExtValue(), 0u);
 }

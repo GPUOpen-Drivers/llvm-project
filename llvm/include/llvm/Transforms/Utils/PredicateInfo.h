@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -70,13 +72,6 @@ class raw_ostream;
 
 enum PredicateType { PT_Branch, PT_Assume, PT_Switch };
 
-/// Constraint for a predicate of the form "cmp Pred Op, OtherOp", where Op
-/// is the value the constraint applies to (the ssa.copy result).
-struct PredicateConstraint {
-  CmpInst::Predicate Predicate;
-  Value *OtherOp;
-};
-
 // Base class for all predicate information we provide.
 // All of our predicate information has at least a comparison.
 class PredicateBase : public ilist_node<PredicateBase> {
@@ -101,9 +96,6 @@ public:
     return PB->Type == PT_Assume || PB->Type == PT_Branch ||
            PB->Type == PT_Switch;
   }
-
-  /// Fetch condition in the form of PredicateConstraint, if possible.
-  Optional<PredicateConstraint> getConstraint() const;
 
 protected:
   PredicateBase(PredicateType PT, Value *Op, Value *Condition)

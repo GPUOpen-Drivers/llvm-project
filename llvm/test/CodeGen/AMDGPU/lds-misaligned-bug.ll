@@ -1,9 +1,8 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -march=amdgcn -mcpu=gfx1010 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,SPLIT %s
 ; RUN: llc -march=amdgcn -mcpu=gfx1011 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,SPLIT %s
 ; RUN: llc -march=amdgcn -mcpu=gfx1012 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,SPLIT %s
 ; RUN: llc -march=amdgcn -mcpu=gfx1010 -verify-machineinstrs -mattr=+cumode < %s | FileCheck -check-prefixes=GCN,VECT %s
+; RUN: llc -march=amdgcn -mcpu=gfx1010 -verify-machineinstrs -mattr=+cumode,+unaligned-access-mode < %s | FileCheck -check-prefixes=UNALIGNED,VECT %s
 
 ; GCN-LABEL: test_local_misaligned_v2:
 ; GCN-DAG: ds_read2_b32
@@ -27,6 +26,8 @@ bb:
 ; GCN-DAG: ds_read2_b32
 ; GCN-DAG: ds_write2_b32
 ; GCN-DAG: ds_write2_b32
+; UNALIGNED-DAG: ds_read_b128
+; UNALIGNED-DAG: ds_write_b128
 define amdgpu_kernel void @test_local_misaligned_v4(i32 addrspace(3)* %arg) {
 bb:
   %lid = tail call i32 @llvm.amdgcn.workitem.id.x()
@@ -50,6 +51,8 @@ bb:
 ; GCN-DAG: ds_read_b32
 ; GCN-DAG: ds_write2_b32
 ; GCN-DAG: ds_write_b32
+; UNALIGNED-DAG: ds_read_b96
+; UNALIGNED-DAG: ds_write_b96
 define amdgpu_kernel void @test_local_misaligned_v3(i32 addrspace(3)* %arg) {
 bb:
   %lid = tail call i32 @llvm.amdgcn.workitem.id.x()

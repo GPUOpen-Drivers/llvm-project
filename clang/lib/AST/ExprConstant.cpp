@@ -1856,8 +1856,12 @@ void CallStackFrame::describe(raw_ostream &Out) {
       Out << ", ";
 
     const ParmVarDecl *Param = *I;
-    const APValue &Arg = Arguments[ArgIndex];
-    Arg.printPretty(Out, Info.Ctx, Param->getType());
+    if (Arguments) {
+      const APValue &Arg = Arguments[ArgIndex];
+      Arg.printPretty(Out, Info.Ctx, Param->getType());
+    } else {
+      Out << "<...>";
+    }
 
     if (ArgIndex == 0 && IsMemberCall)
       Out << "->" << *Callee << '(';
@@ -1978,18 +1982,11 @@ static bool HasSameBase(const LValue &A, const LValue &B) {
     return false;
 
   if (A.getLValueBase().getOpaqueValue() !=
-      B.getLValueBase().getOpaqueValue()) {
-    const Decl *ADecl = GetLValueBaseDecl(A);
-    if (!ADecl)
-      return false;
-    const Decl *BDecl = GetLValueBaseDecl(B);
-    if (!BDecl || ADecl->getCanonicalDecl() != BDecl->getCanonicalDecl())
-      return false;
-  }
+      B.getLValueBase().getOpaqueValue())
+    return false;
 
-  return IsGlobalLValue(A.getLValueBase()) ||
-         (A.getLValueCallIndex() == B.getLValueCallIndex() &&
-          A.getLValueVersion() == B.getLValueVersion());
+  return A.getLValueCallIndex() == B.getLValueCallIndex() &&
+         A.getLValueVersion() == B.getLValueVersion();
 }
 
 static void NoteLValueLocation(EvalInfo &Info, APValue::LValueBase Base) {
@@ -2418,14 +2415,61 @@ static bool HandleFloatToIntCast(EvalInfo &Info, const Expr *E,
   return true;
 }
 
+/// Get rounding mode used for evaluation of the specified expression.
+/// \param[out] DynamicRM Is set to true is the requested rounding mode is
+///                       dynamic.
+/// If rounding mode is unknown at compile time, still try to evaluate the
+/// expression. If the result is exact, it does not depend on rounding mode.
+/// So return "tonearest" mode instead of "dynamic".
+static llvm::RoundingMode getActiveRoundingMode(EvalInfo &Info, const Expr *E,
+                                                bool &DynamicRM) {
+  llvm::RoundingMode RM =
+      E->getFPFeaturesInEffect(Info.Ctx.getLangOpts()).getRoundingMode();
+  DynamicRM = (RM == llvm::RoundingMode::Dynamic);
+  if (DynamicRM)
+    RM = llvm::RoundingMode::NearestTiesToEven;
+  return RM;
+}
+
+/// Check if the given evaluation result is allowed for constant evaluation.
+static bool checkFloatingPointResult(EvalInfo &Info, const Expr *E,
+                                     APFloat::opStatus St) {
+  FPOptions FPO = E->getFPFeaturesInEffect(Info.Ctx.getLangOpts());
+  if ((St & APFloat::opInexact) &&
+      FPO.getRoundingMode() == llvm::RoundingMode::Dynamic) {
+    // Inexact result means that it depends on rounding mode. If the requested
+    // mode is dynamic, the evaluation cannot be made in compile time.
+    Info.FFDiag(E, diag::note_constexpr_dynamic_rounding);
+    return false;
+  }
+
+  if ((St & APFloat::opStatus::opInvalidOp) &&
+      FPO.getFPExceptionMode() != LangOptions::FPE_Ignore) {
+    // There is no usefully definable result.
+    Info.FFDiag(E);
+    return false;
+  }
+
+  // FIXME: if:
+  // - evaluation triggered other FP exception, and
+  // - exception mode is not "ignore", and
+  // - the expression being evaluated is not a part of global variable
+  //   initializer,
+  // the evaluation probably need to be rejected.
+  return true;
+}
+
 static bool HandleFloatToFloatCast(EvalInfo &Info, const Expr *E,
                                    QualType SrcType, QualType DestType,
                                    APFloat &Result) {
+  assert(isa<CastExpr>(E) || isa<CompoundAssignOperator>(E));
+  bool DynamicRM;
+  llvm::RoundingMode RM = getActiveRoundingMode(Info, E, DynamicRM);
+  APFloat::opStatus St;
   APFloat Value = Result;
   bool ignored;
-  Result.convert(Info.Ctx.getFloatTypeSemantics(DestType),
-                 APFloat::rmNearestTiesToEven, &ignored);
-  return true;
+  St = Result.convert(Info.Ctx.getFloatTypeSemantics(DestType), RM, &ignored);
+  return checkFloatingPointResult(Info, E, St);
 }
 
 static APSInt HandleIntToIntCast(EvalInfo &Info, const Expr *E,
@@ -2647,28 +2691,31 @@ static bool handleIntIntBinOp(EvalInfo &Info, const Expr *E, const APSInt &LHS,
 }
 
 /// Perform the given binary floating-point operation, in-place, on LHS.
-static bool handleFloatFloatBinOp(EvalInfo &Info, const Expr *E,
+static bool handleFloatFloatBinOp(EvalInfo &Info, const BinaryOperator *E,
                                   APFloat &LHS, BinaryOperatorKind Opcode,
                                   const APFloat &RHS) {
+  bool DynamicRM;
+  llvm::RoundingMode RM = getActiveRoundingMode(Info, E, DynamicRM);
+  APFloat::opStatus St;
   switch (Opcode) {
   default:
     Info.FFDiag(E);
     return false;
   case BO_Mul:
-    LHS.multiply(RHS, APFloat::rmNearestTiesToEven);
+    St = LHS.multiply(RHS, RM);
     break;
   case BO_Add:
-    LHS.add(RHS, APFloat::rmNearestTiesToEven);
+    St = LHS.add(RHS, RM);
     break;
   case BO_Sub:
-    LHS.subtract(RHS, APFloat::rmNearestTiesToEven);
+    St = LHS.subtract(RHS, RM);
     break;
   case BO_Div:
     // [expr.mul]p4:
     //   If the second operand of / or % is zero the behavior is undefined.
     if (RHS.isZero())
       Info.CCEDiag(E, diag::note_expr_divide_by_zero);
-    LHS.divide(RHS, APFloat::rmNearestTiesToEven);
+    St = LHS.divide(RHS, RM);
     break;
   }
 
@@ -2680,7 +2727,8 @@ static bool handleFloatFloatBinOp(EvalInfo &Info, const Expr *E,
     Info.CCEDiag(E, diag::note_constexpr_float_arithmetic) << LHS.isNaN();
     return Info.noteUndefinedBehavior();
   }
-  return true;
+
+  return checkFloatingPointResult(Info, E, St);
 }
 
 static bool handleLogicalOpForVector(const APInt &LHSValue,
@@ -2763,7 +2811,7 @@ static bool handleCompareOpForVector(const APValue &LHSValue,
 }
 
 // Perform binary operations for vector types, in place on the LHS.
-static bool handleVectorVectorBinOp(EvalInfo &Info, const Expr *E,
+static bool handleVectorVectorBinOp(EvalInfo &Info, const BinaryOperator *E,
                                     BinaryOperatorKind Opcode,
                                     APValue &LHSValue,
                                     const APValue &RHSValue) {
@@ -3108,7 +3156,8 @@ static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
 
   // If we're currently evaluating the initializer of this declaration, use that
   // in-flight value.
-  if (Info.EvaluatingDecl.dyn_cast<const ValueDecl*>() == VD) {
+  if (declaresSameEntity(Info.EvaluatingDecl.dyn_cast<const ValueDecl *>(),
+                         VD)) {
     Result = Info.EvaluatingDeclValue;
     return true;
   }
@@ -4077,7 +4126,7 @@ static bool handleAssignment(EvalInfo &Info, const Expr *E, const LValue &LVal,
 namespace {
 struct CompoundAssignSubobjectHandler {
   EvalInfo &Info;
-  const Expr *E;
+  const CompoundAssignOperator *E;
   QualType PromotedLHSType;
   BinaryOperatorKind Opcode;
   const APValue &RHS;
@@ -4197,10 +4246,12 @@ struct CompoundAssignSubobjectHandler {
 const AccessKinds CompoundAssignSubobjectHandler::AccessKind;
 
 /// Perform a compound assignment of LVal <op>= RVal.
-static bool handleCompoundAssignment(
-    EvalInfo &Info, const Expr *E,
-    const LValue &LVal, QualType LValType, QualType PromotedLValType,
-    BinaryOperatorKind Opcode, const APValue &RVal) {
+static bool handleCompoundAssignment(EvalInfo &Info,
+                                     const CompoundAssignOperator *E,
+                                     const LValue &LVal, QualType LValType,
+                                     QualType PromotedLValType,
+                                     BinaryOperatorKind Opcode,
+                                     const APValue &RVal) {
   if (LVal.Designator.Invalid)
     return false;
 
@@ -5745,6 +5796,8 @@ typedef SmallVector<APValue, 8> ArgVector;
 /// EvaluateArgs - Evaluate the arguments to a function call.
 static bool EvaluateArgs(ArrayRef<const Expr *> Args, ArgVector &ArgValues,
                          EvalInfo &Info, const FunctionDecl *Callee) {
+  ArgValues.resize(Args.size());
+
   bool Success = true;
   llvm::SmallBitVector ForbiddenNullArgs;
   if (Callee->hasAttr<NonNullAttr>()) {
@@ -5762,8 +5815,6 @@ static bool EvaluateArgs(ArrayRef<const Expr *> Args, ArgVector &ArgValues,
         }
     }
   }
-  // FIXME: This is the wrong evaluation order for an assignment operator
-  // called via operator syntax.
   for (unsigned Idx = 0; Idx < Args.size(); Idx++) {
     if (!Evaluate(ArgValues[Idx], Info, Args[Idx])) {
       // If we're checking for a potential constant expression, evaluate all
@@ -5787,17 +5838,13 @@ static bool EvaluateArgs(ArrayRef<const Expr *> Args, ArgVector &ArgValues,
 /// Evaluate a function call.
 static bool HandleFunctionCall(SourceLocation CallLoc,
                                const FunctionDecl *Callee, const LValue *This,
-                               ArrayRef<const Expr*> Args, const Stmt *Body,
-                               EvalInfo &Info, APValue &Result,
-                               const LValue *ResultSlot) {
-  ArgVector ArgValues(Args.size());
-  if (!EvaluateArgs(Args, ArgValues, Info, Callee))
-    return false;
-
+                               ArrayRef<const Expr *> Args, APValue *ArgValues,
+                               const Stmt *Body, EvalInfo &Info,
+                               APValue &Result, const LValue *ResultSlot) {
   if (!Info.CheckCallLimit(CallLoc))
     return false;
 
-  CallStackFrame Frame(Info, CallLoc, Callee, This, ArgValues.data());
+  CallStackFrame Frame(Info, CallLoc, Callee, This, ArgValues);
 
   // For a trivial copy or move assignment, perform an APValue copy. This is
   // essential for unions, where the operations performed by the assignment
@@ -7246,6 +7293,8 @@ public:
     auto Args = llvm::makeArrayRef(E->getArgs(), E->getNumArgs());
     bool HasQualifier = false;
 
+    ArgVector ArgValues;
+
     // Extract function decl and 'this' pointer from the callee.
     if (CalleeType->isSpecificBuiltinType(BuiltinType::BoundMember)) {
       const CXXMethodDecl *Member = nullptr;
@@ -7292,6 +7341,22 @@ public:
       if (!Info.Ctx.hasSameFunctionTypeIgnoringExceptionSpec(
         CalleeType->getPointeeType(), FD->getType())) {
         return Error(E);
+      }
+
+      // For an (overloaded) assignment expression, evaluate the RHS before the
+      // LHS.
+      auto *OCE = dyn_cast<CXXOperatorCallExpr>(E);
+      if (OCE && OCE->isAssignmentOp()) {
+        assert(Args.size() == 2 && "wrong number of arguments in assignment");
+        if (isa<CXXMethodDecl>(FD)) {
+          // Args[0] is the object argument.
+          if (!EvaluateArgs({Args[1]}, ArgValues, Info, FD))
+            return false;
+        } else {
+          if (!EvaluateArgs({Args[1], Args[0]}, ArgValues, Info, FD))
+            return false;
+          std::swap(ArgValues[0], ArgValues[1]);
+        }
       }
 
       // Overloaded operator calls to member functions are represented as normal
@@ -7356,6 +7421,11 @@ public:
     } else
       return Error(E);
 
+    // Evaluate the arguments now if we've not already done so.
+    if (ArgValues.empty() && !Args.empty() &&
+        !EvaluateArgs(Args, ArgValues, Info, FD))
+      return false;
+
     SmallVector<QualType, 4> CovariantAdjustmentPath;
     if (This) {
       auto *NamedMember = dyn_cast<CXXMethodDecl>(FD);
@@ -7377,6 +7447,7 @@ public:
     // Destructor calls are different enough that they have their own codepath.
     if (auto *DD = dyn_cast<CXXDestructorDecl>(FD)) {
       assert(This && "no 'this' pointer for destructor call");
+      assert(ArgValues.empty() && "unexpected destructor arguments");
       return HandleDestruction(Info, E, *This,
                                Info.Ctx.getRecordType(DD->getParent()));
     }
@@ -7385,8 +7456,8 @@ public:
     Stmt *Body = FD->getBody(Definition);
 
     if (!CheckConstexprFunction(Info, E->getExprLoc(), FD, Definition, Body) ||
-        !HandleFunctionCall(E->getExprLoc(), Definition, This, Args, Body, Info,
-                            Result, ResultSlot))
+        !HandleFunctionCall(E->getExprLoc(), Definition, This, Args,
+                            ArgValues.data(), Body, Info, Result, ResultSlot))
       return false;
 
     if (!CovariantAdjustmentPath.empty() &&
@@ -8024,16 +8095,19 @@ bool LValueExprEvaluator::VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
   if (E->getBase()->getType()->isVectorType())
     return Error(E);
 
-  bool Success = true;
-  if (!evaluatePointer(E->getBase(), Result)) {
-    if (!Info.noteFailure())
-      return false;
-    Success = false;
-  }
-
   APSInt Index;
-  if (!EvaluateInteger(E->getIdx(), Index, Info))
-    return false;
+  bool Success = true;
+
+  // C++17's rules require us to evaluate the LHS first, regardless of which
+  // side is the base.
+  for (const Expr *SubExpr : {E->getLHS(), E->getRHS()}) {
+    if (SubExpr == E->getBase() ? !evaluatePointer(SubExpr, Result)
+                                : !EvaluateInteger(SubExpr, Index, Info)) {
+      if (!Info.noteFailure())
+        return false;
+      Success = false;
+    }
+  }
 
   return Success &&
          HandleLValueArrayAdjustment(Info, E, Result, E->getType(), Index);
@@ -8078,7 +8152,10 @@ bool LValueExprEvaluator::VisitCompoundAssignOperator(
   if (!Info.getLangOpts().CPlusPlus14 && !Info.keepEvaluatingAfterFailure())
     return Error(CAO);
 
+  // C++17 onwards require that we evaluate the RHS first.
   APValue RHS;
+  if (!Evaluate(RHS, this->Info, CAO->getRHS()))
+    return false;
 
   // The overall lvalue result is the result of evaluating the LHS.
   if (!this->Visit(CAO->getLHS())) {
@@ -8086,9 +8163,6 @@ bool LValueExprEvaluator::VisitCompoundAssignOperator(
       Evaluate(RHS, this->Info, CAO->getRHS());
     return false;
   }
-
-  if (!Evaluate(RHS, this->Info, CAO->getRHS()))
-    return false;
 
   return handleCompoundAssignment(
       this->Info, CAO,
@@ -8100,16 +8174,16 @@ bool LValueExprEvaluator::VisitBinAssign(const BinaryOperator *E) {
   if (!Info.getLangOpts().CPlusPlus14 && !Info.keepEvaluatingAfterFailure())
     return Error(E);
 
+  // C++17 onwards require that we evaluate the RHS first.
   APValue NewVal;
+  if (!Evaluate(NewVal, this->Info, E->getRHS()))
+    return false;
 
   if (!this->Visit(E->getLHS())) {
     if (Info.noteFailure())
       Evaluate(NewVal, this->Info, E->getRHS());
     return false;
   }
-
-  if (!Evaluate(NewVal, this->Info, E->getRHS()))
-    return false;
 
   if (Info.getLangOpts().CPlusPlus20 &&
       !HandleUnionActiveMemberChange(Info, E->getLHS(), Result))
@@ -14770,7 +14844,7 @@ static ICEDiag CheckICE(const Expr* E, const ASTContext &Ctx) {
         const VarDecl *VD;
         // Look for a declaration of this variable that has an initializer, and
         // check whether it is an ICE.
-        if (Dcl->getAnyInitializer(VD) && VD->checkInitIsICE())
+        if (Dcl->getAnyInitializer(VD) && !VD->isWeak() && VD->checkInitIsICE())
           return NoDiag();
         else
           return ICEDiag(IK_NotICE, cast<DeclRefExpr>(E)->getLocation());
@@ -15223,7 +15297,8 @@ bool Expr::isPotentialConstantExpr(const FunctionDecl *FD,
   } else {
     SourceLocation Loc = FD->getLocation();
     HandleFunctionCall(Loc, FD, (MD && MD->isInstance()) ? &This : nullptr,
-                       Args, FD->getBody(), Info, Scratch, nullptr);
+                       Args, /*ArgValues*/ nullptr, FD->getBody(), Info,
+                       Scratch, nullptr);
   }
 
   return Diags.empty();
@@ -15245,13 +15320,8 @@ bool Expr::isPotentialConstantExprUnevaluated(Expr *E,
   Info.CheckingPotentialConstantExpression = true;
 
   // Fabricate a call stack frame to give the arguments a plausible cover story.
-  ArrayRef<const Expr*> Args;
-  ArgVector ArgValues(0);
-  bool Success = EvaluateArgs(Args, ArgValues, Info, FD);
-  (void)Success;
-  assert(Success &&
-         "Failed to set up arguments for potential constant evaluation");
-  CallStackFrame Frame(Info, SourceLocation(), FD, nullptr, ArgValues.data());
+  CallStackFrame Frame(Info, SourceLocation(), FD, /*This*/ nullptr,
+                       /*ArgValues*/ nullptr);
 
   APValue ResultScratch;
   Evaluate(ResultScratch, Info, E);

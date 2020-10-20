@@ -24,6 +24,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExprObjC.h"
 #include "clang/AST/ExprOpenMP.h"
+#include "clang/AST/OperationKinds.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/Builtins.h"
@@ -695,7 +696,8 @@ ExprResult Sema::DefaultLvalueConversion(Expr *E) {
   // C++ [conv.lval]p3:
   //   If T is cv std::nullptr_t, the result is a null pointer constant.
   CastKind CK = T->isNullPtrType() ? CK_NullToPointer : CK_LValueToRValue;
-  Res = ImplicitCastExpr::Create(Context, T, CK, E, nullptr, VK_RValue);
+  Res = ImplicitCastExpr::Create(Context, T, CK, E, nullptr, VK_RValue,
+                                 FPOptionsOverride());
 
   // C11 6.3.2.1p2:
   //   ... if the lvalue has atomic type, the value has the non-atomic version
@@ -703,7 +705,7 @@ ExprResult Sema::DefaultLvalueConversion(Expr *E) {
   if (const AtomicType *Atomic = T->getAs<AtomicType>()) {
     T = Atomic->getValueType().getUnqualifiedType();
     Res = ImplicitCastExpr::Create(Context, T, CK_AtomicToNonAtomic, Res.get(),
-                                   nullptr, VK_RValue);
+                                   nullptr, VK_RValue, FPOptionsOverride());
   }
 
   return Res;
@@ -2580,6 +2582,13 @@ ExprResult Sema::BuildQualifiedDeclarationNameExpr(
                                      NameInfo, /*TemplateArgs=*/nullptr);
 
   if (R.empty()) {
+    // Don't diagnose problems with invalid record decl, the secondary no_member
+    // diagnostic during template instantiation is likely bogus, e.g. if a class
+    // is invalid because it's derived from an invalid base class, then missing
+    // members were likely supposed to be inherited.
+    if (const auto *CD = dyn_cast<CXXRecordDecl>(DC))
+      if (CD->isInvalidDecl())
+        return ExprError();
     Diag(NameInfo.getLoc(), diag::err_no_member)
       << NameInfo.getName() << DC << SS.getRange();
     return ExprError();
@@ -6067,8 +6076,6 @@ static bool checkArgsForPlaceholders(Sema &S, MultiExprArg args) {
       ExprResult result = S.CheckPlaceholderExpr(args[i]);
       if (result.isInvalid()) hasInvalid = true;
       else args[i] = result.get();
-    } else if (hasInvalid) {
-      (void)S.CorrectDelayedTyposInExpr(args[i]);
     }
   }
   return hasInvalid;
@@ -6156,6 +6163,7 @@ static FunctionDecl *rewriteBuiltinFunctionDecl(Sema *Sema, ASTContext &Context,
     Params.push_back(Parm);
   }
   OverloadDecl->setParams(Params);
+  Sema->mergeDeclAttributes(OverloadDecl, FDecl);
   return OverloadDecl;
 }
 
@@ -6960,9 +6968,9 @@ void Sema::maybeExtendBlockObject(ExprResult &E) {
   // Only do this in an r-value context.
   if (!getLangOpts().ObjCAutoRefCount) return;
 
-  E = ImplicitCastExpr::Create(Context, E.get()->getType(),
-                               CK_ARCExtendBlockObject, E.get(),
-                               /*base path*/ nullptr, VK_RValue);
+  E = ImplicitCastExpr::Create(
+      Context, E.get()->getType(), CK_ARCExtendBlockObject, E.get(),
+      /*base path*/ nullptr, VK_RValue, FPOptionsOverride());
   Cleanup.setExprNeedsCleanups(true);
 }
 
@@ -7401,7 +7409,7 @@ Sema::ActOnCastExpr(Scope *S, SourceLocation LParenLoc,
     }
     if (PE || PLE->getNumExprs() == 1) {
       Expr *E = (PE ? PE->getSubExpr() : PLE->getExpr(0));
-      if (!E->getType()->isVectorType())
+      if (!E->isTypeDependent() && !E->getType()->isVectorType())
         isVectorLiteral = true;
     }
     else
@@ -10036,7 +10044,7 @@ static void DiagnoseDivisionSizeofPointerOrArray(Sema &S, Expr *LHS, Expr *RHS,
     QualType ArrayElemTy = ArrayTy->getElementType();
     if (ArrayElemTy != S.Context.getBaseElementType(ArrayTy) ||
         ArrayElemTy->isDependentType() || RHSTy->isDependentType() ||
-        ArrayElemTy->isCharType() ||
+        RHSTy->isReferenceType() || ArrayElemTy->isCharType() ||
         S.Context.getTypeSize(ArrayElemTy) == S.Context.getTypeSize(RHSTy))
       return;
     S.Diag(Loc, diag::warn_division_sizeof_array)
@@ -13676,7 +13684,7 @@ static std::pair<ExprResult, ExprResult>
 CorrectDelayedTyposInBinOp(Sema &S, BinaryOperatorKind Opc, Expr *LHSExpr,
                            Expr *RHSExpr) {
   ExprResult LHS = LHSExpr, RHS = RHSExpr;
-  if (!S.getLangOpts().CPlusPlus) {
+  if (!S.Context.isDependenceAllowed()) {
     // C cannot handle TypoExpr nodes on either side of a binop because it
     // doesn't handle dependent types properly, so make sure any TypoExprs have
     // been dealt with before checking the operands.
@@ -13933,9 +13941,10 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
   // float vectors and truncating the result back to half vector. For now, we do
   // this only when HalfArgsAndReturn is set (that is, when the target is arm or
   // arm64).
-  assert(isVector(RHS.get()->getType(), Context.HalfTy) ==
-         isVector(LHS.get()->getType(), Context.HalfTy) &&
-         "both sides are half vectors or neither sides are");
+  assert(
+      (Opc == BO_Comma || isVector(RHS.get()->getType(), Context.HalfTy) ==
+                              isVector(LHS.get()->getType(), Context.HalfTy)) &&
+      "both sides are half vectors or neither sides are");
   ConvertHalfVec =
       needsConversionOfHalfVec(ConvertHalfVec, Context, LHS.get(), RHS.get());
 
@@ -14354,6 +14363,47 @@ ExprResult Sema::BuildBinOp(Scope *S, SourceLocation OpLoc,
     if (LHSExpr->getType()->isOverloadableType() ||
         RHSExpr->getType()->isOverloadableType())
       return BuildOverloadedBinOp(*this, S, OpLoc, Opc, LHSExpr, RHSExpr);
+  }
+
+  if (getLangOpts().RecoveryAST &&
+      (LHSExpr->isTypeDependent() || RHSExpr->isTypeDependent())) {
+    assert(!getLangOpts().CPlusPlus);
+    assert((LHSExpr->containsErrors() || RHSExpr->containsErrors()) &&
+           "Should only occur in error-recovery path.");
+    if (BinaryOperator::isCompoundAssignmentOp(Opc))
+      // C [6.15.16] p3:
+      // An assignment expression has the value of the left operand after the
+      // assignment, but is not an lvalue.
+      return CompoundAssignOperator::Create(
+          Context, LHSExpr, RHSExpr, Opc,
+          LHSExpr->getType().getUnqualifiedType(), VK_RValue, OK_Ordinary,
+          OpLoc, CurFPFeatureOverrides());
+    QualType ResultType;
+    switch (Opc) {
+    case BO_Assign:
+      ResultType = LHSExpr->getType().getUnqualifiedType();
+      break;
+    case BO_LT:
+    case BO_GT:
+    case BO_LE:
+    case BO_GE:
+    case BO_EQ:
+    case BO_NE:
+    case BO_LAnd:
+    case BO_LOr:
+      // These operators have a fixed result type regardless of operands.
+      ResultType = Context.IntTy;
+      break;
+    case BO_Comma:
+      ResultType = RHSExpr->getType();
+      break;
+    default:
+      ResultType = Context.DependentTy;
+      break;
+    }
+    return BinaryOperator::Create(Context, LHSExpr, RHSExpr, Opc, ResultType,
+                                  VK_RValue, OK_Ordinary, OpLoc,
+                                  CurFPFeatureOverrides());
   }
 
   // Build a built-in binary operation.
@@ -16581,8 +16631,13 @@ static OdrUseContext isOdrUseContext(Sema &SemaRef) {
 }
 
 static bool isImplicitlyDefinableConstexprFunction(FunctionDecl *Func) {
-  return Func->isConstexpr() &&
-         (Func->isImplicitlyInstantiable() || !Func->isUserProvided());
+  if (!Func->isConstexpr())
+    return false;
+
+  if (Func->isImplicitlyInstantiable() || !Func->isUserProvided())
+    return true;
+  auto *CCD = dyn_cast<CXXConstructorDecl>(Func);
+  return CCD && CCD->getInheritedConstructor();
 }
 
 /// Mark a function referenced, and check whether it is odr-used

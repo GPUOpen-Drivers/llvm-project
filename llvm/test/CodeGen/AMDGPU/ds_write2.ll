@@ -1,8 +1,5 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -march=amdgcn -mcpu=bonaire -verify-machineinstrs -mattr=+load-store-opt < %s | FileCheck -enable-var-scope -strict-whitespace -check-prefixes=GCN,CI %s
-; RUN: llc -march=amdgcn -mcpu=gfx900 -verify-machineinstrs -mattr=+load-store-opt,+flat-for-global,-unaligned-access-mode,-dword-access-mode < %s | FileCheck -enable-var-scope -strict-whitespace -check-prefixes=GCN,GFX9,GFX9-ALIGNED %s
-; RUN: llc -march=amdgcn -mcpu=gfx900 -verify-machineinstrs -mattr=+load-store-opt,+flat-for-global,+dword-access-mode < %s | FileCheck -enable-var-scope -strict-whitespace -check-prefixes=GCN,GFX9,GFX9-DWORDALIGNED %s
+; RUN: llc -march=amdgcn -mcpu=gfx900 -verify-machineinstrs -mattr=+load-store-opt,+flat-for-global,-unaligned-access-mode < %s | FileCheck -enable-var-scope -strict-whitespace -check-prefixes=GCN,GFX9,GFX9-ALIGNED %s
 ; RUN: llc -march=amdgcn -mcpu=gfx900 -verify-machineinstrs -mattr=+load-store-opt,+flat-for-global,+unaligned-access-mode < %s | FileCheck -enable-var-scope -strict-whitespace -check-prefixes=GCN,GFX9,GFX9-UNALIGNED %s
 
 @lds = addrspace(3) global [512 x float] undef, align 4

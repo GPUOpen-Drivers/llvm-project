@@ -129,6 +129,10 @@ void AMDGPUConditionalDiscard::optimizeBlock(BasicBlock &BB, bool ConvertToDemot
     if (!Val || !Val->isZero())
       return;
 
+    // Skip if the terminator is not a branch, e.g. an "unreachable".
+    if (!isa<BranchInst>(BB.getTerminator()))
+      return;
+
     auto *PredBlock = BB.getSinglePredecessor();
     if (!PredBlock)
       return;
@@ -188,6 +192,9 @@ void AMDGPUConditionalDiscard::optimizeBlock(BasicBlock &BB, bool ConvertToDemot
           else
             PredBranchInst->setSuccessor(1, OldKillBlockSucc);
 
+          // Update successors' phi.
+          BB.replaceSuccessorsPhiUsesWith(&BB, PredBlock);
+
           KillBlocksToRemove.push_back(&BB);
         }
       }
@@ -217,8 +224,10 @@ bool AMDGPUConditionalDiscard::runOnFunction(Function &F) {
 
   for (auto *BB : KillBlocksToRemove) {
     for (auto *Succ : successors(BB)) {
-      for (PHINode &PN : Succ->phis())
-        PN.removeIncomingValue(BB);
+      for (PHINode &PN : Succ->phis()) {
+        if (PN.getBasicBlockIndex(BB) >= 0)
+          PN.removeIncomingValue(BB);
+      }
     }
     BB->eraseFromParent();
   }

@@ -105,7 +105,6 @@ if( CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR )
     set(LLVM_SHLIB_OUTPUT_INTDIR ${LLVM_LIBRARY_OUTPUT_INTDIR})
   endif()
 
-  option(LLVM_ENABLE_WARNINGS "Enable compiler warnings." ON)
   option(LLVM_INSTALL_TOOLCHAIN_ONLY
     "Only include toolchain files in the 'install' target." OFF)
 
@@ -473,7 +472,8 @@ option(CLANG_BUILD_TOOLS
   "Build the Clang tools. If OFF, just generate build targets." ON)
 
 option(CLANG_ENABLE_ARCMT "Build ARCMT." ON)
-option(CLANG_ENABLE_STATIC_ANALYZER "Build static analyzer." ON)
+option(CLANG_ENABLE_STATIC_ANALYZER
+  "Include static analyzer in clang binary." ON)
 
 option(CLANG_ENABLE_PROTO_FUZZER "Build Clang protobuf fuzzer." OFF)
 
