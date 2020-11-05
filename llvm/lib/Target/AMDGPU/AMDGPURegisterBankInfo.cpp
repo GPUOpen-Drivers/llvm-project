@@ -4022,6 +4022,7 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     case Intrinsic::amdgcn_rsq_legacy:
     case Intrinsic::amdgcn_rsq_clamp:
     case Intrinsic::amdgcn_fmul_legacy:
+    case Intrinsic::amdgcn_fma_legacy:
     case Intrinsic::amdgcn_ldexp:
     case Intrinsic::amdgcn_frexp_mant:
     case Intrinsic::amdgcn_frexp_exp:

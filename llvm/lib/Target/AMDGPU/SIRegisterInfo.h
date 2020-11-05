@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -41,6 +39,11 @@ private:
   /// Provided a register can be fully split with given subregs,
   /// all elements of the inner vector combined give a full lane mask.
   static std::array<std::vector<int16_t>, 16> RegSplitParts;
+
+  // Table representing sub reg of given width and offset.
+  // First index is subreg size: 32, 64, 96, 128, 160, 192, 256, 512.
+  // Second index is 32 different dword offsets.
+  static std::array<std::array<uint16_t, 32>, 9> SubRegFromChannelTable;
 
   void reserveRegisterTuples(BitVector &, MCRegister Reg) const;
 
@@ -290,8 +293,6 @@ public:
   const uint32_t *getAllVGPRRegMask() const;
   const uint32_t *getAllAllocatableSRegMask() const;
 
-  int16_t calcSubRegIdx(const TargetRegisterClass *RC, unsigned SubOffset) const;
-
   // \returns number of 32 bit registers covered by a \p LM
   static unsigned getNumCoveredRegs(LaneBitmask LM) {
     // The assumption is that every lo16 subreg is an even bit and every hi16
@@ -324,10 +325,6 @@ public:
   /// Return all SGPR32 which satisfy the waves per execution unit requirement
   /// of the subtarget.
   ArrayRef<MCPhysReg> getAllSGPR32(const MachineFunction &MF) const;
-
-  /// Return all VGPR32 which satisfy the waves per execution unit requirement
-  /// of the subtarget.
-  ArrayRef<MCPhysReg> getAllVGPR32(const MachineFunction &MF) const;
 
 private:
   void buildSpillLoadStore(MachineBasicBlock::iterator MI,

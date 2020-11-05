@@ -4627,10 +4627,9 @@ bool AMDGPULegalizerInfo::legalizeIntrinsic(LegalizerHelper &Helper,
           .addMBB(UncondBrTarget);
       } else {
         B.buildInstr(AMDGPU::SI_ELSE)
-          .addDef(Def)
-          .addUse(Use)
-          .addMBB(UncondBrTarget)
-          .addImm(0);
+            .addDef(Def)
+            .addUse(Use)
+            .addMBB(UncondBrTarget);
       }
 
       if (Br) {

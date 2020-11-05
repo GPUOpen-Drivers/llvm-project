@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------===//
 //
@@ -822,6 +820,56 @@ PredicateInfo::~PredicateInfo() {
            "PredicateInfo consumer did not remove all SSA copies.");
     F->eraseFromParent();
   }
+}
+
+Optional<PredicateConstraint> PredicateBase::getConstraint() const {
+  switch (Type) {
+  case PT_Assume:
+  case PT_Branch: {
+    bool TrueEdge = true;
+    if (auto *PBranch = dyn_cast<PredicateBranch>(this))
+      TrueEdge = PBranch->TrueEdge;
+
+    if (Condition == RenamedOp) {
+      return {{CmpInst::ICMP_EQ,
+               TrueEdge ? ConstantInt::getTrue(Condition->getType())
+                        : ConstantInt::getFalse(Condition->getType())}};
+    }
+
+    CmpInst *Cmp = dyn_cast<CmpInst>(Condition);
+    if (!Cmp) {
+      // TODO: Make this an assertion once RenamedOp is fully accurate.
+      return None;
+    }
+
+    CmpInst::Predicate Pred;
+    Value *OtherOp;
+    if (Cmp->getOperand(0) == RenamedOp) {
+      Pred = Cmp->getPredicate();
+      OtherOp = Cmp->getOperand(1);
+    } else if (Cmp->getOperand(1) == RenamedOp) {
+      Pred = Cmp->getSwappedPredicate();
+      OtherOp = Cmp->getOperand(0);
+    } else {
+      // TODO: Make this an assertion once RenamedOp is fully accurate.
+      return None;
+    }
+
+    // Invert predicate along false edge.
+    if (!TrueEdge)
+      Pred = CmpInst::getInversePredicate(Pred);
+
+    return {{Pred, OtherOp}};
+  }
+  case PT_Switch:
+    if (Condition != RenamedOp) {
+      // TODO: Make this an assertion once RenamedOp is fully accurate.
+      return None;
+    }
+
+    return {{CmpInst::ICMP_EQ, cast<PredicateSwitch>(this)->CaseValue}};
+  }
+  llvm_unreachable("Unknown predicate type");
 }
 
 void PredicateInfo::verifyPredicateInfo() const {}

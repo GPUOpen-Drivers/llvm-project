@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 
@@ -13,6 +11,7 @@
 
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
 //
 //===----------------------------------------------------------------------===//
 //                               ValueLatticeElement
@@ -457,6 +456,16 @@ public:
 
     if (isConstant() && Other.isConstant())
       return ConstantExpr::getCompare(Pred, getConstant(), Other.getConstant());
+
+    if (ICmpInst::isEquality(Pred)) {
+      // not(C) != C => true, not(C) == C => false.
+      if ((isNotConstant() && Other.isConstant() &&
+           getNotConstant() == Other.getConstant()) ||
+          (isConstant() && Other.isNotConstant() &&
+           getConstant() == Other.getNotConstant()))
+        return Pred == ICmpInst::ICMP_NE
+            ? ConstantInt::getTrue(Ty) : ConstantInt::getFalse(Ty);
+    }
 
     // Integer constants are represented as ConstantRanges with single
     // elements.

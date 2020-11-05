@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -946,7 +944,11 @@ public:
       return Cost;
 
     if (Src->isVectorTy() &&
-        Src->getPrimitiveSizeInBits() < LT.second.getSizeInBits()) {
+        // In practice it's not currently possible to have a change in lane
+        // length for extending loads or truncating stores so both types should
+        // have the same scalable property.
+        TypeSize::isKnownLT(Src->getPrimitiveSizeInBits(),
+                            LT.second.getSizeInBits())) {
       // This is a vector load that legalizes to a larger type than the vector
       // itself. Unless the corresponding extending load or truncating store is
       // legal, then this will scalarize.
@@ -1127,35 +1129,14 @@ public:
     if (BaseT::getIntrinsicInstrCost(ICA, CostKind) == 0)
       return 0;
 
-    // Special case some scalar intrinsics.
-    Intrinsic::ID IID = ICA.getID();
-    if (CostKind != TTI::TCK_RecipThroughput) {
-      switch (IID) {
-      default:
-        break;
-      case Intrinsic::cttz:
-        if (getTLI()->isCheapToSpeculateCttz())
-          return TargetTransformInfo::TCC_Basic;
-        break;
-      case Intrinsic::ctlz:
-        if (getTLI()->isCheapToSpeculateCtlz())
-          return TargetTransformInfo::TCC_Basic;
-        break;
-      case Intrinsic::memcpy:
-        return thisT()->getMemcpyCost(ICA.getInst());
-        // TODO: other libc intrinsics.
-      }
-      // TODO: AMDGPU intrinsic costs are incorrectly all coming back as 1 with
-      // the following line uncommented. Need to understand why and
-      // fix. Temporarily removing for now to reproduce the old behaviour
-      //return BaseT::getIntrinsicInstrCost(ICA, CostKind);
-    }
-
-    // TODO: Combine these two logic paths.
     if (ICA.isTypeBasedOnly())
       return getTypeBasedIntrinsicInstrCost(ICA, CostKind);
 
+    // TODO: Handle scalable vectors?
     Type *RetTy = ICA.getReturnType();
+    if (isa<ScalableVectorType>(RetTy))
+      return BaseT::getIntrinsicInstrCost(ICA, CostKind);
+
     unsigned VF = ICA.getVectorFactor();
     unsigned RetVF =
         (RetTy->isVectorTy() ? cast<FixedVectorType>(RetTy)->getNumElements()
@@ -1164,11 +1145,36 @@ public:
     const IntrinsicInst *I = ICA.getInst();
     const SmallVectorImpl<const Value *> &Args = ICA.getArgs();
     FastMathFlags FMF = ICA.getFlags();
-
+    Intrinsic::ID IID = ICA.getID();
     switch (IID) {
     default:
+      // FIXME: all cost kinds should default to the same thing?
+      if (CostKind != TTI::TCK_RecipThroughput)
+        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       break;
+
+    case Intrinsic::cttz:
+      // FIXME: If necessary, this should go in target-specific overrides.
+      if (VF == 1 && RetVF == 1 && getTLI()->isCheapToSpeculateCttz())
+        return TargetTransformInfo::TCC_Basic;
+      break;
+
+    case Intrinsic::ctlz:
+      // FIXME: If necessary, this should go in target-specific overrides.
+      if (VF == 1 && RetVF == 1 && getTLI()->isCheapToSpeculateCtlz())
+        return TargetTransformInfo::TCC_Basic;
+      break;
+
+    case Intrinsic::memcpy:
+      // FIXME: all cost kinds should default to the same thing?
+      if (CostKind != TTI::TCK_RecipThroughput)
+        return thisT()->getMemcpyCost(ICA.getInst());
+      return BaseT::getIntrinsicInstrCost(ICA, CostKind);
+
     case Intrinsic::masked_scatter: {
+      // FIXME: all cost kinds should default to the same thing?
+      if (CostKind != TTI::TCK_RecipThroughput)
+        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       assert(VF == 1 && "Can't vectorize types here.");
       const Value *Mask = Args[3];
       bool VarMask = !isa<Constant>(Mask);
@@ -1178,6 +1184,9 @@ public:
                                              VarMask, Alignment, CostKind, I);
     }
     case Intrinsic::masked_gather: {
+      // FIXME: all cost kinds should default to the same thing?
+      if (CostKind != TTI::TCK_RecipThroughput)
+        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       assert(VF == 1 && "Can't vectorize types here.");
       const Value *Mask = Args[2];
       bool VarMask = !isa<Constant>(Mask);
@@ -1198,11 +1207,17 @@ public:
     case Intrinsic::vector_reduce_fmin:
     case Intrinsic::vector_reduce_umax:
     case Intrinsic::vector_reduce_umin: {
+      // FIXME: all cost kinds should default to the same thing?
+      if (CostKind != TTI::TCK_RecipThroughput)
+        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       IntrinsicCostAttributes Attrs(IID, RetTy, Args[0]->getType(), FMF, 1, I);
-      return getIntrinsicInstrCost(Attrs, CostKind);
+      return getTypeBasedIntrinsicInstrCost(Attrs, CostKind);
     }
     case Intrinsic::fshl:
     case Intrinsic::fshr: {
+      // FIXME: all cost kinds should default to the same thing?
+      if (CostKind != TTI::TCK_RecipThroughput)
+        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       const Value *X = Args[0];
       const Value *Y = Args[1];
       const Value *Z = Args[2];
@@ -1265,9 +1280,8 @@ public:
       ScalarizationCost += getOperandsScalarizationOverhead(Args, VF);
     }
 
-    IntrinsicCostAttributes Attrs(IID, RetTy, Types, FMF,
-                                  ScalarizationCost, I);
-    return thisT()->getIntrinsicInstrCost(Attrs, CostKind);
+    IntrinsicCostAttributes Attrs(IID, RetTy, Types, FMF, ScalarizationCost, I);
+    return thisT()->getTypeBasedIntrinsicInstrCost(Attrs, CostKind);
   }
 
   /// Get intrinsic cost based on argument types.

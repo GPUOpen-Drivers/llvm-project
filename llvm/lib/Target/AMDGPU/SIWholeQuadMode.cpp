@@ -475,6 +475,8 @@ char SIWholeQuadMode::scanInstructions(MachineFunction &MF,
 
           DemoteInstrs.push_back(&MI);
           HasDemoteInBlock = true;
+        } else if (Opcode == AMDGPU::SI_KILL_I1_TERMINATOR) {
+          DemoteInstrs.push_back(&MI);
         } else if (isWaterfallStart(MI.getOpcode())) {
           HasWaterfalls = true;
         } else if (WQMOutputs) {
@@ -692,7 +694,8 @@ void SIWholeQuadMode::scanLiveLanes(MachineBasicBlock &MBB,
   auto II = MBB.getFirstNonPHI(), IE = MBB.end();
   while (II != IE) {
     MachineInstr &MI = *II;
-    if (MI.getOpcode() == AMDGPU::SI_DEMOTE_I1) {
+    if ((MI.getOpcode() == AMDGPU::SI_DEMOTE_I1) ||
+        (MI.getOpcode() == AMDGPU::SI_KILL_I1_TERMINATOR)) {
       unsigned NewLive = MRI->createVirtualRegister(TRI->getBoolRC());
       LiveMaskRegs[&MI] = NewLive;
       CurrentLive = NewLive;
@@ -987,6 +990,9 @@ MachineInstr *SIWholeQuadMode::lowerDemote(MachineBasicBlock &MBB, MachineInstr 
     LIS->InsertMachineInstrInMaps(*NewMI);
   }
 
+  MachineInstr *TermMI = BuildMI(MBB, MI, DL, TII->get(AMDGPU::SI_EARLY_TERMINATE_SCC0));
+  LIS->InsertMachineInstrInMaps(*TermMI);
+
   if (MI.getOpcode() == AMDGPU::SI_DEMOTE_I1) {
     if (isWQM) {
       // Inside WQM demotes are replaced with live mask manipulation
@@ -1145,6 +1151,9 @@ void SIWholeQuadMode::lowerBlock(MachineBasicBlock &MBB) {
     case AMDGPU::SI_WQM_HELPER:
       lowerLiveMaskQuery(MBB, MI, LiveMaskReg, State == StateWQM);
       break;
+    case AMDGPU::SI_KILL_I1_TERMINATOR:
+      lowerDemote(MBB, MI, LiveMaskReg, LiveMaskRegs[&MI], State == StateWQM);
+      break;
     case AMDGPU::SI_DEMOTE_I1: {
       MachineInstr *SplitPoint = lowerDemote(MBB, MI, LiveMaskReg,
                                    LiveMaskRegs[&MI],
@@ -1287,9 +1296,6 @@ void SIWholeQuadMode::processBlock(MachineBasicBlock &MBB, bool isEntry) {
       if (MI.isTerminator() && OutNeeds == StateExact)
         Needs = StateExact;
 
-      if (MI.getOpcode() == AMDGPU::SI_ELSE && BI.OutNeeds == StateExact)
-        MI.getOperand(3).setImm(1);
-
       ++Next;
     } else {
       // End of basic block
@@ -1393,6 +1399,8 @@ bool SIWholeQuadMode::lowerLiveMaskQueries(unsigned LiveMaskReg) {
 bool SIWholeQuadMode::lowerDemoteInstrs() {
   bool Changed = false;
   for (MachineInstr *MI : DemoteInstrs) {
+    if (MI->getOpcode() != AMDGPU::SI_DEMOTE_I1)
+      continue;
     MachineBasicBlock *MBB = MI->getParent();
     MI->setDesc(TII->get(AMDGPU::SI_KILL_I1_TERMINATOR));
     splitBlock(MBB, MI);
