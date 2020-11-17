@@ -1591,6 +1591,10 @@ class Base(unittest2.TestCase):
         """Platform specific way to build the default binaries."""
         testdir = self.mydir
         testname = self.getBuildDirBasename()
+
+        if not architecture and configuration.arch:
+            architecture = configuration.arch
+
         if self.getDebugInfo():
             raise Exception("buildDefault tests must set NO_DEBUG_INFO_TESTCASE")
         module = builder_module()
@@ -1927,6 +1931,7 @@ class TestBase(Base):
             header.startswith("SB") and header.endswith(".h"))]
         includes = '\n'.join(list)
         new_content = content.replace('%include_SB_APIs%', includes)
+        new_content = new_content.replace('%SOURCE_DIR%', self.getSourceDir())
         src = os.path.join(self.getBuildDir(), source)
         with open(src, 'w') as f:
             f.write(new_content)
@@ -2605,6 +2610,9 @@ FileCheck output:
             dictionary=None):
         """Platform specific way to build the default binaries."""
         module = builder_module()
+
+        if not architecture and configuration.arch:
+            architecture = configuration.arch
 
         dictionary = lldbplatformutil.finalize_build_dictionary(dictionary)
         if self.getDebugInfo() is None:

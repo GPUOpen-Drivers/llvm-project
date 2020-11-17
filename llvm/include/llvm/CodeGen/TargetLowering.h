@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -1688,13 +1686,9 @@ public:
 
   virtual bool isJumpTableRelative() const;
 
-  /// Return true if a mulh[s|u] node for a specific type is cheaper than
-  /// a multiply followed by a shift. This is false by default.
-  virtual bool isMulhCheaperThanMulShift(EVT Type) const { return false; }
-
   /// If a physical register, this specifies the register that
   /// llvm.savestack/llvm.restorestack should save and restore.
-  unsigned getStackPointerRegisterToSaveRestore() const {
+  Register getStackPointerRegisterToSaveRestore() const {
     return StackPointerRegisterToSaveRestore;
   }
 
@@ -4315,9 +4309,12 @@ public:
 
   /// Expand rotations.
   /// \param N Node to expand
+  /// \param AllowVectorOps expand vector rotate, this should only be performed
+  ///        if the legalization is happening outside of LegalizeVectorOps
   /// \param Result output after conversion
   /// \returns True, if the expansion was successful, false otherwise
-  bool expandROT(SDNode *N, SDValue &Result, SelectionDAG &DAG) const;
+  bool expandROT(SDNode *N, bool AllowVectorOps, SDValue &Result,
+                 SelectionDAG &DAG) const;
 
   /// Expand float(f32) to SINT(i64) conversion
   /// \param N Node to expand
@@ -4449,6 +4446,9 @@ public:
   /// Expand a VECREDUCE_* into an explicit calculation. If Count is specified,
   /// only the first Count elements of the vector are used.
   SDValue expandVecReduce(SDNode *Node, SelectionDAG &DAG) const;
+
+  /// Expand a VECREDUCE_SEQ_* into an explicit ordered calculation.
+  SDValue expandVecReduceSeq(SDNode *Node, SelectionDAG &DAG) const;
 
   /// Expand an SREM or UREM using SDIV/UDIV or SDIVREM/UDIVREM, if legal.
   /// Returns true if the expansion was successful.

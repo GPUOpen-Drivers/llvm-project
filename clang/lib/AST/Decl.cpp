@@ -2280,7 +2280,9 @@ void VarDecl::setInit(Expr *I) {
 bool VarDecl::mightBeUsableInConstantExpressions(const ASTContext &C) const {
   const LangOptions &Lang = C.getLangOpts();
 
-  if (!Lang.CPlusPlus)
+  // OpenCL permits const integral variables to be used in constant
+  // expressions, like in C++98.
+  if (!Lang.CPlusPlus && !Lang.OpenCL)
     return false;
 
   // Function parameters are never usable in constant expressions.
@@ -2299,7 +2301,7 @@ bool VarDecl::mightBeUsableInConstantExpressions(const ASTContext &C) const {
   // Only const objects can be used in constant expressions in C++. C++98 does
   // not require the variable to be non-volatile, but we consider this to be a
   // defect.
-  if (!getType().isConstQualified() || getType().isVolatileQualified())
+  if (!getType().isConstant(C) || getType().isVolatileQualified())
     return false;
 
   // In C++, const, non-volatile variables of integral or enumeration types
@@ -2325,14 +2327,14 @@ bool VarDecl::isUsableInConstantExpressions(const ASTContext &Context) const {
   if (!DefVD->mightBeUsableInConstantExpressions(Context))
     return false;
   //   ... and its initializer is a constant initializer.
-  if (!DefVD->hasConstantInitialization())
+  if (Context.getLangOpts().CPlusPlus && !DefVD->hasConstantInitialization())
     return false;
   // C++98 [expr.const]p1:
   //   An integral constant-expression can involve only [...] const variables
   //   or static data members of integral or enumeration types initialized with
   //   [integer] constant expressions (dcl.init)
-  if (Context.getLangOpts().CPlusPlus && !Context.getLangOpts().CPlusPlus11 &&
-      !DefVD->hasICEInitializer(Context))
+  if ((Context.getLangOpts().CPlusPlus || Context.getLangOpts().OpenCL) &&
+      !Context.getLangOpts().CPlusPlus11 && !DefVD->hasICEInitializer(Context))
     return false;
   return true;
 }
@@ -2884,10 +2886,55 @@ bool FunctionDecl::hasTrivialBody() const {
   return false;
 }
 
-bool FunctionDecl::isDefined(const FunctionDecl *&Definition) const {
-  for (auto I : redecls()) {
-    if (I->isThisDeclarationADefinition()) {
-      Definition = I;
+bool FunctionDecl::isThisDeclarationInstantiatedFromAFriendDefinition() const {
+  if (!getFriendObjectKind())
+    return false;
+
+  // Check for a friend function instantiated from a friend function
+  // definition in a templated class.
+  if (const FunctionDecl *InstantiatedFrom =
+          getInstantiatedFromMemberFunction())
+    return InstantiatedFrom->getFriendObjectKind() &&
+           InstantiatedFrom->isThisDeclarationADefinition();
+
+  // Check for a friend function template instantiated from a friend
+  // function template definition in a templated class.
+  if (const FunctionTemplateDecl *Template = getDescribedFunctionTemplate()) {
+    if (const FunctionTemplateDecl *InstantiatedFrom =
+            Template->getInstantiatedFromMemberTemplate())
+      return InstantiatedFrom->getFriendObjectKind() &&
+             InstantiatedFrom->isThisDeclarationADefinition();
+  }
+
+  return false;
+}
+
+bool FunctionDecl::isDefined(const FunctionDecl *&Definition,
+                             bool CheckForPendingFriendDefinition) const {
+  for (const FunctionDecl *FD : redecls()) {
+    if (FD->isThisDeclarationADefinition()) {
+      Definition = FD;
+      return true;
+    }
+
+    // If this is a friend function defined in a class template, it does not
+    // have a body until it is used, nevertheless it is a definition, see
+    // [temp.inst]p2:
+    //
+    // ... for the purpose of determining whether an instantiated redeclaration
+    // is valid according to [basic.def.odr] and [class.mem], a declaration that
+    // corresponds to a definition in the template is considered to be a
+    // definition.
+    //
+    // The following code must produce redefinition error:
+    //
+    //     template<typename T> struct C20 { friend void func_20() {} };
+    //     C20<int> c20i;
+    //     void func_20() {}
+    //
+    if (CheckForPendingFriendDefinition &&
+        FD->isThisDeclarationInstantiatedFromAFriendDefinition()) {
+      Definition = FD;
       return true;
     }
   }
@@ -3637,7 +3684,13 @@ FunctionDecl::getTemplateInstantiationPattern(bool ForDefinition) const {
     return getDefinitionOrSelf(getPrimaryTemplate()->getTemplatedDecl());
   }
 
-  if (MemberSpecializationInfo *Info = getMemberSpecializationInfo()) {
+  // Check for a declaration of this function that was instantiated from a
+  // friend definition.
+  const FunctionDecl *FD = nullptr;
+  if (!isDefined(FD, /*CheckForPendingFriendDefinition=*/true))
+    FD = this;
+
+  if (MemberSpecializationInfo *Info = FD->getMemberSpecializationInfo()) {
     if (ForDefinition &&
         !clang::isTemplateInstantiation(Info->getTemplateSpecializationKind()))
       return nullptr;
@@ -3957,6 +4010,9 @@ unsigned FunctionDecl::getMemoryFunctionKind() const {
   case Builtin::BIbzero:
     return Builtin::BIbzero;
 
+  case Builtin::BIfree:
+    return Builtin::BIfree;
+
   default:
     if (isExternC()) {
       if (FnInfo->isStr("memset"))
@@ -3985,6 +4041,9 @@ unsigned FunctionDecl::getMemoryFunctionKind() const {
         return Builtin::BIstrlen;
       else if (FnInfo->isStr("bzero"))
         return Builtin::BIbzero;
+    } else if (isInStdNamespace()) {
+      if (FnInfo->isStr("free"))
+        return Builtin::BIfree;
     }
     break;
   }

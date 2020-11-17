@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: opt -cost-model -analyze -mtriple=amdgcn-unknown-amdhsa -mcpu=hawaii < %s | FileCheck -check-prefixes=ALL,CIFASTF64,NOFP16,NOFP16-NOFP32DENORM,SLOWFP32DENORMS %s
 ; RUN: opt -cost-model -analyze -mtriple=amdgcn-unknown-amdhsa -mcpu=kaveri < %s | FileCheck -check-prefixes=ALL,CISLOWF64,NOFP16,NOFP16-NOFP32DENORM,SLOWFP32DENORMS  %s
 ; RUN: opt -cost-model -analyze -mtriple=amdgcn-mesa-mesa3d -mcpu=tahiti < %s | FileCheck -check-prefixes=ALL,SIFASTF64,NOFP32DENORM,NOFP16,NOFP16-NOFP32DENORM,SLOWFP32DENORMS  %s

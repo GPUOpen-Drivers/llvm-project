@@ -995,6 +995,7 @@ void GCNPassConfig::addPreRegAlloc() {
 }
 
 void GCNPassConfig::addFastRegAlloc() {
+  addPass(createSIWholeQuadModePass());
   // FIXME: We have to disable the verifier here because of PHIElimination +
   // TwoAddressInstructions disabling it.
 
@@ -1071,9 +1072,6 @@ void GCNPassConfig::addPreEmitPass() {
   //
   // Here we add a stand-alone hazard recognizer pass which can handle all
   // cases.
-  //
-  // FIXME: This stand-alone pass will emit indiv. S_NOP 0, as needed. It would
-  // be better for it to emit S_NOP <N> when possible.
   addPass(&PostRAHazardRecognizerID);
   addPass(&BranchRelaxationPassID);
 }

@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: opt -cost-model -analyze -mtriple=amdgcn-unknown-amdhsa -mcpu=gfx900 -denormal-fp-math-f32=preserve-sign -denormal-fp-math=preserve-sign -fp-contract=on < %s | FileCheck -check-prefixes=FUSED,NOCONTRACT,ALL %s
 ; RUN: opt -cost-model -analyze -mtriple=amdgcn-unknown-amdhsa -mcpu=gfx900 -denormal-fp-math-f32=ieee -denormal-fp-math=ieee -fp-contract=on < %s | FileCheck -check-prefixes=SLOW,NOCONTRACT,ALL %s
 ; RUN: opt -cost-model -analyze -mtriple=amdgcn-unknown-amdhsa -mcpu=gfx900 -denormal-fp-math-f32=ieee -denormal-fp-math=ieee -fp-contract=fast < %s | FileCheck -check-prefixes=FUSED,CONTRACT,ALL %s
