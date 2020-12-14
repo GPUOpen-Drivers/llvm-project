@@ -74,6 +74,7 @@ FunctionPass *createSIPostRABundlerPass();
 FunctionPass *createAMDGPUSimplifyLibCallsPass(const TargetMachine *);
 FunctionPass *createAMDGPUUseNativeCallsPass();
 FunctionPass *createAMDGPUCodeGenPreparePass();
+FunctionPass *createAMDGPULateCodeGenPreparePass();
 FunctionPass *createAMDGPUMachineCFGStructurizerPass();
 FunctionPass *createAMDGPUPropagateAttributesEarlyPass(const TargetMachine *);
 ModulePass *createAMDGPUPropagateAttributesLatePass(const TargetMachine *);
@@ -249,6 +250,9 @@ extern char &AMDGPUAnnotateUniformValuesPassID;
 
 void initializeAMDGPUCodeGenPreparePass(PassRegistry&);
 extern char &AMDGPUCodeGenPrepareID;
+
+void initializeAMDGPULateCodeGenPreparePass(PassRegistry &);
+extern char &AMDGPULateCodeGenPrepareID;
 
 void initializeSIAnnotateControlFlowPass(PassRegistry&);
 extern char &SIAnnotateControlFlowPassID;

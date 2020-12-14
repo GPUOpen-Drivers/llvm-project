@@ -372,7 +372,7 @@ void CodeGenModule::checkAliases() {
   for (const GlobalDecl &GD : Aliases) {
     StringRef MangledName = getMangledName(GD);
     llvm::GlobalValue *Entry = GetGlobalValue(MangledName);
-    auto *Alias = dyn_cast<llvm::GlobalIndirectSymbol>(Entry);
+    auto *Alias = cast<llvm::GlobalIndirectSymbol>(Entry);
     Alias->replaceAllUsesWith(llvm::UndefValue::get(Alias->getType()));
     Alias->eraseFromParent();
   }
@@ -1642,14 +1642,14 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
   if (!hasUnwindExceptions(LangOpts))
     B.addAttribute(llvm::Attribute::NoUnwind);
 
-  if (D && D->hasAttr<NoStackProtectorAttr>())
-    B.addAttribute(llvm::Attribute::NoStackProtect);
-  else if (LangOpts.getStackProtector() == LangOptions::SSPOn)
-    B.addAttribute(llvm::Attribute::StackProtect);
-  else if (LangOpts.getStackProtector() == LangOptions::SSPStrong)
-    B.addAttribute(llvm::Attribute::StackProtectStrong);
-  else if (LangOpts.getStackProtector() == LangOptions::SSPReq)
-    B.addAttribute(llvm::Attribute::StackProtectReq);
+  if (!D || !D->hasAttr<NoStackProtectorAttr>()) {
+    if (LangOpts.getStackProtector() == LangOptions::SSPOn)
+      B.addAttribute(llvm::Attribute::StackProtect);
+    else if (LangOpts.getStackProtector() == LangOptions::SSPStrong)
+      B.addAttribute(llvm::Attribute::StackProtectStrong);
+    else if (LangOpts.getStackProtector() == LangOptions::SSPReq)
+      B.addAttribute(llvm::Attribute::StackProtectReq);
+  }
 
   if (!D) {
     // If we don't have a declaration to control inlining, the function isn't
@@ -2391,7 +2391,6 @@ llvm::Constant *CodeGenModule::EmitAnnotationLineNo(SourceLocation L) {
 
 llvm::Constant *CodeGenModule::EmitAnnotationArgs(const AnnotateAttr *Attr) {
   ArrayRef<Expr *> Exprs = {Attr->args_begin(), Attr->args_size()};
-  Exprs = Exprs.drop_front();
   if (Exprs.empty())
     return llvm::ConstantPointerNull::get(Int8PtrTy);
 
@@ -2637,8 +2636,29 @@ ConstantAddress CodeGenModule::GetAddrOfMSGuidDecl(const MSGuidDecl *GD) {
 
 ConstantAddress CodeGenModule::GetAddrOfTemplateParamObject(
     const TemplateParamObjectDecl *TPO) {
-  ErrorUnsupported(TPO, "template parameter object");
-  return ConstantAddress::invalid();
+  StringRef Name = getMangledName(TPO);
+  CharUnits Alignment = getNaturalTypeAlignment(TPO->getType());
+
+  if (llvm::GlobalVariable *GV = getModule().getNamedGlobal(Name))
+    return ConstantAddress(GV, Alignment);
+
+  ConstantEmitter Emitter(*this);
+  llvm::Constant *Init = Emitter.emitForInitializer(
+        TPO->getValue(), TPO->getType().getAddressSpace(), TPO->getType());
+
+  if (!Init) {
+    ErrorUnsupported(TPO, "template parameter object");
+    return ConstantAddress::invalid();
+  }
+
+  auto *GV = new llvm::GlobalVariable(
+      getModule(), Init->getType(),
+      /*isConstant=*/true, llvm::GlobalValue::LinkOnceODRLinkage, Init, Name);
+  if (supportsCOMDAT())
+    GV->setComdat(TheModule.getOrInsertComdat(GV->getName()));
+  Emitter.finalize(GV);
+
+  return ConstantAddress(GV, Alignment);
 }
 
 ConstantAddress CodeGenModule::GetWeakRefReference(const ValueDecl *VD) {
@@ -6197,16 +6217,17 @@ CharUnits CodeGenModule::getNaturalTypeAlignment(QualType T,
     *BaseInfo = LValueBaseInfo(AlignmentSource::Type);
 
   CharUnits Alignment;
-  // For C++ class pointees, we don't know whether we're pointing at a
-  // base or a complete object, so we generally need to use the
-  // non-virtual alignment.
   const CXXRecordDecl *RD;
-  if (forPointeeType && !AlignForArray && (RD = T->getAsCXXRecordDecl())) {
+  if (T.getQualifiers().hasUnaligned()) {
+    Alignment = CharUnits::One();
+  } else if (forPointeeType && !AlignForArray &&
+             (RD = T->getAsCXXRecordDecl())) {
+    // For C++ class pointees, we don't know whether we're pointing at a
+    // base or a complete object, so we generally need to use the
+    // non-virtual alignment.
     Alignment = getClassPointerAlignment(RD);
   } else {
     Alignment = getContext().getTypeAlignInChars(T);
-    if (T.getQualifiers().hasUnaligned())
-      Alignment = CharUnits::One();
   }
 
   // Cap to the global maximum type alignment unless the alignment

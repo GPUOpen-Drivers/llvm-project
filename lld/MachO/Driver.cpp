@@ -10,6 +10,7 @@
 #include "Config.h"
 #include "DriverUtils.h"
 #include "InputFiles.h"
+#include "LTO.h"
 #include "ObjC.h"
 #include "OutputSection.h"
 #include "OutputSegment.h"
@@ -30,6 +31,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/BinaryFormat/Magic.h"
+#include "llvm/LTO/LTO.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
@@ -37,6 +39,7 @@
 #include "llvm/Support/Host.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/TargetSelect.h"
 
 #include <algorithm>
 
@@ -66,6 +69,28 @@ static const opt::OptTable::Info optInfo[] = {
 
 MachOOptTable::MachOOptTable() : OptTable(optInfo) {}
 
+// Set color diagnostics according to --color-diagnostics={auto,always,never}
+// or --no-color-diagnostics flags.
+static void handleColorDiagnostics(opt::InputArgList &args) {
+  auto *arg = args.getLastArg(OPT_color_diagnostics, OPT_color_diagnostics_eq,
+                              OPT_no_color_diagnostics);
+  if (!arg)
+    return;
+  if (arg->getOption().getID() == OPT_color_diagnostics) {
+    lld::errs().enable_colors(true);
+  } else if (arg->getOption().getID() == OPT_no_color_diagnostics) {
+    lld::errs().enable_colors(false);
+  } else {
+    StringRef s = arg->getValue();
+    if (s == "always")
+      lld::errs().enable_colors(true);
+    else if (s == "never")
+      lld::errs().enable_colors(false);
+    else if (s != "auto")
+      error("unknown option: --color-diagnostics=" + s);
+  }
+}
+
 opt::InputArgList MachOOptTable::parse(ArrayRef<const char *> argv) {
   // Make InputArgList from string vectors.
   unsigned missingIndex;
@@ -76,6 +101,8 @@ opt::InputArgList MachOOptTable::parse(ArrayRef<const char *> argv) {
 
   if (missingCount)
     error(Twine(args.getArgString(missingIndex)) + ": missing argument");
+
+  handleColorDiagnostics(args);
 
   for (opt::Arg *arg : args.filtered(OPT_UNKNOWN))
     error("unknown argument: " + arg->getSpelling());
@@ -312,19 +339,22 @@ static InputFile *addFile(StringRef path) {
     newFile = make<ObjFile>(mbref);
     break;
   case file_magic::macho_dynamically_linked_shared_lib:
+  case file_magic::macho_dynamically_linked_shared_lib_stub:
     newFile = make<DylibFile>(mbref);
     break;
   case file_magic::tapi_file: {
-    Optional<DylibFile *> dylibFile = makeDylibFromTAPI(mbref);
-    if (!dylibFile)
-      return nullptr;
-    newFile = *dylibFile;
+    if (Optional<DylibFile *> dylibFile = makeDylibFromTAPI(mbref))
+      newFile = *dylibFile;
     break;
   }
+  case file_magic::bitcode:
+    newFile = make<BitcodeFile>(mbref);
+    break;
   default:
     error(path + ": unhandled file type");
   }
-  inputFiles.push_back(newFile);
+  if (newFile)
+    inputFiles.push_back(newFile);
   return newFile;
 }
 
@@ -452,6 +482,27 @@ static bool markSubLibrary(StringRef searchName) {
     }
   }
   return false;
+}
+
+// This function is called on startup. We need this for LTO since
+// LTO calls LLVM functions to compile bitcode files to native code.
+// Technically this can be delayed until we read bitcode files, but
+// we don't bother to do lazily because the initialization is fast.
+static void initLLVM() {
+  InitializeAllTargets();
+  InitializeAllTargetMCs();
+  InitializeAllAsmPrinters();
+  InitializeAllAsmParsers();
+}
+
+static void compileBitcodeFiles() {
+  auto lto = make<BitcodeCompiler>();
+  for (InputFile *file : inputFiles)
+    if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file))
+      lto->add(*bitcodeFile);
+
+  for (ObjFile *file : lto->compile())
+    inputFiles.push_back(file);
 }
 
 // Replaces common symbols with defined symbols residing in __common sections.
@@ -611,6 +662,8 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
     config->searchDylibsFirst =
         (arg && arg->getOption().getID() == OPT_search_dylibs_first);
 
+  config->saveTemps = args.hasArg(OPT_save_temps);
+
   if (args.hasArg(OPT_v)) {
     message(getLLDVersion());
     message(StringRef("Library search paths:") +
@@ -691,6 +744,8 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
       error("-sub_library " + searchName + " does not match a supplied dylib");
   }
 
+  initLLVM();
+  compileBitcodeFiles();
   replaceCommonSymbols();
 
   StringRef orderFile = args.getLastArgValue(OPT_order_file);

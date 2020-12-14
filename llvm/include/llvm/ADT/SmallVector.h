@@ -136,6 +136,13 @@ protected:
     this->Size = this->Capacity = 0; // FIXME: Setting Capacity to 0 is suspect.
   }
 
+  void assertSafeToPush(const void *Elt) {
+    assert(
+        (Elt < begin() || Elt >= end() || this->size() < this->capacity()) &&
+        "Attempting to push_back to the vector an element of the vector without"
+        " enough space reserved");
+  }
+
 public:
   using size_type = size_t;
   using difference_type = ptrdiff_t;
@@ -251,6 +258,7 @@ protected:
 
 public:
   void push_back(const T &Elt) {
+    this->assertSafeToPush(&Elt);
     if (LLVM_UNLIKELY(this->size() >= this->capacity()))
       this->grow();
     ::new ((void*) this->end()) T(Elt);
@@ -258,6 +266,7 @@ public:
   }
 
   void push_back(T &&Elt) {
+    this->assertSafeToPush(&Elt);
     if (LLVM_UNLIKELY(this->size() >= this->capacity()))
       this->grow();
     ::new ((void*) this->end()) T(::std::move(Elt));
@@ -353,6 +362,7 @@ protected:
 
 public:
   void push_back(const T &Elt) {
+    this->assertSafeToPush(&Elt);
     if (LLVM_UNLIKELY(this->size() >= this->capacity()))
       this->grow();
     memcpy(reinterpret_cast<void *>(this->end()), &Elt, sizeof(T));
@@ -523,9 +533,10 @@ public:
     return(N);
   }
 
-  iterator insert(iterator I, T &&Elt) {
+private:
+  template <class ArgType> iterator insert_one_impl(iterator I, ArgType &&Elt) {
     if (I == this->end()) {  // Important special case for empty vector.
-      this->push_back(::std::move(Elt));
+      this->push_back(::std::forward<ArgType>(Elt));
       return this->end()-1;
     }
 
@@ -545,42 +556,20 @@ public:
 
     // If we just moved the element we're inserting, be sure to update
     // the reference.
-    T *EltPtr = &Elt;
+    std::remove_reference_t<ArgType> *EltPtr = &Elt;
     if (I <= EltPtr && EltPtr < this->end())
       ++EltPtr;
 
-    *I = ::std::move(*EltPtr);
+    *I = ::std::forward<ArgType>(*EltPtr);
     return I;
   }
 
-  iterator insert(iterator I, const T &Elt) {
-    if (I == this->end()) {  // Important special case for empty vector.
-      this->push_back(Elt);
-      return this->end()-1;
-    }
-
-    assert(I >= this->begin() && "Insertion iterator is out of bounds.");
-    assert(I <= this->end() && "Inserting past the end of the vector.");
-
-    if (this->size() >= this->capacity()) {
-      size_t EltNo = I-this->begin();
-      this->grow();
-      I = this->begin()+EltNo;
-    }
-    ::new ((void*) this->end()) T(std::move(this->back()));
-    // Push everything else over.
-    std::move_backward(I, this->end()-1, this->end());
-    this->set_size(this->size() + 1);
-
-    // If we just moved the element we're inserting, be sure to update
-    // the reference.
-    const T *EltPtr = &Elt;
-    if (I <= EltPtr && EltPtr < this->end())
-      ++EltPtr;
-
-    *I = *EltPtr;
-    return I;
+public:
+  iterator insert(iterator I, T &&Elt) {
+    return insert_one_impl(I, std::move(Elt));
   }
+
+  iterator insert(iterator I, const T &Elt) { return insert_one_impl(I, Elt); }
 
   iterator insert(iterator I, size_type NumToInsert, const T &Elt) {
     // Convert iterator to elt# to avoid invalidating iterator when we reserve()
