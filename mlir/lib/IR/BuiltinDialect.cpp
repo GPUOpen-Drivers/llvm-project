@@ -5,13 +5,19 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// This file contains the Builtin dialect that contains all of the attributes,
+// operations, and types that are necessary for the validity of the IR.
+//
+//===----------------------------------------------------------------------===//
 
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/FunctionImplementation.h"
 #include "mlir/IR/OpImplementation.h"
-#include "mlir/IR/StandardTypes.h"
 #include "llvm/ADT/MapVector.h"
 
 using namespace mlir;
@@ -42,8 +48,6 @@ struct BuiltinOpAsmDialectInterface : public OpAsmDialectInterface {
 };
 } // end anonymous namespace.
 
-/// A builtin dialect to define types/etc that are necessary for the validity of
-/// the IR.
 void BuiltinDialect::initialize() {
   addTypes<ComplexType, BFloat16Type, Float16Type, Float32Type, Float64Type,
            FunctionType, IndexType, IntegerType, MemRefType, UnrankedMemRefType,
@@ -151,8 +155,7 @@ void FuncOp::cloneInto(FuncOp dest, BlockAndValueMapping &mapper) {
     newAttrs.insert(attr);
   for (auto &attr : getAttrs())
     newAttrs.insert(attr);
-  dest.getOperation()->setAttrs(
-      DictionaryAttr::get(newAttrs.takeVector(), getContext()));
+  dest->setAttrs(DictionaryAttr::get(newAttrs.takeVector(), getContext()));
 
   // Clone the body.
   getBody().cloneInto(&dest.getBody(), mapper);
@@ -225,9 +228,9 @@ static LogicalResult verify(ModuleOp op) {
             ArrayRef<StringRef>{mlir::SymbolTable::getSymbolAttrName(),
                                 mlir::SymbolTable::getVisibilityAttrName()},
             attr.first.strref()))
-      return op.emitOpError()
-             << "can only contain dialect-specific attributes, found: '"
-             << attr.first << "'";
+      return op.emitOpError() << "can only contain attributes with "
+                                 "dialect-prefixed names, found: '"
+                              << attr.first << "'";
   }
 
   return success();

@@ -4136,7 +4136,8 @@ static Value *SimplifySelectInst(Value *Cond, Value *TrueVal, Value *FalseVal,
 
   // Deal with partial undef vector constants: select ?, VecC, VecC' --> VecC''
   Constant *TrueC, *FalseC;
-  if (TrueVal->getType()->isVectorTy() && match(TrueVal, m_Constant(TrueC)) &&
+  if (isa<FixedVectorType>(TrueVal->getType()) &&
+      match(TrueVal, m_Constant(TrueC)) &&
       match(FalseVal, m_Constant(FalseC))) {
     unsigned NumElts =
         cast<FixedVectorType>(TrueC->getType())->getNumElements();
@@ -4668,7 +4669,7 @@ static Value *SimplifyShuffleVectorInst(Value *Op0, Value *Op1,
   // Don't fold a shuffle with undef mask elements. This may get folded in a
   // better way using demanded bits or other analysis.
   // TODO: Should we allow this?
-  if (find(Indices, -1) != Indices.end())
+  if (is_contained(Indices, -1))
     return nullptr;
 
   // Check if every element of this shuffle can be mapped back to the

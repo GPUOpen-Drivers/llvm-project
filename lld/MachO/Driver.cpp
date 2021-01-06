@@ -8,7 +8,6 @@
 
 #include "Driver.h"
 #include "Config.h"
-#include "DriverUtils.h"
 #include "InputFiles.h"
 #include "LTO.h"
 #include "ObjC.h"
@@ -25,6 +24,7 @@
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/LLVM.h"
 #include "lld/Common/Memory.h"
+#include "lld/Common/Reproduce.h"
 #include "lld/Common/Version.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
@@ -34,12 +34,13 @@
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Option/ArgList.h"
-#include "llvm/Option/Option.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/TextAPI/MachO/PackedVersion.h"
 
 #include <algorithm>
 
@@ -52,68 +53,6 @@ using namespace lld;
 using namespace lld::macho;
 
 Configuration *lld::macho::config;
-
-// Create prefix string literals used in Options.td
-#define PREFIX(NAME, VALUE) const char *NAME[] = VALUE;
-#include "Options.inc"
-#undef PREFIX
-
-// Create table mapping all options defined in Options.td
-static const opt::OptTable::Info optInfo[] = {
-#define OPTION(X1, X2, ID, KIND, GROUP, ALIAS, X7, X8, X9, X10, X11, X12)      \
-  {X1, X2, X10,         X11,         OPT_##ID, opt::Option::KIND##Class,       \
-   X9, X8, OPT_##GROUP, OPT_##ALIAS, X7,       X12},
-#include "Options.inc"
-#undef OPTION
-};
-
-MachOOptTable::MachOOptTable() : OptTable(optInfo) {}
-
-// Set color diagnostics according to --color-diagnostics={auto,always,never}
-// or --no-color-diagnostics flags.
-static void handleColorDiagnostics(opt::InputArgList &args) {
-  auto *arg = args.getLastArg(OPT_color_diagnostics, OPT_color_diagnostics_eq,
-                              OPT_no_color_diagnostics);
-  if (!arg)
-    return;
-  if (arg->getOption().getID() == OPT_color_diagnostics) {
-    lld::errs().enable_colors(true);
-  } else if (arg->getOption().getID() == OPT_no_color_diagnostics) {
-    lld::errs().enable_colors(false);
-  } else {
-    StringRef s = arg->getValue();
-    if (s == "always")
-      lld::errs().enable_colors(true);
-    else if (s == "never")
-      lld::errs().enable_colors(false);
-    else if (s != "auto")
-      error("unknown option: --color-diagnostics=" + s);
-  }
-}
-
-opt::InputArgList MachOOptTable::parse(ArrayRef<const char *> argv) {
-  // Make InputArgList from string vectors.
-  unsigned missingIndex;
-  unsigned missingCount;
-  SmallVector<const char *, 256> vec(argv.data(), argv.data() + argv.size());
-
-  opt::InputArgList args = ParseArgs(vec, missingIndex, missingCount);
-
-  if (missingCount)
-    error(Twine(args.getArgString(missingIndex)) + ": missing argument");
-
-  handleColorDiagnostics(args);
-
-  for (opt::Arg *arg : args.filtered(OPT_UNKNOWN))
-    error("unknown argument: " + arg->getSpelling());
-  return args;
-}
-
-void MachOOptTable::printHelp(const char *argv0, bool showHidden) const {
-  PrintHelp(lld::outs(), (std::string(argv0) + " [options] file...").c_str(),
-            "LLVM Linker", showHidden);
-  lld::outs() << "\n";
-}
 
 static HeaderFileType getOutputType(const opt::InputArgList &args) {
   // TODO: -r, -dylinker, -preload...
@@ -241,7 +180,7 @@ getSearchPaths(unsigned optionCode, opt::InputArgList &args,
     for (auto root : roots) {
       SmallString<261> buffer(root);
       path::append(buffer, path);
-      if (warnIfNotDirectory(optionLetter, buffer))
+      if (fs::is_directory(buffer))
         paths.push_back(saver.save(buffer.str()));
     }
   }
@@ -275,21 +214,40 @@ getFrameworkSearchPaths(opt::InputArgList &args,
                         {"/Library/Frameworks", "/System/Library/Frameworks"});
 }
 
+namespace {
+struct ArchiveMember {
+  MemoryBufferRef mbref;
+  uint32_t modTime;
+};
+} // namespace
+
 // Returns slices of MB by parsing MB as an archive file.
 // Each slice consists of a member file in the archive.
-static std::vector<MemoryBufferRef> getArchiveMembers(MemoryBufferRef mb) {
+static std::vector<ArchiveMember> getArchiveMembers(MemoryBufferRef mb) {
   std::unique_ptr<Archive> file =
       CHECK(Archive::create(mb),
             mb.getBufferIdentifier() + ": failed to parse archive");
+  Archive *archive = file.get();
+  make<std::unique_ptr<Archive>>(std::move(file)); // take ownership
 
-  std::vector<MemoryBufferRef> v;
+  std::vector<ArchiveMember> v;
   Error err = Error::success();
-  for (const Archive::Child &c : file->children(err)) {
+
+  // Thin archives refer to .o files, so --reproduces needs the .o files too.
+  bool addToTar = archive->isThin() && tar;
+
+  for (const Archive::Child &c : archive->children(err)) {
     MemoryBufferRef mbref =
         CHECK(c.getMemoryBufferRef(),
               mb.getBufferIdentifier() +
                   ": could not get the buffer for a child of the archive");
-    v.push_back(mbref);
+    if (addToTar)
+      tar->append(relativeToRoot(check(c.getFullName())), mbref.getBuffer());
+    uint32_t modTime = toTimeT(
+        CHECK(c.getLastModified(), mb.getBufferIdentifier() +
+                                       ": could not get the modification "
+                                       "time for a child of the archive"));
+    v.push_back({mbref, modTime});
   }
   if (err)
     fatal(mb.getBufferIdentifier() +
@@ -298,14 +256,15 @@ static std::vector<MemoryBufferRef> getArchiveMembers(MemoryBufferRef mb) {
   return v;
 }
 
-static InputFile *addFile(StringRef path) {
+static InputFile *addFile(StringRef path, bool forceLoadArchive) {
   Optional<MemoryBufferRef> buffer = readFile(path);
   if (!buffer)
     return nullptr;
   MemoryBufferRef mbref = *buffer;
   InputFile *newFile = nullptr;
 
-  switch (identify_magic(mbref.getBuffer())) {
+  auto magic = identify_magic(mbref.getBuffer());
+  switch (magic) {
   case file_magic::archive: {
     std::unique_ptr<object::Archive> file = CHECK(
         object::Archive::create(mbref), path + ": failed to parse archive");
@@ -313,10 +272,15 @@ static InputFile *addFile(StringRef path) {
     if (!file->isEmpty() && !file->hasSymbolTable())
       error(path + ": archive has no index; run ranlib to add one");
 
-    if (config->allLoad) {
-      if (Optional<MemoryBufferRef> buffer = readFile(path))
-        for (MemoryBufferRef member : getArchiveMembers(*buffer))
-          inputFiles.push_back(make<ObjFile>(member));
+    if (config->allLoad || forceLoadArchive) {
+      if (Optional<MemoryBufferRef> buffer = readFile(path)) {
+        for (const ArchiveMember &member : getArchiveMembers(*buffer)) {
+          inputFiles.insert(make<ObjFile>(member.mbref, member.modTime, path));
+          printArchiveMemberLoad(
+              (forceLoadArchive ? "-force_load" : "-all_load"),
+              inputFiles.back());
+        }
+      }
     } else if (config->forceLoadObjC) {
       for (const object::Archive::Symbol &sym : file->symbols())
         if (sym.getName().startswith(objc::klass))
@@ -326,24 +290,27 @@ static InputFile *addFile(StringRef path) {
       // we already found that it contains an ObjC symbol. We should also
       // consider creating a LazyObjFile class in order to avoid double-loading
       // these files here and below (as part of the ArchiveFile).
-      if (Optional<MemoryBufferRef> buffer = readFile(path))
-        for (MemoryBufferRef member : getArchiveMembers(*buffer))
-          if (hasObjCSection(member))
-            inputFiles.push_back(make<ObjFile>(member));
+      if (Optional<MemoryBufferRef> buffer = readFile(path)) {
+        for (const ArchiveMember &member : getArchiveMembers(*buffer)) {
+          if (hasObjCSection(member.mbref)) {
+            inputFiles.insert(
+                make<ObjFile>(member.mbref, member.modTime, path));
+            printArchiveMemberLoad("-ObjC", inputFiles.back());
+          }
+        }
+      }
     }
 
     newFile = make<ArchiveFile>(std::move(file));
     break;
   }
   case file_magic::macho_object:
-    newFile = make<ObjFile>(mbref);
+    newFile = make<ObjFile>(mbref, getModTime(path), "");
     break;
   case file_magic::macho_dynamically_linked_shared_lib:
   case file_magic::macho_dynamically_linked_shared_lib_stub:
-    newFile = make<DylibFile>(mbref);
-    break;
   case file_magic::tapi_file: {
-    if (Optional<DylibFile *> dylibFile = makeDylibFromTAPI(mbref))
+    if (Optional<DylibFile *> dylibFile = loadDylib(mbref))
       newFile = *dylibFile;
     break;
   }
@@ -353,9 +320,67 @@ static InputFile *addFile(StringRef path) {
   default:
     error(path + ": unhandled file type");
   }
-  if (newFile)
-    inputFiles.push_back(newFile);
+  if (newFile) {
+    // printArchiveMemberLoad() prints both .a and .o names, so no need to
+    // print the .a name here.
+    if (config->printEachFile && magic != file_magic::archive)
+      lld::outs() << toString(newFile) << '\n';
+    inputFiles.insert(newFile);
+  }
   return newFile;
+}
+
+static void addLibrary(StringRef name, bool isWeak) {
+  if (Optional<std::string> path = findLibrary(name)) {
+    auto *dylibFile = dyn_cast_or_null<DylibFile>(addFile(*path, false));
+    if (isWeak && dylibFile)
+      dylibFile->forceWeakImport = true;
+    return;
+  }
+  error("library not found for -l" + name);
+}
+
+static void addFramework(StringRef name, bool isWeak) {
+  if (Optional<std::string> path = findFramework(name)) {
+    auto *dylibFile = dyn_cast_or_null<DylibFile>(addFile(*path, false));
+    if (isWeak && dylibFile)
+      dylibFile->forceWeakImport = true;
+    return;
+  }
+  error("framework not found for -framework " + name);
+}
+
+// Parses LC_LINKER_OPTION contents, which can add additional command line flags.
+void macho::parseLCLinkerOption(InputFile* f, unsigned argc, StringRef data) {
+  SmallVector<const char *, 4> argv;
+  size_t offset = 0;
+  for (unsigned i = 0; i < argc && offset < data.size(); ++i) {
+    argv.push_back(data.data() + offset);
+    offset += strlen(data.data() + offset) + 1;
+  }
+  if (argv.size() != argc || offset > data.size())
+    fatal(toString(f) + ": invalid LC_LINKER_OPTION");
+
+  MachOOptTable table;
+  unsigned missingIndex, missingCount;
+  opt::InputArgList args = table.ParseArgs(argv, missingIndex, missingCount);
+  if (missingCount)
+    fatal(Twine(args.getArgString(missingIndex)) + ": missing argument");
+  for (auto *arg : args.filtered(OPT_UNKNOWN))
+    error("unknown argument: " + arg->getAsString(args));
+
+  for (auto *arg : args) {
+    switch (arg->getOption().getID()) {
+    case OPT_l:
+      addLibrary(arg->getValue(), false);
+      break;
+    case OPT_framework:
+      addFramework(arg->getValue(), false);
+      break;
+    default:
+      error(arg->getSpelling() + " is not allowed in LC_LINKER_OPTION");
+    }
+  }
 }
 
 static void addFileList(StringRef path) {
@@ -364,13 +389,7 @@ static void addFileList(StringRef path) {
     return;
   MemoryBufferRef mbref = *buffer;
   for (StringRef path : args::getLines(mbref))
-    addFile(path);
-}
-
-static void forceLoadArchive(StringRef path) {
-  if (Optional<MemoryBufferRef> buffer = readFile(path))
-    for (MemoryBufferRef member : getArchiveMembers(*buffer))
-      inputFiles.push_back(make<ObjFile>(member));
+    addFile(path, false);
 }
 
 static std::array<StringRef, 6> archNames{"arm",    "arm64", "i386",
@@ -470,12 +489,13 @@ static void parseOrderFile(StringRef path) {
 // with a path of .*/libfoo.{dylib, tbd}.
 // XXX ld64 seems to ignore the extension entirely when matching sub-libraries;
 // I'm not sure what the use case for that is.
-static bool markSubLibrary(StringRef searchName) {
+static bool markReexport(StringRef searchName, ArrayRef<StringRef> extensions) {
   for (InputFile *file : inputFiles) {
     if (auto *dylibFile = dyn_cast<DylibFile>(file)) {
       StringRef filename = path::filename(dylibFile->getName());
       if (filename.consume_front(searchName) &&
-          (filename == ".dylib" || filename == ".tbd")) {
+          (filename.empty() ||
+           find(extensions, filename) != extensions.end())) {
         dylibFile->reexport = true;
         return true;
       }
@@ -502,7 +522,7 @@ static void compileBitcodeFiles() {
       lto->add(*bitcodeFile);
 
   for (ObjFile *file : lto->compile())
-    inputFiles.push_back(file);
+    inputFiles.insert(file);
 }
 
 // Replaces common symbols with defined symbols residing in __common sections.
@@ -612,6 +632,57 @@ static void warnIfUnimplementedOption(const opt::Option &opt) {
   }
 }
 
+static const char *getReproduceOption(opt::InputArgList &args) {
+  if (auto *arg = args.getLastArg(OPT_reproduce))
+    return arg->getValue();
+  return getenv("LLD_REPRODUCE");
+}
+
+static bool isPie(opt::InputArgList &args) {
+  if (config->outputType != MH_EXECUTE || args.hasArg(OPT_no_pie))
+    return false;
+
+  // TODO: add logic here as we support more archs. E.g. i386 should default
+  // to PIE from 10.7, arm64 should always be PIE, etc
+  assert(config->arch == AK_x86_64 || config->arch == AK_x86_64h);
+
+  if (config->platform.kind == MachO::PlatformKind::macOS &&
+      config->platform.minimum >= VersionTuple(10, 6))
+    return true;
+
+  return args.hasArg(OPT_pie);
+}
+
+static void parseClangOption(StringRef opt, const Twine &msg) {
+  std::string err;
+  raw_string_ostream os(err);
+
+  const char *argv[] = {"lld", opt.data()};
+  if (cl::ParseCommandLineOptions(2, argv, "", &os))
+    return;
+  os.flush();
+  error(msg + ": " + StringRef(err).trim());
+}
+
+static uint32_t parseDylibVersion(const opt::ArgList& args, unsigned id) {
+  const opt::Arg *arg = args.getLastArg(id);
+  if (!arg)
+    return 0;
+
+  if (config->outputType != MH_DYLIB) {
+    error(arg->getAsString(args) + ": only valid with -dylib");
+    return 0;
+  }
+
+  PackedVersion version;
+  if (!version.parse32(arg->getValue())) {
+    error(arg->getAsString(args) + ": malformed version");
+    return 0;
+  }
+
+  return version.rawValue();
+}
+
 bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
                  raw_ostream &stdoutOS, raw_ostream &stderrOS) {
   lld::stdoutOS = &stdoutOS;
@@ -633,6 +704,20 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
     return true;
   }
 
+  if (const char *path = getReproduceOption(args)) {
+    // Note that --reproduce is a debug option so you can ignore it
+    // if you are trying to understand the whole picture of the code.
+    Expected<std::unique_ptr<TarWriter>> errOrWriter =
+        TarWriter::create(path, path::stem(path));
+    if (errOrWriter) {
+      tar = std::move(*errOrWriter);
+      tar->append("response.txt", createResponseFile(args));
+      tar->append("version.txt", getLLDVersion() + "\n");
+    } else {
+      error("--reproduce: " + toString(errOrWriter.takeError()));
+    }
+  }
+
   config = make<Configuration>();
   symtab = make<SymbolTable>();
   target = createTargetInfo(args);
@@ -644,10 +729,15 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
   config->headerPad = args::getHex(args, OPT_headerpad, /*Default=*/32);
   config->headerPadMaxInstallNames =
       args.hasArg(OPT_headerpad_max_install_names);
+  config->printEachFile = args.hasArg(OPT_t);
+  config->printWhyLoad = args.hasArg(OPT_why_load);
   config->outputType = getOutputType(args);
+  config->ltoObjPath = args.getLastArgValue(OPT_object_path_lto);
   config->runtimePaths = args::getStrings(args, OPT_rpath);
   config->allLoad = args.hasArg(OPT_all_load);
   config->forceLoadObjC = args.hasArg(OPT_ObjC);
+  config->demangle = args.hasArg(OPT_demangle);
+  config->implicitDylibs = !args.hasArg(OPT_no_implicit_dylibs);
 
   if (const opt::Arg *arg = args.getLastArg(OPT_static, OPT_dynamic))
     config->staticLink = (arg->getOption().getID() == OPT_static);
@@ -661,6 +751,10 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
           args.getLastArg(OPT_search_paths_first, OPT_search_dylibs_first))
     config->searchDylibsFirst =
         (arg && arg->getOption().getID() == OPT_search_dylibs_first);
+
+  config->dylibCompatibilityVersion =
+      parseDylibVersion(args, OPT_compatibility_version);
+  config->dylibCurrentVersion = parseDylibVersion(args, OPT_current_version);
 
   config->saveTemps = args.hasArg(OPT_save_temps);
 
@@ -678,6 +772,8 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
     return !errorCount();
   }
 
+  initLLVM(); // must be run before any call to addFile()
+
   for (const auto &arg : args) {
     const auto &opt = arg->getOption();
     warnIfDeprecatedOption(opt);
@@ -685,10 +781,11 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
     // TODO: are any of these better handled via filtered() or getLastArg()?
     switch (opt.getID()) {
     case OPT_INPUT:
-      addFile(arg->getValue());
+      addFile(arg->getValue(), false);
       break;
     case OPT_weak_library: {
-      auto *dylibFile = dyn_cast_or_null<DylibFile>(addFile(arg->getValue()));
+      auto *dylibFile =
+          dyn_cast_or_null<DylibFile>(addFile(arg->getValue(), false));
       if (dylibFile)
         dylibFile->forceWeakImport = true;
       break;
@@ -697,32 +794,16 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
       addFileList(arg->getValue());
       break;
     case OPT_force_load:
-      forceLoadArchive(arg->getValue());
+      addFile(arg->getValue(), true);
       break;
     case OPT_l:
-    case OPT_weak_l: {
-      StringRef name = arg->getValue();
-      if (Optional<std::string> path = findLibrary(name)) {
-        auto *dylibFile = dyn_cast_or_null<DylibFile>(addFile(*path));
-        if (opt.getID() == OPT_weak_l && dylibFile)
-          dylibFile->forceWeakImport = true;
-        break;
-      }
-      error("library not found for -l" + name);
+    case OPT_weak_l:
+      addLibrary(arg->getValue(), opt.getID() == OPT_weak_l);
       break;
-    }
     case OPT_framework:
-    case OPT_weak_framework: {
-      StringRef name = arg->getValue();
-      if (Optional<std::string> path = findFramework(name)) {
-        auto *dylibFile = dyn_cast_or_null<DylibFile>(addFile(*path));
-        if (opt.getID() == OPT_weak_framework && dylibFile)
-          dylibFile->forceWeakImport = true;
-        break;
-      }
-      error("framework not found for -framework " + name);
+    case OPT_weak_framework:
+      addFramework(arg->getValue(), opt.getID() == OPT_weak_framework);
       break;
-    }
     case OPT_platform_version:
       handlePlatformVersion(arg);
       break;
@@ -732,19 +813,31 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
   }
 
   config->isPic = config->outputType == MH_DYLIB ||
-                  config->outputType == MH_BUNDLE ||
-                  (config->outputType == MH_EXECUTE && args.hasArg(OPT_pie));
+                  config->outputType == MH_BUNDLE || isPie(args);
 
   // Now that all dylibs have been loaded, search for those that should be
   // re-exported.
-  for (opt::Arg *arg : args.filtered(OPT_sub_library)) {
+  for (opt::Arg *arg : args.filtered(OPT_sub_library, OPT_sub_umbrella)) {
     config->hasReexports = true;
     StringRef searchName = arg->getValue();
-    if (!markSubLibrary(searchName))
-      error("-sub_library " + searchName + " does not match a supplied dylib");
+    std::vector<StringRef> extensions;
+    if (arg->getOption().getID() == OPT_sub_library)
+      extensions = {".dylib", ".tbd"};
+    else
+      extensions = {".tbd"};
+    if (!markReexport(searchName, extensions))
+      error(arg->getSpelling() + " " + searchName +
+            " does not match a supplied dylib");
   }
 
-  initLLVM();
+  // Parse LTO options.
+  if (auto *arg = args.getLastArg(OPT_mcpu))
+    parseClangOption(saver.save("-mcpu=" + StringRef(arg->getValue())),
+                     arg->getSpelling());
+
+  for (auto *arg : args.filtered(OPT_mllvm))
+    parseClangOption(arg->getValue(), arg->getSpelling());
+
   compileBitcodeFiles();
   replaceCommonSymbols();
 
@@ -753,7 +846,7 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
     parseOrderFile(orderFile);
 
   if (config->outputType == MH_EXECUTE && isa<Undefined>(config->entry)) {
-    error("undefined symbol: " + config->entry->getName());
+    error("undefined symbol: " + toString(*config->entry));
     return false;
   }
 
@@ -766,7 +859,7 @@ bool macho::link(llvm::ArrayRef<const char *> argsArr, bool canExitEarly,
     StringRef fileName = arg->getValue(2);
     Optional<MemoryBufferRef> buffer = readFile(fileName);
     if (buffer)
-      inputFiles.push_back(make<OpaqueFile>(*buffer, segName, sectName));
+      inputFiles.insert(make<OpaqueFile>(*buffer, segName, sectName));
   }
 
   // Initialize InputSections.

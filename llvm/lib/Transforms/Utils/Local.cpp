@@ -760,7 +760,7 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB,
     for (auto I = pred_begin(PredBB), E = pred_end(PredBB); I != E; ++I) {
       Updates.push_back({DominatorTree::Delete, *I, PredBB});
       // This predecessor of PredBB may already have DestBB as a successor.
-      if (llvm::find(successors(*I), DestBB) == succ_end(*I))
+      if (!llvm::is_contained(successors(*I), DestBB))
         Updates.push_back({DominatorTree::Insert, *I, DestBB});
     }
   }
@@ -1072,7 +1072,7 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
     for (auto I = pred_begin(BB), E = pred_end(BB); I != E; ++I) {
       Updates.push_back({DominatorTree::Delete, *I, BB});
       // This predecessor of BB may already have Succ as a successor.
-      if (llvm::find(successors(*I), Succ) == succ_end(*I))
+      if (!llvm::is_contained(successors(*I), Succ))
         Updates.push_back({DominatorTree::Insert, *I, Succ});
     }
   }
@@ -1392,7 +1392,7 @@ static DebugLoc getDebugValueLoc(DbgVariableIntrinsic *DII, Instruction *Src) {
   MDNode *Scope = DeclareLoc.getScope();
   DILocation *InlinedAt = DeclareLoc.getInlinedAt();
   // Produce an unknown location with the correct scope / inlinedAt fields.
-  return DebugLoc::get(0, 0, Scope, InlinedAt);
+  return DILocation::get(DII->getContext(), 0, 0, Scope, InlinedAt);
 }
 
 /// Inserts a llvm.dbg.value intrinsic before a store to an alloca'd value

@@ -136,12 +136,68 @@ protected:
     this->Size = this->Capacity = 0; // FIXME: Setting Capacity to 0 is suspect.
   }
 
-  void assertSafeToPush(const void *Elt) {
-    assert(
-        (Elt < begin() || Elt >= end() || this->size() < this->capacity()) &&
-        "Attempting to push_back to the vector an element of the vector without"
-        " enough space reserved");
+  /// Return true unless Elt will be invalidated by resizing the vector to
+  /// NewSize.
+  bool isSafeToReferenceAfterResize(const void *Elt, size_t NewSize) {
+    // Past the end.
+    if (LLVM_LIKELY(Elt < this->begin() || Elt >= this->end()))
+      return true;
+
+    // Return false if Elt will be destroyed by shrinking.
+    if (NewSize <= this->size())
+      return Elt < this->begin() + NewSize;
+
+    // Return false if we need to grow.
+    return NewSize <= this->capacity();
   }
+
+  /// Check whether Elt will be invalidated by resizing the vector to NewSize.
+  void assertSafeToReferenceAfterResize(const void *Elt, size_t NewSize) {
+    assert(isSafeToReferenceAfterResize(Elt, NewSize) &&
+           "Attempting to reference an element of the vector in an operation "
+           "that invalidates it");
+  }
+
+  /// Check whether Elt will be invalidated by increasing the size of the
+  /// vector by N.
+  void assertSafeToAdd(const void *Elt, size_t N = 1) {
+    this->assertSafeToReferenceAfterResize(Elt, this->size() + N);
+  }
+
+  /// Check whether any part of the range will be invalidated by clearing.
+  void assertSafeToReferenceAfterClear(const T *From, const T *To) {
+    if (From == To)
+      return;
+    this->assertSafeToReferenceAfterResize(From, 0);
+    this->assertSafeToReferenceAfterResize(To - 1, 0);
+  }
+  template <
+      class ItTy,
+      std::enable_if_t<!std::is_same<std::remove_const_t<ItTy>, T *>::value,
+                       bool> = false>
+  void assertSafeToReferenceAfterClear(ItTy, ItTy) {}
+
+  /// Check whether any part of the range will be invalidated by growing.
+  void assertSafeToAddRange(const T *From, const T *To) {
+    if (From == To)
+      return;
+    this->assertSafeToAdd(From, To - From);
+    this->assertSafeToAdd(To - 1, To - From);
+  }
+  template <
+      class ItTy,
+      std::enable_if_t<!std::is_same<std::remove_const_t<ItTy>, T *>::value,
+                       bool> = false>
+  void assertSafeToAddRange(ItTy, ItTy) {}
+
+  /// Check whether any argument will be invalidated by growing for
+  /// emplace_back.
+  template <class ArgType1, class... ArgTypes>
+  void assertSafeToEmplace(ArgType1 &Arg1, ArgTypes &... Args) {
+    this->assertSafeToAdd(&Arg1);
+    this->assertSafeToEmplace(Args...);
+  }
+  void assertSafeToEmplace() {}
 
 public:
   using size_type = size_t;
@@ -258,7 +314,7 @@ protected:
 
 public:
   void push_back(const T &Elt) {
-    this->assertSafeToPush(&Elt);
+    this->assertSafeToAdd(&Elt);
     if (LLVM_UNLIKELY(this->size() >= this->capacity()))
       this->grow();
     ::new ((void*) this->end()) T(Elt);
@@ -266,7 +322,7 @@ public:
   }
 
   void push_back(T &&Elt) {
-    this->assertSafeToPush(&Elt);
+    this->assertSafeToAdd(&Elt);
     if (LLVM_UNLIKELY(this->size() >= this->capacity()))
       this->grow();
     ::new ((void*) this->end()) T(::std::move(Elt));
@@ -362,7 +418,7 @@ protected:
 
 public:
   void push_back(const T &Elt) {
-    this->assertSafeToPush(&Elt);
+    this->assertSafeToAdd(&Elt);
     if (LLVM_UNLIKELY(this->size() >= this->capacity()))
       this->grow();
     memcpy(reinterpret_cast<void *>(this->end()), &Elt, sizeof(T));
@@ -418,15 +474,20 @@ public:
   }
 
   void resize(size_type N, const T &NV) {
+    if (N == this->size())
+      return;
+
     if (N < this->size()) {
       this->destroy_range(this->begin()+N, this->end());
       this->set_size(N);
-    } else if (N > this->size()) {
-      if (this->capacity() < N)
-        this->grow(N);
-      std::uninitialized_fill(this->end(), this->begin()+N, NV);
-      this->set_size(N);
+      return;
     }
+
+    this->assertSafeToReferenceAfterResize(&NV, N);
+    if (this->capacity() < N)
+      this->grow(N);
+    std::uninitialized_fill(this->end(), this->begin() + N, NV);
+    this->set_size(N);
   }
 
   void reserve(size_type N) {
@@ -454,6 +515,7 @@ public:
                 typename std::iterator_traits<in_iter>::iterator_category,
                 std::input_iterator_tag>::value>>
   void append(in_iter in_start, in_iter in_end) {
+    this->assertSafeToAddRange(in_start, in_end);
     size_type NumInputs = std::distance(in_start, in_end);
     if (NumInputs > this->capacity() - this->size())
       this->grow(this->size()+NumInputs);
@@ -464,6 +526,7 @@ public:
 
   /// Append \p NumInputs copies of \p Elt to the end.
   void append(size_type NumInputs, const T &Elt) {
+    this->assertSafeToAdd(&Elt, NumInputs);
     if (NumInputs > this->capacity() - this->size())
       this->grow(this->size()+NumInputs);
 
@@ -479,6 +542,7 @@ public:
   // re-initializing them - for all assign(...) variants.
 
   void assign(size_type NumElts, const T &Elt) {
+    this->assertSafeToReferenceAfterResize(&Elt, 0);
     clear();
     if (this->capacity() < NumElts)
       this->grow(NumElts);
@@ -491,6 +555,7 @@ public:
                 typename std::iterator_traits<in_iter>::iterator_category,
                 std::input_iterator_tag>::value>>
   void assign(in_iter in_start, in_iter in_end) {
+    this->assertSafeToReferenceAfterClear(in_start, in_end);
     clear();
     append(in_start, in_end);
   }
@@ -543,6 +608,9 @@ private:
     assert(I >= this->begin() && "Insertion iterator is out of bounds.");
     assert(I <= this->end() && "Inserting past the end of the vector.");
 
+    // Check that adding an element won't invalidate Elt.
+    this->assertSafeToAdd(&Elt);
+
     if (this->size() >= this->capacity()) {
       size_t EltNo = I-this->begin();
       this->grow();
@@ -582,6 +650,9 @@ public:
 
     assert(I >= this->begin() && "Insertion iterator is out of bounds.");
     assert(I <= this->end() && "Inserting past the end of the vector.");
+
+    // Check that adding NumToInsert elements won't invalidate Elt.
+    this->assertSafeToAdd(&Elt, NumToInsert);
 
     // Ensure there is enough space.
     reserve(this->size() + NumToInsert);
@@ -638,6 +709,9 @@ public:
     assert(I >= this->begin() && "Insertion iterator is out of bounds.");
     assert(I <= this->end() && "Inserting past the end of the vector.");
 
+    // Check that the reserve that follows doesn't invalidate the iterators.
+    this->assertSafeToAddRange(From, To);
+
     size_t NumToInsert = std::distance(From, To);
 
     // Ensure there is enough space.
@@ -687,6 +761,7 @@ public:
   }
 
   template <typename... ArgTypes> reference emplace_back(ArgTypes &&... Args) {
+    this->assertSafeToEmplace(Args...);
     if (LLVM_UNLIKELY(this->size() >= this->capacity()))
       this->grow();
     ::new ((void *)this->end()) T(std::forward<ArgTypes>(Args)...);
@@ -873,15 +948,82 @@ struct SmallVectorStorage {
 /// well-defined.
 template <typename T> struct alignas(T) SmallVectorStorage<T, 0> {};
 
+/// Forward declaration of SmallVector so that
+/// calculateSmallVectorDefaultInlinedElements can reference
+/// `sizeof(SmallVector<T, 0>)`.
+template <typename T, unsigned N> class LLVM_GSL_OWNER SmallVector;
+
+/// Helper class for calculating the default number of inline elements for
+/// `SmallVector<T>`.
+///
+/// This should be migrated to a constexpr function when our minimum
+/// compiler support is enough for multi-statement constexpr functions.
+template <typename T> struct CalculateSmallVectorDefaultInlinedElements {
+  // Parameter controlling the default number of inlined elements
+  // for `SmallVector<T>`.
+  //
+  // The default number of inlined elements ensures that
+  // 1. There is at least one inlined element.
+  // 2. `sizeof(SmallVector<T>) <= kPreferredSmallVectorSizeof` unless
+  // it contradicts 1.
+  static constexpr size_t kPreferredSmallVectorSizeof = 64;
+
+  // static_assert that sizeof(T) is not "too big".
+  //
+  // Because our policy guarantees at least one inlined element, it is possible
+  // for an arbitrarily large inlined element to allocate an arbitrarily large
+  // amount of inline storage. We generally consider it an antipattern for a
+  // SmallVector to allocate an excessive amount of inline storage, so we want
+  // to call attention to these cases and make sure that users are making an
+  // intentional decision if they request a lot of inline storage.
+  //
+  // We want this assertion to trigger in pathological cases, but otherwise
+  // not be too easy to hit. To accomplish that, the cutoff is actually somewhat
+  // larger than kPreferredSmallVectorSizeof (otherwise,
+  // `SmallVector<SmallVector<T>>` would be one easy way to trip it, and that
+  // pattern seems useful in practice).
+  //
+  // One wrinkle is that this assertion is in theory non-portable, since
+  // sizeof(T) is in general platform-dependent. However, we don't expect this
+  // to be much of an issue, because most LLVM development happens on 64-bit
+  // hosts, and therefore sizeof(T) is expected to *decrease* when compiled for
+  // 32-bit hosts, dodging the issue. The reverse situation, where development
+  // happens on a 32-bit host and then fails due to sizeof(T) *increasing* on a
+  // 64-bit host, is expected to be very rare.
+  static_assert(
+      sizeof(T) <= 256,
+      "You are trying to use a default number of inlined elements for "
+      "`SmallVector<T>` but `sizeof(T)` is really big! Please use an "
+      "explicit number of inlined elements with `SmallVector<T, N>` to make "
+      "sure you really want that much inline storage.");
+
+  // Discount the size of the header itself when calculating the maximum inline
+  // bytes.
+  static constexpr size_t PreferredInlineBytes =
+      kPreferredSmallVectorSizeof - sizeof(SmallVector<T, 0>);
+  static constexpr size_t NumElementsThatFit = PreferredInlineBytes / sizeof(T);
+  static constexpr size_t value =
+      NumElementsThatFit == 0 ? 1 : NumElementsThatFit;
+};
+
 /// This is a 'vector' (really, a variable-sized array), optimized
 /// for the case when the array is small.  It contains some number of elements
 /// in-place, which allows it to avoid heap allocation when the actual number of
 /// elements is below that threshold.  This allows normal "small" cases to be
 /// fast without losing generality for large inputs.
 ///
-/// Note that this does not attempt to be exception safe.
+/// \note
+/// In the absence of a well-motivated choice for the number of inlined
+/// elements \p N, it is recommended to use \c SmallVector<T> (that is,
+/// omitting the \p N). This will choose a default number of inlined elements
+/// reasonable for allocation on the stack (for example, trying to keep \c
+/// sizeof(SmallVector<T>) around 64 bytes).
 ///
-template <typename T, unsigned N>
+/// \warning This does not attempt to be exception safe.
+///
+/// \see https://llvm.org/docs/ProgrammersManual.html#llvm-adt-smallvector-h
+template <typename T,
+          unsigned N = CalculateSmallVectorDefaultInlinedElements<T>::value>
 class LLVM_GSL_OWNER SmallVector : public SmallVectorImpl<T>,
                                    SmallVectorStorage<T, N> {
 public:

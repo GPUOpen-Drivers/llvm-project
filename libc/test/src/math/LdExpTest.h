@@ -44,7 +44,7 @@ public:
       ASSERT_FP_EQ(negZero, func(negZero, exp));
       ASSERT_FP_EQ(inf, func(inf, exp));
       ASSERT_FP_EQ(negInf, func(negInf, exp));
-      ASSERT_NE(isnan(func(nan, exp)), 0);
+      ASSERT_FP_EQ(nan, func(nan, exp));
     }
   }
 
@@ -112,6 +112,30 @@ public:
     T x = NormalFloat(-FPBits::exponentBias + 1, 2 * NormalFloat::one - 1, 0);
     ASSERT_FP_EQ(func(x, -1), x / 2);
     ASSERT_FP_EQ(func(-x, -1), -x / 2);
+
+    // Start with a normal number high exponent but pass a very low number for
+    // exp. The result should be a subnormal number.
+    x = NormalFloat(FPBits::exponentBias, NormalFloat::one, 0);
+    int exp = -FPBits::maxExponent - 5;
+    T result = func(x, exp);
+    FPBits resultBits(result);
+    ASSERT_FALSE(resultBits.isZero());
+    // Verify that the result is indeed subnormal.
+    ASSERT_EQ(resultBits.exponent, uint16_t(0));
+    // But if the exp is so less that normalization leads to zero, then
+    // the result should be zero.
+    result = func(x, -FPBits::maxExponent - int(mantissaWidth) - 5);
+    ASSERT_TRUE(FPBits(result).isZero());
+
+    // Start with a subnormal number but pass a very high number for exponent.
+    // The result should not be infinity.
+    x = NormalFloat(-FPBits::exponentBias + 1, NormalFloat::one >> 10, 0);
+    exp = FPBits::maxExponent + 5;
+    ASSERT_EQ(isinf(func(x, exp)), 0);
+    // But if the exp is large enough to oversome than the normalization shift,
+    // then it should result in infinity.
+    exp = FPBits::maxExponent + 15;
+    ASSERT_NE(isinf(func(x, exp)), 0);
   }
 };
 

@@ -24,9 +24,9 @@
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/LEB128.h"
-#include "llvm/Support/MD5.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/xxhash.h"
 
 #include <algorithm>
 
@@ -46,7 +46,6 @@ public:
   void createOutputSections();
   void createLoadCommands();
   void assignAddresses(OutputSegment *);
-  void createSymtabContents();
 
   void openFile();
   void writeSections();
@@ -113,8 +112,10 @@ public:
 
 class LCDysymtab : public LoadCommand {
 public:
-  LCDysymtab(IndirectSymtabSection *indirectSymtabSection)
-      : indirectSymtabSection(indirectSymtabSection) {}
+  LCDysymtab(SymtabSection *symtabSection,
+             IndirectSymtabSection *indirectSymtabSection)
+      : symtabSection(symtabSection),
+        indirectSymtabSection(indirectSymtabSection) {}
 
   uint32_t getSize() const override { return sizeof(dysymtab_command); }
 
@@ -122,11 +123,19 @@ public:
     auto *c = reinterpret_cast<dysymtab_command *>(buf);
     c->cmd = LC_DYSYMTAB;
     c->cmdsize = getSize();
+
+    c->ilocalsym = 0;
+    c->iextdefsym = c->nlocalsym = symtabSection->getNumLocalSymbols();
+    c->nextdefsym = symtabSection->getNumExternalSymbols();
+    c->iundefsym = c->iextdefsym + c->nextdefsym;
+    c->nundefsym = symtabSection->getNumUndefinedSymbols();
+
     c->indirectsymoff = indirectSymtabSection->fileOff;
     c->nindirectsyms = indirectSymtabSection->getNumSymbols();
   }
 
-  IndirectSymtabSection *indirectSymtabSection = nullptr;
+  SymtabSection *symtabSection;
+  IndirectSymtabSection *indirectSymtabSection;
 };
 
 class LCSegment : public LoadCommand {
@@ -233,7 +242,10 @@ public:
 //   * LC_REEXPORT_DYLIB
 class LCDylib : public LoadCommand {
 public:
-  LCDylib(LoadCommandType type, StringRef path) : type(type), path(path) {
+  LCDylib(LoadCommandType type, StringRef path,
+          uint32_t compatibilityVersion = 0, uint32_t currentVersion = 0)
+      : type(type), path(path), compatibilityVersion(compatibilityVersion),
+        currentVersion(currentVersion) {
     instanceCount++;
   }
 
@@ -248,6 +260,9 @@ public:
     c->cmd = type;
     c->cmdsize = getSize();
     c->dylib.name = sizeof(dylib_command);
+    c->dylib.timestamp = 0;
+    c->dylib.compatibility_version = compatibilityVersion;
+    c->dylib.current_version = currentVersion;
 
     memcpy(buf, path.data(), path.size());
     buf[path.size()] = '\0';
@@ -258,6 +273,8 @@ public:
 private:
   LoadCommandType type;
   StringRef path;
+  uint32_t compatibilityVersion;
+  uint32_t currentVersion;
   static uint32_t instanceCount;
 };
 
@@ -359,8 +376,23 @@ public:
     uuidBuf = c->uuid;
   }
 
-  void writeUuid(const std::array<uint8_t, 16> &uuid) const {
-    memcpy(uuidBuf, uuid.data(), uuid.size());
+  void writeUuid(uint64_t digest) const {
+    // xxhash only gives us 8 bytes, so put some fixed data in the other half.
+    static_assert(sizeof(uuid_command::uuid) == 16, "unexpected uuid size");
+    memcpy(uuidBuf, "LLD\xa1UU1D", 8);
+    memcpy(uuidBuf + 8, &digest, 8);
+
+    // RFC 4122 conformance. We need to fix 4 bits in byte 6 and 2 bits in
+    // byte 8. Byte 6 is already fine due to the fixed data we put in. We don't
+    // want to lose bits of the digest in byte 8, so swap that with a byte of
+    // fixed data that happens to have the right bits set.
+    std::swap(uuidBuf[3], uuidBuf[8]);
+
+    // Claim that this is an MD5-based hash. It isn't, but this signals that
+    // this is not a time-based and not a random hash. MD5 seems like the least
+    // bad lie we can put here.
+    assert((uuidBuf[6] & 0xf0) == 0x30 && "See RFC 4122 Sections 4.2.2, 4.1.3");
+    assert((uuidBuf[8] & 0xc0) == 0x80 && "See RFC 4122 Section 4.2.2");
   }
 
   mutable uint8_t *uuidBuf;
@@ -379,8 +411,8 @@ void Writer::scanRelocations() {
     for (Reloc &r : isec->relocs) {
       if (auto *s = r.referent.dyn_cast<lld::macho::Symbol *>()) {
         if (isa<Undefined>(s))
-          error("undefined symbol " + s->getName() + ", referenced from " +
-                sys::path::filename(isec->file->getName()));
+          error("undefined symbol " + toString(*s) + ", referenced from " +
+                toString(isec->file));
         else
           target->prepareSymbolRelocation(s, isec, r);
       } else {
@@ -396,7 +428,8 @@ void Writer::createLoadCommands() {
   in.header->addLoadCommand(make<LCDyldInfo>(
       in.rebase, in.binding, in.weakBinding, in.lazyBinding, in.exports));
   in.header->addLoadCommand(make<LCSymtab>(symtabSection, stringTableSection));
-  in.header->addLoadCommand(make<LCDysymtab>(indirectSymtabSection));
+  in.header->addLoadCommand(
+      make<LCDysymtab>(symtabSection, indirectSymtabSection));
   for (StringRef path : config->runtimePaths)
     in.header->addLoadCommand(make<LCRPath>(path));
 
@@ -406,7 +439,9 @@ void Writer::createLoadCommands() {
     in.header->addLoadCommand(make<LCLoadDylinker>());
     break;
   case MH_DYLIB:
-    in.header->addLoadCommand(make<LCDylib>(LC_ID_DYLIB, config->installName));
+    in.header->addLoadCommand(make<LCDylib>(LC_ID_DYLIB, config->installName,
+                                            config->dylibCompatibilityVersion,
+                                            config->dylibCurrentVersion));
     break;
   case MH_BUNDLE:
     break;
@@ -432,7 +467,9 @@ void Writer::createLoadCommands() {
       // loaded via LC_LOAD_WEAK_DYLIB.
       LoadCommandType lcType =
           dylibFile->forceWeakImport ? LC_LOAD_WEAK_DYLIB : LC_LOAD_DYLIB;
-      in.header->addLoadCommand(make<LCDylib>(lcType, dylibFile->dylibName));
+      in.header->addLoadCommand(make<LCDylib>(lcType, dylibFile->dylibName,
+                                              dylibFile->compatibilityVersion,
+                                              dylibFile->currentVersion));
       dylibFile->ordinal = dylibOrdinal++;
 
       if (dylibFile->reexport)
@@ -591,8 +628,9 @@ void Writer::createOutputSections() {
     if (unwindInfoSection && segname == segment_names::ld) {
       assert(osec->name == section_names::compactUnwind);
       unwindInfoSection->setCompactUnwindSection(osec);
-    } else
+    } else {
       getOrCreateOutputSegment(segname)->addOutputSection(osec);
+    }
   }
 
   for (SyntheticSection *ssec : syntheticSections) {
@@ -601,7 +639,7 @@ void Writer::createOutputSections() {
       if (ssec->isNeeded())
         getOrCreateOutputSegment(ssec->segname)->addOutputSection(ssec);
     } else {
-      error("section from " + it->second->firstSection()->file->getName() +
+      error("section from " + toString(it->second->firstSection()->file) +
             " conflicts with synthetic section " + ssec->segname + "," +
             ssec->name);
     }
@@ -647,18 +685,9 @@ void Writer::writeSections() {
 }
 
 void Writer::writeUuid() {
-  MD5 hash;
-  const auto *bufStart = reinterpret_cast<char *>(buffer->getBufferStart());
-  const auto *bufEnd = reinterpret_cast<char *>(buffer->getBufferEnd());
-  hash.update(StringRef(bufStart, bufEnd - bufStart));
-  MD5::MD5Result result;
-  hash.final(result);
-  // Conform to UUID version 4 & 5 as specified in RFC 4122:
-  // 1. Set the version field to indicate that this is an MD5-based UUID.
-  result.Bytes[6] = (result.Bytes[6] & 0xf) | 0x30;
-  // 2. Set the two MSBs of uuid_t::clock_seq_hi_and_reserved to zero and one.
-  result.Bytes[8] = (result.Bytes[8] & 0x3f) | 0x80;
-  uuidCommand->writeUuid(result.Bytes);
+  uint64_t digest =
+      xxHash64({buffer->getBufferStart(), buffer->getBufferEnd()});
+  uuidCommand->writeUuid(digest);
 }
 
 void Writer::run() {

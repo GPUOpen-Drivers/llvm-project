@@ -11,6 +11,10 @@ set(files
   __hash_table
   __libcpp_version
   __locale
+  __memory/allocator_traits.h
+  __memory/base.h
+  __memory/pointer_traits.h
+  __memory/utilities.h
   __mutex_base
   __node_handle
   __nullptr
@@ -154,6 +158,7 @@ set(files
   support/ibm/xlocale.h
   support/musl/xlocale.h
   support/newlib/xlocale.h
+  support/nuttx/xlocale.h
   support/solaris/floatingpoint.h
   support/solaris/wchar.h
   support/solaris/xlocale.h

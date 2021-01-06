@@ -94,4 +94,10 @@ entry:
 ; CHECK-NEXT:         Name:            baz
 ; CHECK-NEXT:       - Index:           1
 ; CHECK-NEXT:         Name:            _start
+; CHECK-NEXT:     GlobalNames:
+; CHECK-NEXT:       - Index:           0
+; CHECK-NEXT:         Name:            __stack_pointer
+; CHECK-NEXT:     DataSegmentNames:
+; CHECK-NEXT:       - Index:           0
+; CHECK-NEXT:         Name:            .data
 ; CHECK-NEXT: ...

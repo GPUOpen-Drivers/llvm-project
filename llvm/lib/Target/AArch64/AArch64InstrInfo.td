@@ -399,6 +399,12 @@ def AArch64call          : SDNode<"AArch64ISD::CALL",
                                 SDTypeProfile<0, -1, [SDTCisPtrTy<0>]>,
                                 [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                                  SDNPVariadic]>;
+
+def AArch64call_rvmarker: SDNode<"AArch64ISD::CALL_RVMARKER",
+                             SDTypeProfile<0, -1, [SDTCisPtrTy<0>]>,
+                             [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
+                              SDNPVariadic]>;
+
 def AArch64brcond        : SDNode<"AArch64ISD::BRCOND", SDT_AArch64Brcond,
                                 [SDNPHasChain]>;
 def AArch64cbz           : SDNode<"AArch64ISD::CBZ", SDT_AArch64cbz,
@@ -932,6 +938,27 @@ let Predicates = [HasComplxNum, HasNEON] in {
     def : Pat<(Ty (int_aarch64_neon_vcadd_rot270 (Ty V128:$Rn), (Ty V128:$Rm))),
               (!cast<Instruction>("FCADD"#Ty) (Ty V128:$Rn), (Ty V128:$Rm), (i32 1))>;
   }
+}
+
+multiclass FCMLA_PATS<ValueType ty, RegisterClass Reg> {
+  def : Pat<(ty (int_aarch64_neon_vcmla_rot0 (ty Reg:$Rd), (ty Reg:$Rn), (ty Reg:$Rm))),
+            (!cast<Instruction>("FCMLA" # ty) $Rd, $Rn, $Rm, 0)>;
+  def : Pat<(ty (int_aarch64_neon_vcmla_rot90 (ty Reg:$Rd), (ty Reg:$Rn), (ty Reg:$Rm))),
+            (!cast<Instruction>("FCMLA" # ty) $Rd, $Rn, $Rm, 1)>;
+  def : Pat<(ty (int_aarch64_neon_vcmla_rot180 (ty Reg:$Rd), (ty Reg:$Rn), (ty Reg:$Rm))),
+            (!cast<Instruction>("FCMLA" # ty) $Rd, $Rn, $Rm, 2)>;
+  def : Pat<(ty (int_aarch64_neon_vcmla_rot270 (ty Reg:$Rd), (ty Reg:$Rn), (ty Reg:$Rm))),
+            (!cast<Instruction>("FCMLA" # ty) $Rd, $Rn, $Rm, 3)>;
+}
+
+let Predicates = [HasComplxNum, HasNEON, HasFullFP16] in {
+  defm : FCMLA_PATS<v4f16, V64>;
+  defm : FCMLA_PATS<v8f16, V128>;
+}
+let Predicates = [HasComplxNum, HasNEON] in {
+  defm : FCMLA_PATS<v2f32, V64>;
+  defm : FCMLA_PATS<v4f32, V128>;
+  defm : FCMLA_PATS<v2f64, V128>;
 }
 
 // v8.3a Pointer Authentication
@@ -2068,6 +2095,8 @@ let isCall = 1, Defs = [LR], Uses = [SP] in {
   def BLRNoIP : Pseudo<(outs), (ins GPR64noip:$Rn), []>,
                 Sched<[WriteBrReg]>,
                 PseudoInstExpansion<(BLR GPR64:$Rn)>;
+  def BLR_RVMARKER : Pseudo<(outs), (ins variable_ops), []>,
+                     Sched<[WriteBrReg]>;
 } // isCall
 
 def : Pat<(AArch64call GPR64:$Rn),
@@ -2076,6 +2105,10 @@ def : Pat<(AArch64call GPR64:$Rn),
 def : Pat<(AArch64call GPR64noip:$Rn),
           (BLRNoIP GPR64noip:$Rn)>,
       Requires<[SLSBLRMitigation]>;
+
+def : Pat<(AArch64call_rvmarker GPR64:$Rn),
+          (BLR_RVMARKER GPR64:$Rn)>,
+      Requires<[NoSLSBLRMitigation]>;
 
 let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
 def BR  : BranchReg<0b0000, "br", [(brind GPR64:$Rn)]>;
@@ -3738,18 +3771,6 @@ def : Pat<(f32 (fma (fneg FPR32:$Rn), FPR32:$Rm, (fneg FPR32:$Ra))),
 def : Pat<(f64 (fma (fneg FPR64:$Rn), FPR64:$Rm, (fneg FPR64:$Ra))),
           (FNMADDDrrr FPR64:$Rn, FPR64:$Rm, FPR64:$Ra)>;
 
-// And here "(-a) + b*(-c)"
-
-let Predicates = [HasNEON, HasFullFP16] in
-def : Pat<(f16 (fma FPR16:$Rn, (fneg FPR16:$Rm), (fneg FPR16:$Ra))),
-          (FNMADDHrrr FPR16:$Rn, FPR16:$Rm, FPR16:$Ra)>;
-
-def : Pat<(f32 (fma FPR32:$Rn, (fneg FPR32:$Rm), (fneg FPR32:$Ra))),
-          (FNMADDSrrr FPR32:$Rn, FPR32:$Rm, FPR32:$Ra)>;
-
-def : Pat<(f64 (fma FPR64:$Rn, (fneg FPR64:$Rm), (fneg FPR64:$Ra))),
-          (FNMADDDrrr FPR64:$Rn, FPR64:$Rm, FPR64:$Ra)>;
-
 //===----------------------------------------------------------------------===//
 // Floating point comparison instructions.
 //===----------------------------------------------------------------------===//
@@ -4066,17 +4087,6 @@ defm FMLA     : SIMDThreeSameVectorFPTied<0, 0, 0b001, "fmla",
             TriOpFrag<(fma node:$RHS, node:$MHS, node:$LHS)> >;
 defm FMLS     : SIMDThreeSameVectorFPTied<0, 1, 0b001, "fmls",
             TriOpFrag<(fma node:$MHS, (fneg node:$RHS), node:$LHS)> >;
-
-// The following def pats catch the case where the LHS of an FMA is negated.
-// The TriOpFrag above catches the case where the middle operand is negated.
-def : Pat<(v2f32 (fma (fneg V64:$Rn), V64:$Rm, V64:$Rd)),
-          (FMLSv2f32 V64:$Rd, V64:$Rn, V64:$Rm)>;
-
-def : Pat<(v4f32 (fma (fneg V128:$Rn), V128:$Rm, V128:$Rd)),
-          (FMLSv4f32 V128:$Rd, V128:$Rn, V128:$Rm)>;
-
-def : Pat<(v2f64 (fma (fneg V128:$Rn), V128:$Rm, V128:$Rd)),
-          (FMLSv2f64 V128:$Rd, V128:$Rn, V128:$Rm)>;
 
 defm FMULX    : SIMDThreeSameVectorFP<0,0,0b011,"fmulx", int_aarch64_neon_fmulx>;
 defm FMUL     : SIMDThreeSameVectorFP<1,0,0b011,"fmul", fmul>;
@@ -6707,6 +6717,16 @@ def : Pat<(i32 (trunc GPR64sp:$src)),
 // __builtin_trap() uses the BRK instruction on AArch64.
 def : Pat<(trap), (BRK 1)>;
 def : Pat<(debugtrap), (BRK 0xF000)>;
+
+def ubsan_trap_xform : SDNodeXForm<timm, [{
+  return CurDAG->getTargetConstant(N->getZExtValue() | ('U' << 8), SDLoc(N), MVT::i32);
+}]>;
+
+def ubsan_trap_imm : TImmLeaf<i32, [{
+  return isUInt<8>(Imm);
+}], ubsan_trap_xform>;
+
+def : Pat<(ubsantrap ubsan_trap_imm:$kind), (BRK ubsan_trap_imm:$kind)>;
 
 // Multiply high patterns which multiply the lower subvector using smull/umull
 // and the upper subvector with smull2/umull2. Then shuffle the high the high

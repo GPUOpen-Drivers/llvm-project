@@ -14,6 +14,7 @@
 #ifndef MLIR_IR_FUNCTIONSUPPORT_H
 #define MLIR_IR_FUNCTIONSUPPORT_H
 
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
 #include "llvm/ADT/SmallString.h"
 
@@ -548,7 +549,7 @@ void FunctionLike<ConcreteType>::setType(FunctionType newType) {
     concreteOp->removeAttr(getArgAttrName(i, nameBuf));
   for (int i = newType.getNumResults(), e = oldType.getNumResults(); i < e; i++)
     concreteOp->removeAttr(getResultAttrName(i, nameBuf));
-  concreteOp->setAttr(getTypeAttrName(), TypeAttr::get(newType));
+  (*concreteOp)->setAttr(getTypeAttrName(), TypeAttr::get(newType));
 }
 
 //===----------------------------------------------------------------------===//

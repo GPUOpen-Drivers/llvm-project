@@ -2262,7 +2262,7 @@ bool AMDGPULegalizerInfo::legalizeGlobalValue(
   SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
 
   if (AS == AMDGPUAS::LOCAL_ADDRESS || AS == AMDGPUAS::REGION_ADDRESS) {
-    if (!MFI->isEntryFunction()) {
+    if (!MFI->isModuleEntryFunction()) {
       const Function &Fn = MF.getFunction();
       DiagnosticInfoUnsupported BadLDSDecl(
         Fn, "local memory global used by non-kernel function", MI.getDebugLoc(),
@@ -3562,9 +3562,9 @@ Register AMDGPULegalizerInfo::handleD16VData(MachineIRBuilder &B,
       auto Unmerge = B.buildUnmerge(S16, Reg);
       for (int I = 0, E = Unmerge->getNumOperands() - 1; I != E; ++I)
         PackedRegs.push_back(Unmerge.getReg(I));
-      PackedRegs.resize(8, B.buildUndef(S16).getReg(0));
-      Reg = B.buildBuildVector(LLT::vector(8, S16), PackedRegs).getReg(0);
-      return B.buildBitcast(LLT::vector(4, S32), Reg).getReg(0);
+      PackedRegs.resize(6, B.buildUndef(S16).getReg(0));
+      Reg = B.buildBuildVector(LLT::vector(6, S16), PackedRegs).getReg(0);
+      return B.buildBitcast(LLT::vector(3, S32), Reg).getReg(0);
     }
 
     if (StoreVT.getNumElements() == 4) {

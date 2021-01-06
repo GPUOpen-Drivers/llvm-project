@@ -148,10 +148,11 @@ void addOverridesForMethod(clang::CXXMethodDecl *decl) {
     return;
 
   clang::CXXBasePaths paths;
+  llvm::SmallVector<clang::NamedDecl *, 4> decls;
 
   auto find_overridden_methods =
-      [decl](const clang::CXXBaseSpecifier *specifier,
-             clang::CXXBasePath &path) {
+      [&decls, decl](const clang::CXXBaseSpecifier *specifier,
+                     clang::CXXBasePath &path) {
         if (auto *base_record = llvm::dyn_cast<clang::CXXRecordDecl>(
                 specifier->getType()->getAs<clang::RecordType>()->getDecl())) {
 
@@ -163,6 +164,7 @@ void addOverridesForMethod(clang::CXXMethodDecl *decl) {
             if (auto *baseDtorDecl = base_record->getDestructor()) {
               if (baseDtorDecl->isVirtual()) {
                 path.Decls = baseDtorDecl;
+                decls.push_back(baseDtorDecl);
                 return true;
               } else
                 return false;
@@ -175,6 +177,7 @@ void addOverridesForMethod(clang::CXXMethodDecl *decl) {
                     llvm::dyn_cast<clang::CXXMethodDecl>(path.Decls.front()))
               if (method_decl->isVirtual() && !isOverload(decl, method_decl)) {
                 path.Decls = method_decl;
+                decls.push_back(method_decl);
                 return true;
               }
           }
@@ -184,7 +187,7 @@ void addOverridesForMethod(clang::CXXMethodDecl *decl) {
       };
 
   if (decl->getParent()->lookupInBases(find_overridden_methods, paths)) {
-    for (auto *overridden_decl : paths.found_decls())
+    for (auto *overridden_decl : decls)
       decl->addOverriddenMethod(
           llvm::cast<clang::CXXMethodDecl>(overridden_decl));
   }
@@ -610,7 +613,7 @@ lldb::TypeSystemSP TypeSystemClang::CreateInstance(lldb::LanguageType language,
         "ASTContext for '" + module->GetFileSpec().GetPath() + "'";
     return std::make_shared<TypeSystemClang>(ast_name, triple);
   } else if (target && target->IsValid())
-    return std::make_shared<TypeSystemClangForExpressions>(*target, triple);
+    return std::make_shared<ScratchTypeSystemClang>(*target, triple);
   return lldb::TypeSystemSP();
 }
 
@@ -1998,6 +2001,18 @@ PrintingPolicy TypeSystemClang::GetTypePrintingPolicy() {
   // and libstdc++ are differentiated by their inline namespaces).
   printing_policy.SuppressInlineNamespace = false;
   printing_policy.SuppressUnwrittenScope = false;
+  // Default arguments are also always important for type formatters. Otherwise
+  // we would need to always specify two type names for the setups where we do
+  // know the default arguments and where we don't know default arguments.
+  //
+  // For example, without this we would need to have formatters for both:
+  //   std::basic_string<char>
+  // and
+  //   std::basic_string<char, std::char_traits<char>, std::allocator<char> >
+  // to support setups where LLDB was able to reconstruct default arguments
+  // (and we then would have suppressed them from the type name) and also setups
+  // where LLDB wasn't able to reconstruct the default arguments.
+  printing_policy.SuppressDefaultTemplateArgs = false;
   return printing_policy;
 }
 
@@ -2900,20 +2915,11 @@ bool TypeSystemClang::IsCStringType(lldb::opaque_compiler_type_t type,
   return false;
 }
 
-bool TypeSystemClang::IsFunctionType(lldb::opaque_compiler_type_t type,
-                                     bool *is_variadic_ptr) {
+bool TypeSystemClang::IsFunctionType(lldb::opaque_compiler_type_t type) {
   if (type) {
     clang::QualType qual_type = RemoveWrappingTypes(GetCanonicalQualType(type));
 
     if (qual_type->isFunctionType()) {
-      if (is_variadic_ptr) {
-        const clang::FunctionProtoType *function_proto_type =
-            llvm::dyn_cast<clang::FunctionProtoType>(qual_type.getTypePtr());
-        if (function_proto_type)
-          *is_variadic_ptr = function_proto_type->isVariadic();
-        else
-          *is_variadic_ptr = false;
-      }
       return true;
     }
 
@@ -2926,8 +2932,8 @@ bool TypeSystemClang::IsFunctionType(lldb::opaque_compiler_type_t type,
       const clang::ReferenceType *reference_type =
           llvm::cast<clang::ReferenceType>(qual_type.getTypePtr());
       if (reference_type)
-        return IsFunctionType(reference_type->getPointeeType().getAsOpaquePtr(),
-                              nullptr);
+        return IsFunctionType(
+            reference_type->getPointeeType().getAsOpaquePtr());
     } break;
     }
   }
@@ -6541,8 +6547,10 @@ size_t TypeSystemClang::GetIndexOfChildMemberWithName(
           if (cxx_record_decl->lookupInBases(
                   [decl_name](const clang::CXXBaseSpecifier *specifier,
                               clang::CXXBasePath &path) {
-                    return clang::CXXRecordDecl::FindOrdinaryMember(
-                        specifier, path, decl_name);
+                    path.Decls =
+                        specifier->getType()->getAsCXXRecordDecl()->lookup(
+                            decl_name);
+                    return !path.Decls.empty();
                   },
                   paths)) {
             clang::CXXBasePaths::const_paths_iterator path,
@@ -9550,29 +9558,77 @@ TypeSystemClang::DeclContextGetTypeSystemClang(const CompilerDeclContext &dc) {
   return nullptr;
 }
 
-TypeSystemClangForExpressions::TypeSystemClangForExpressions(
-    Target &target, llvm::Triple triple)
-    : TypeSystemClang("scratch ASTContext", triple),
+namespace {
+/// A specialized scratch AST used within ScratchTypeSystemClang.
+/// These are the ASTs backing the different IsolatedASTKinds. They behave
+/// like a normal ScratchTypeSystemClang but they don't own their own
+/// persistent  storage or target reference.
+class SpecializedScratchAST : public TypeSystemClang {
+public:
+  /// \param name The display name of the TypeSystemClang instance.
+  /// \param triple The triple used for the TypeSystemClang instance.
+  /// \param ast_source The ClangASTSource that should be used to complete
+  ///                   type information.
+  SpecializedScratchAST(llvm::StringRef name, llvm::Triple triple,
+                        std::unique_ptr<ClangASTSource> ast_source)
+      : TypeSystemClang(name, triple),
+        m_scratch_ast_source_up(std::move(ast_source)) {
+    // Setup the ClangASTSource to complete this AST.
+    m_scratch_ast_source_up->InstallASTContext(*this);
+    llvm::IntrusiveRefCntPtr<clang::ExternalASTSource> proxy_ast_source(
+        m_scratch_ast_source_up->CreateProxy());
+    SetExternalSource(proxy_ast_source);
+  }
+
+  /// The ExternalASTSource that performs lookups and completes types.
+  std::unique_ptr<ClangASTSource> m_scratch_ast_source_up;
+};
+} // namespace
+
+char ScratchTypeSystemClang::ID;
+const llvm::NoneType ScratchTypeSystemClang::DefaultAST = llvm::None;
+
+ScratchTypeSystemClang::ScratchTypeSystemClang(Target &target,
+                                               llvm::Triple triple)
+    : TypeSystemClang("scratch ASTContext", triple), m_triple(triple),
       m_target_wp(target.shared_from_this()),
       m_persistent_variables(new ClangPersistentVariables) {
-  m_scratch_ast_source_up = std::make_unique<ClangASTSource>(
-      target.shared_from_this(), m_persistent_variables->GetClangASTImporter());
+  m_scratch_ast_source_up = CreateASTSource();
   m_scratch_ast_source_up->InstallASTContext(*this);
   llvm::IntrusiveRefCntPtr<clang::ExternalASTSource> proxy_ast_source(
       m_scratch_ast_source_up->CreateProxy());
   SetExternalSource(proxy_ast_source);
 }
 
-void TypeSystemClangForExpressions::Finalize() {
+void ScratchTypeSystemClang::Finalize() {
   TypeSystemClang::Finalize();
   m_scratch_ast_source_up.reset();
 }
 
-UserExpression *TypeSystemClangForExpressions::GetUserExpression(
+TypeSystemClang *
+ScratchTypeSystemClang::GetForTarget(Target &target,
+                                     llvm::Optional<IsolatedASTKind> ast_kind,
+                                     bool create_on_demand) {
+  auto type_system_or_err = target.GetScratchTypeSystemForLanguage(
+      lldb::eLanguageTypeC, create_on_demand);
+  if (auto err = type_system_or_err.takeError()) {
+    LLDB_LOG_ERROR(lldb_private::GetLogIfAnyCategoriesSet(LIBLLDB_LOG_TARGET),
+                   std::move(err), "Couldn't get scratch TypeSystemClang");
+    return nullptr;
+  }
+  ScratchTypeSystemClang &scratch_ast =
+      llvm::cast<ScratchTypeSystemClang>(type_system_or_err.get());
+  // If no dedicated sub-AST was requested, just return the main AST.
+  if (ast_kind == DefaultAST)
+    return &scratch_ast;
+  // Search the sub-ASTs.
+  return &scratch_ast.GetIsolatedAST(*ast_kind);
+}
+
+UserExpression *ScratchTypeSystemClang::GetUserExpression(
     llvm::StringRef expr, llvm::StringRef prefix, lldb::LanguageType language,
     Expression::ResultType desired_type,
-    const EvaluateExpressionOptions &options,
-    ValueObject *ctx_obj) {
+    const EvaluateExpressionOptions &options, ValueObject *ctx_obj) {
   TargetSP target_sp = m_target_wp.lock();
   if (!target_sp)
     return nullptr;
@@ -9581,7 +9637,7 @@ UserExpression *TypeSystemClangForExpressions::GetUserExpression(
                                  desired_type, options, ctx_obj);
 }
 
-FunctionCaller *TypeSystemClangForExpressions::GetFunctionCaller(
+FunctionCaller *ScratchTypeSystemClang::GetFunctionCaller(
     const CompilerType &return_type, const Address &function_address,
     const ValueList &arg_value_list, const char *name) {
   TargetSP target_sp = m_target_wp.lock();
@@ -9597,8 +9653,8 @@ FunctionCaller *TypeSystemClangForExpressions::GetFunctionCaller(
 }
 
 std::unique_ptr<UtilityFunction>
-TypeSystemClangForExpressions::CreateUtilityFunction(std::string text,
-                                                     std::string name) {
+ScratchTypeSystemClang::CreateUtilityFunction(std::string text,
+                                              std::string name) {
   TargetSP target_sp = m_target_wp.lock();
   if (!target_sp)
     return {};
@@ -9608,6 +9664,44 @@ TypeSystemClangForExpressions::CreateUtilityFunction(std::string text,
 }
 
 PersistentExpressionState *
-TypeSystemClangForExpressions::GetPersistentExpressionState() {
+ScratchTypeSystemClang::GetPersistentExpressionState() {
   return m_persistent_variables.get();
+}
+
+void ScratchTypeSystemClang::ForgetSource(ASTContext *src_ctx,
+                                          ClangASTImporter &importer) {
+  // Remove it as a source from the main AST.
+  importer.ForgetSource(&getASTContext(), src_ctx);
+  // Remove it as a source from all created sub-ASTs.
+  for (const auto &a : m_isolated_asts)
+    importer.ForgetSource(&a.second->getASTContext(), src_ctx);
+}
+
+std::unique_ptr<ClangASTSource> ScratchTypeSystemClang::CreateASTSource() {
+  return std::make_unique<ClangASTSource>(
+      m_target_wp.lock()->shared_from_this(),
+      m_persistent_variables->GetClangASTImporter());
+}
+
+static llvm::StringRef
+GetSpecializedASTName(ScratchTypeSystemClang::IsolatedASTKind feature) {
+  switch (feature) {
+  case ScratchTypeSystemClang::IsolatedASTKind::CppModules:
+    return "scratch ASTContext for C++ module types";
+  }
+  llvm_unreachable("Unimplemented ASTFeature kind?");
+}
+
+TypeSystemClang &ScratchTypeSystemClang::GetIsolatedAST(
+    ScratchTypeSystemClang::IsolatedASTKind feature) {
+  auto found_ast = m_isolated_asts.find(feature);
+  if (found_ast != m_isolated_asts.end())
+    return *found_ast->second;
+
+  // Couldn't find the requested sub-AST, so create it now.
+  std::unique_ptr<TypeSystemClang> new_ast;
+  new_ast.reset(new SpecializedScratchAST(GetSpecializedASTName(feature),
+                                          m_triple, CreateASTSource()));
+  m_isolated_asts[feature] = std::move(new_ast);
+  return *m_isolated_asts[feature];
 }

@@ -34,6 +34,7 @@ def OpenMP : DirectiveLanguage {
 
 def OMPC_Allocator : Clause<"allocator"> {
   let clangClass = "OMPAllocatorClause";
+  let flangClassValue = "ScalarIntExpr";
 }
 def OMPC_If : Clause<"if"> {
   let clangClass = "OMPIfClause";
@@ -200,7 +201,7 @@ def OMPC_NumTasks : Clause<"num_tasks"> {
 }
 def OMPC_Hint : Clause<"hint"> {
   let clangClass = "OMPHintClause";
-  let flangClass = "ConstantExpr";
+  let flangClassValue = "ConstantExpr";
 }
 def OMPC_DistSchedule : Clause<"dist_schedule"> {
   let clangClass = "OMPDistScheduleClause";
@@ -445,7 +446,7 @@ def OMP_TaskGroup : Directive<"taskgroup"> {
   ];
 }
 def OMP_Flush : Directive<"flush"> {
-  let allowedClauses = [
+  let allowedOnceClauses = [
     VersionedClause<OMPC_AcqRel, 50>,
     VersionedClause<OMPC_Acquire, 50>,
     VersionedClause<OMPC_Release, 50>,
@@ -467,6 +468,8 @@ def OMP_Atomic : Directive<"atomic"> {
     VersionedClause<OMPC_Write>,
     VersionedClause<OMPC_Update>,
     VersionedClause<OMPC_Capture>,
+  ];
+  let allowedOnceClauses = [
     VersionedClause<OMPC_SeqCst>,
     VersionedClause<OMPC_AcqRel, 50>,
     VersionedClause<OMPC_Acquire, 50>,
@@ -895,7 +898,12 @@ def OMP_Distribute : Directive<"distribute"> {
     VersionedClause<OMPC_DistSchedule>
   ];
 }
-def OMP_DeclareTarget : Directive<"declare target"> {}
+def OMP_DeclareTarget : Directive<"declare target"> {
+  let allowedClauses = [
+    VersionedClause<OMPC_To>,
+    VersionedClause<OMPC_Link>
+  ];
+}
 def OMP_EndDeclareTarget : Directive<"end declare target"> {}
 def OMP_DistributeParallelFor : Directive<"distribute parallel for"> {
   let allowedClauses = [
@@ -1585,6 +1593,9 @@ def OMP_Scan : Directive<"scan"> {
     VersionedClause<OMPC_Exclusive, 50>
   ];
 }
+def OMP_Assumes : Directive<"assumes"> {}
+def OMP_BeginAssumes : Directive<"begin assumes"> {}
+def OMP_EndAssumes : Directive<"end assumes"> {}
 def OMP_BeginDeclareVariant : Directive<"begin declare variant"> {}
 def OMP_EndDeclareVariant : Directive<"end declare variant"> {}
 def OMP_ParallelWorkshare : Directive<"parallel workshare"> {
@@ -1606,9 +1617,24 @@ def OMP_ParallelWorkshare : Directive<"parallel workshare"> {
 def OMP_Workshare : Directive<"workshare"> {}
 def OMP_EndDo : Directive<"end do"> {}
 def OMP_EndDoSimd : Directive<"end do simd"> {}
-def OMP_EndSections : Directive<"end sections"> {}
-def OMP_EndSingle : Directive<"end single"> {}
-def OMP_EndWorkshare : Directive<"end workshare"> {}
+def OMP_EndSections : Directive<"end sections"> {
+  let allowedOnceClauses = [
+    VersionedClause<OMPC_NoWait>
+  ];
+}
+def OMP_EndSingle : Directive<"end single"> {
+  let allowedClauses = [
+    VersionedClause<OMPC_CopyPrivate>
+  ];
+  let allowedOnceClauses = [
+    VersionedClause<OMPC_NoWait>
+  ];
+}
+def OMP_EndWorkshare : Directive<"end workshare"> {
+  let allowedClauses = [
+    VersionedClause<OMPC_NoWait>
+  ];
+}
 def OMP_Unknown : Directive<"unknown"> {
   let isDefault = true;
 }

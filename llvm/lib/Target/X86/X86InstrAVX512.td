@@ -6533,7 +6533,7 @@ multiclass avx512_fma3p_213_f<bits<8> opc, string OpcodeStr, SDNode OpNode,
                                       avx512vl_f64_info, "PD">, VEX_W;
 }
 
-defm VFMADD213    : avx512_fma3p_213_f<0xA8, "vfmadd213", X86any_Fmadd,
+defm VFMADD213    : avx512_fma3p_213_f<0xA8, "vfmadd213", any_fma,
                                        X86Fmadd, X86FmaddRnd>;
 defm VFMSUB213    : avx512_fma3p_213_f<0xAA, "vfmsub213", X86any_Fmsub,
                                        X86Fmsub, X86FmsubRnd>;
@@ -6624,7 +6624,7 @@ multiclass avx512_fma3p_231_f<bits<8> opc, string OpcodeStr, SDNode OpNode,
                                       avx512vl_f64_info, "PD">, VEX_W;
 }
 
-defm VFMADD231    : avx512_fma3p_231_f<0xB8, "vfmadd231", X86any_Fmadd,
+defm VFMADD231    : avx512_fma3p_231_f<0xB8, "vfmadd231", any_fma,
                                        X86Fmadd, X86FmaddRnd>;
 defm VFMSUB231    : avx512_fma3p_231_f<0xBA, "vfmsub231", X86any_Fmsub,
                                        X86Fmsub, X86FmsubRnd>;
@@ -6716,7 +6716,7 @@ multiclass avx512_fma3p_132_f<bits<8> opc, string OpcodeStr, SDNode OpNode,
                                       avx512vl_f64_info, "PD">, VEX_W;
 }
 
-defm VFMADD132    : avx512_fma3p_132_f<0x98, "vfmadd132", X86any_Fmadd,
+defm VFMADD132    : avx512_fma3p_132_f<0x98, "vfmadd132", any_fma,
                                        X86Fmadd, X86FmaddRnd>;
 defm VFMSUB132    : avx512_fma3p_132_f<0x9A, "vfmsub132", X86any_Fmsub,
                                        X86Fmsub, X86FmsubRnd>;
@@ -6819,7 +6819,7 @@ multiclass avx512_fma3s<bits<8> opc213, bits<8> opc231, bits<8> opc132,
   }
 }
 
-defm VFMADD  : avx512_fma3s<0xA9, 0xB9, 0x99, "vfmadd", X86any_Fmadd, X86FmaddRnd>;
+defm VFMADD  : avx512_fma3s<0xA9, 0xB9, 0x99, "vfmadd", any_fma, X86FmaddRnd>;
 defm VFMSUB  : avx512_fma3s<0xAB, 0xBB, 0x9B, "vfmsub", X86any_Fmsub, X86FmsubRnd>;
 defm VFNMADD : avx512_fma3s<0xAD, 0xBD, 0x9D, "vfnmadd", X86any_Fnmadd, X86FnmaddRnd>;
 defm VFNMSUB : avx512_fma3s<0xAF, 0xBF, 0x9F, "vfnmsub", X86any_Fnmsub, X86FnmsubRnd>;
@@ -7027,7 +7027,7 @@ multiclass avx512_scalar_fma_patterns<SDNode Op, SDNode MaskedOp,
   }
 }
 
-defm : avx512_scalar_fma_patterns<X86any_Fmadd, X86Fmadd, X86FmaddRnd, "VFMADD",
+defm : avx512_scalar_fma_patterns<any_fma, X86Fmadd, X86FmaddRnd, "VFMADD",
                                   "SS", X86Movss, v4f32x_info, fp32imm0>;
 defm : avx512_scalar_fma_patterns<X86any_Fmsub, X86Fmsub, X86FmsubRnd, "VFMSUB",
                                   "SS", X86Movss, v4f32x_info, fp32imm0>;
@@ -7036,7 +7036,7 @@ defm : avx512_scalar_fma_patterns<X86any_Fnmadd, X86Fnmadd, X86FnmaddRnd, "VFNMA
 defm : avx512_scalar_fma_patterns<X86any_Fnmsub, X86Fnmsub, X86FnmsubRnd, "VFNMSUB",
                                   "SS", X86Movss, v4f32x_info, fp32imm0>;
 
-defm : avx512_scalar_fma_patterns<X86any_Fmadd, X86Fmadd, X86FmaddRnd, "VFMADD",
+defm : avx512_scalar_fma_patterns<any_fma, X86Fmadd, X86FmaddRnd, "VFMADD",
                                   "SD", X86Movsd, v2f64x_info, fp64imm0>;
 defm : avx512_scalar_fma_patterns<X86any_Fmsub, X86Fmsub, X86FmsubRnd, "VFMSUB",
                                   "SD", X86Movsd, v2f64x_info, fp64imm0>;
@@ -7569,7 +7569,7 @@ multiclass avx512_cvt_fp_scalar_sd2ss<bits<8> opc, string OpcodeStr,
                                       SDNode OpNode, SDNode OpNodeRnd,
                                       X86FoldableSchedWrite sched,
                                       X86VectorVTInfo _src, X86VectorVTInfo _dst> {
-  let Predicates = [HasAVX512] in {
+  let Predicates = [HasAVX512], ExeDomain = SSEPackedSingle in {
     defm Z : avx512_cvt_fp_scalar<opc, OpcodeStr, _dst, _src, OpNode, sched>,
              avx512_cvt_fp_rc_scalar<opc, OpcodeStr, _dst, _src,
                                OpNodeRnd, sched>, VEX_W, EVEX_CD8<64, CD8VT1>, XD;
@@ -7580,7 +7580,7 @@ multiclass avx512_cvt_fp_scalar_ss2sd<bits<8> opc, string OpcodeStr,
                                       SDNode OpNode, SDNode OpNodeSAE,
                                       X86FoldableSchedWrite sched,
                                       X86VectorVTInfo _src, X86VectorVTInfo _dst> {
-  let Predicates = [HasAVX512] in {
+  let Predicates = [HasAVX512], ExeDomain = SSEPackedSingle in {
     defm Z : avx512_cvt_fp_scalar<opc, OpcodeStr, _dst, _src, OpNode, sched>,
              avx512_cvt_fp_sae_scalar<opc, OpcodeStr, _dst, _src, OpNodeSAE, sched>,
              EVEX_CD8<32, CD8VT1>, XS;
@@ -11913,11 +11913,6 @@ defm VPDPBUSD   : VNNI_common<0x50, "vpdpbusd", X86Vpdpbusd, SchedWriteVecIMul, 
 defm VPDPBUSDS  : VNNI_common<0x51, "vpdpbusds", X86Vpdpbusds, SchedWriteVecIMul, 0>;
 defm VPDPWSSD   : VNNI_common<0x52, "vpdpwssd", X86Vpdpwssd, SchedWriteVecIMul, 1>;
 defm VPDPWSSDS  : VNNI_common<0x53, "vpdpwssds", X86Vpdpwssds, SchedWriteVecIMul, 1>;
-
-def X86vpmaddwd_su : PatFrag<(ops node:$lhs, node:$rhs),
-                             (X86vpmaddwd node:$lhs, node:$rhs), [{
-  return N->hasOneUse();
-}]>;
 
 // Patterns to match VPDPWSSD from existing instructions/intrinsics.
 let Predicates = [HasVNNI] in {

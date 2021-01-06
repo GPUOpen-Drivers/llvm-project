@@ -516,6 +516,12 @@ TEST_F(TestTypeSystemClang, TemplateArguments) {
   }
 }
 
+TEST_F(TestTypeSystemClang, OnlyPackName) {
+  TypeSystemClang::TemplateParameterInfos infos;
+  infos.pack_name = "A";
+  EXPECT_FALSE(infos.IsValid());
+}
+
 static QualType makeConstInt(clang::ASTContext &ctxt) {
   QualType result(ctxt.IntTy);
   result.addConst();
@@ -723,4 +729,16 @@ TEST_F(TestTypeSystemClang, AddMethodToObjCObjectType) {
   EXPECT_TRUE(method->isImplicit());
   EXPECT_FALSE(method->isDirectMethod());
   EXPECT_EQ(method->getDeclName().getObjCSelector().getAsString(), "foo");
+}
+
+TEST(TestScratchTypeSystemClang, InferSubASTFromLangOpts) {
+  LangOptions lang_opts;
+  EXPECT_EQ(
+      ScratchTypeSystemClang::DefaultAST,
+      ScratchTypeSystemClang::InferIsolatedASTKindFromLangOpts(lang_opts));
+
+  lang_opts.Modules = true;
+  EXPECT_EQ(
+      ScratchTypeSystemClang::IsolatedASTKind::CppModules,
+      ScratchTypeSystemClang::InferIsolatedASTKindFromLangOpts(lang_opts));
 }

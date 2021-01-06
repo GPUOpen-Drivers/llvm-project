@@ -814,9 +814,10 @@ namespace llvm {
     /// specifies the type to store as.
     FST,
 
-    /// This instruction grabs the address of the next argument
+    /// These instructions grab the address of the next argument
     /// from a va_list. (reads and modifies the va_list in memory)
     VAARG_64,
+    VAARG_X32,
 
     // Vector truncating store with unsigned/signed saturation
     VTRUNCSTOREUS,
@@ -924,14 +925,6 @@ namespace llvm {
     /// Provide custom lowering hooks for some operations.
     ///
     SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
-
-    /// Places new result values for the node in Results (their number
-    /// and types must exactly match those of the original return values of
-    /// the node), or leaves Results empty, which indicates that the node is not
-    /// to be custom lowered after all.
-    void LowerOperationWrapper(SDNode *N,
-                               SmallVectorImpl<SDValue> &Results,
-                               SelectionDAG &DAG) const override;
 
     /// Replace the results of node with an illegal result
     /// type with new values built out of custom code.
@@ -1531,9 +1524,6 @@ namespace llvm {
     SDValue LowerFP_EXTEND(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFP_ROUND(SDValue Op, SelectionDAG &DAG) const;
 
-    SDValue LowerF128Call(SDValue Op, SelectionDAG &DAG,
-                          RTLIB::Libcall Call) const;
-
     SDValue
     LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
                          const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -1589,8 +1579,7 @@ namespace llvm {
 
     // Utility function to emit the low-level va_arg code for X86-64.
     MachineBasicBlock *
-    EmitVAARG64WithCustomInserter(MachineInstr &MI,
-                                  MachineBasicBlock *MBB) const;
+    EmitVAARGWithCustomInserter(MachineInstr &MI, MachineBasicBlock *MBB) const;
 
     /// Utility function to emit the xmm reg save portion of va_start.
     MachineBasicBlock *
@@ -1706,7 +1695,7 @@ namespace llvm {
   };
 
   /// Generate unpacklo/unpackhi shuffle mask.
-  void createUnpackShuffleMask(MVT VT, SmallVectorImpl<int> &Mask, bool Lo,
+  void createUnpackShuffleMask(EVT VT, SmallVectorImpl<int> &Mask, bool Lo,
                                bool Unary);
 
   /// Similar to unpacklo/unpackhi, but without the 128-bit lane limitation

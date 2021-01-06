@@ -3932,9 +3932,22 @@ void Sema::ActOnStartTrailingRequiresClause(Scope *S, Declarator &D) {
 }
 
 ExprResult Sema::ActOnFinishTrailingRequiresClause(ExprResult ConstraintExpr) {
+  return ActOnRequiresClause(ConstraintExpr);
+}
+
+ExprResult Sema::ActOnRequiresClause(ExprResult ConstraintExpr) {
   if (ConstraintExpr.isInvalid())
     return ExprError();
-  return CorrectDelayedTyposInExpr(ConstraintExpr);
+
+  ConstraintExpr = CorrectDelayedTyposInExpr(ConstraintExpr);
+  if (ConstraintExpr.isInvalid())
+    return ExprError();
+
+  if (DiagnoseUnexpandedParameterPack(ConstraintExpr.get(),
+                                      UPPC_RequiresClause))
+    return ExprError();
+
+  return ConstraintExpr;
 }
 
 /// This is invoked after parsing an in-class initializer for a
@@ -6092,8 +6105,7 @@ void Sema::checkClassLevelDLLAttribute(CXXRecordDecl *Class) {
   Attr *ClassAttr = getDLLAttr(Class);
 
   // MSVC inherits DLL attributes to partial class template specializations.
-  if ((Context.getTargetInfo().getCXXABI().isMicrosoft() || 
-       Context.getTargetInfo().getTriple().isWindowsItaniumEnvironment()) && !ClassAttr) {
+  if (Context.getTargetInfo().shouldDLLImportComdatSymbols() && !ClassAttr) {
     if (auto *Spec = dyn_cast<ClassTemplatePartialSpecializationDecl>(Class)) {
       if (Attr *TemplateAttr =
               getDLLAttr(Spec->getSpecializedTemplate()->getTemplatedDecl())) {
@@ -6113,8 +6125,7 @@ void Sema::checkClassLevelDLLAttribute(CXXRecordDecl *Class) {
     return;
   }
 
-  if ((Context.getTargetInfo().getCXXABI().isMicrosoft() || 
-       Context.getTargetInfo().getTriple().isWindowsItaniumEnvironment()) &&
+  if (Context.getTargetInfo().shouldDLLImportComdatSymbols() &&
       !ClassAttr->isInherited()) {
     // Diagnose dll attributes on members of class with dll attribute.
     for (Decl *Member : Class->decls()) {
@@ -6179,8 +6190,7 @@ void Sema::checkClassLevelDLLAttribute(CXXRecordDecl *Class) {
       if (MD->isInlined()) {
         // MinGW does not import or export inline methods. But do it for
         // template instantiations.
-        if (!Context.getTargetInfo().getCXXABI().isMicrosoft() &&
-            !Context.getTargetInfo().getTriple().isWindowsItaniumEnvironment() &&
+        if (!Context.getTargetInfo().shouldDLLImportComdatSymbols() &&
             TSK != TSK_ExplicitInstantiationDeclaration &&
             TSK != TSK_ExplicitInstantiationDefinition)
           continue;
@@ -15082,24 +15092,14 @@ ExprResult Sema::BuildCXXDefaultInitExpr(SourceLocation Loc, FieldDecl *Field) {
     DeclContext::lookup_result Lookup =
         ClassPattern->lookup(Field->getDeclName());
 
-    // Lookup can return at most two results: the pattern for the field, or the
-    // injected class name of the parent record. No other member can have the
-    // same name as the field.
-    // In modules mode, lookup can return multiple results (coming from
-    // different modules).
-    assert((getLangOpts().Modules || (!Lookup.empty() && Lookup.size() <= 2)) &&
-           "more than two lookup results for field name");
-    FieldDecl *Pattern = dyn_cast<FieldDecl>(Lookup[0]);
-    if (!Pattern) {
-      assert(isa<CXXRecordDecl>(Lookup[0]) &&
-             "cannot have other non-field member with same name");
-      for (auto L : Lookup)
-        if (isa<FieldDecl>(L)) {
-          Pattern = cast<FieldDecl>(L);
-          break;
-        }
-      assert(Pattern && "We must have set the Pattern!");
+    FieldDecl *Pattern = nullptr;
+    for (auto L : Lookup) {
+      if (isa<FieldDecl>(L)) {
+        Pattern = cast<FieldDecl>(L);
+        break;
+      }
     }
+    assert(Pattern && "We must have set the Pattern!");
 
     if (!Pattern->hasInClassInitializer() ||
         InstantiateInClassInitializer(Loc, Field, Pattern,

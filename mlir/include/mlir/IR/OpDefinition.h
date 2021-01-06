@@ -102,6 +102,9 @@ public:
   /// This implicitly converts to Operation*.
   operator Operation *() const { return state; }
 
+  /// Shortcut of `->` to access a member of Operation.
+  Operation *operator->() const { return state; }
+
   /// Return the operation that this refers to.
   Operation *getOperation() { return state; }
 
@@ -116,7 +119,8 @@ public:
   Operation *getParentOp() { return getOperation()->getParentOp(); }
 
   /// Return the closest surrounding parent operation that is of type 'OpTy'.
-  template <typename OpTy> OpTy getParentOfType() {
+  template <typename OpTy>
+  OpTy getParentOfType() {
     return getOperation()->getParentOfType<OpTy>();
   }
 
@@ -163,7 +167,8 @@ public:
   Attribute getAttr(StringRef name) { return state->getAttr(name); }
 
   /// If the operation has an attribute of the specified type, return it.
-  template <typename AttrClass> AttrClass getAttrOfType(StringRef name) {
+  template <typename AttrClass>
+  AttrClass getAttrOfType(StringRef name) {
     return getAttr(name).dyn_cast_or_null<AttrClass>();
   }
 
@@ -805,6 +810,9 @@ struct SingleBlockImplicitTerminator {
     }
 
   public:
+    /// The type of the operation used as the implicit terminator type.
+    using ImplicitTerminatorOpT = TerminatorOpType;
+
     static LogicalResult verifyTrait(Operation *op) {
       for (unsigned i = 0, e = op->getNumRegions(); i < e; ++i) {
         Region &region = op->getRegion(i);

@@ -290,6 +290,12 @@ unsigned GCNTTIImpl::getMinVectorRegisterBitWidth() const {
   return 32;
 }
 
+unsigned GCNTTIImpl::getMaximumVF(unsigned ElemWidth, unsigned Opcode) const {
+  if (Opcode == Instruction::Load || Opcode == Instruction::Store)
+    return 32 * 4 / ElemWidth;
+  return (ElemWidth == 16 && ST->has16BitInsts()) ? 2 : 1;
+}
+
 unsigned GCNTTIImpl::getLoadVectorFactor(unsigned VF, unsigned LoadSize,
                                          unsigned ChainSizeInBytes,
                                          VectorType *VecTy) const {
@@ -698,7 +704,7 @@ int GCNTTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
       return getTypeBasedIntrinsicInstrCost(ICA, CostKind);
 
     Type *RetTy = ICA.getReturnType();
-    unsigned VF = ICA.getVectorFactor();
+    unsigned VF = ICA.getVectorFactor().getFixedValue();
     unsigned RetVF =
         (RetTy->isVectorTy() ? cast<FixedVectorType>(RetTy)->getNumElements()
                              : 1);
