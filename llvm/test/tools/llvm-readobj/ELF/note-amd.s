@@ -12,6 +12,9 @@
 // GNU-NEXT:   AMD                  0x00000000       NT_AMD_AMDGPU_ISA (ISA Version)
 // GNU-NEXT:     ISA Version:
 // GNU-NEXT: {{^ +$}}
+// GNU-NEXT:   AMD                  0x00000010       NT_AMDGPU_LLPC_CACHE_HASH (LLPC Cache Hash)
+// GNU-NEXT:     LLPC Cache Hash:
+// GNU-NEXT:         ddccbbaa 2211ffee 66554433 aa998877
 // GNU-NEXT: Displaying notes found in: .note.desc
 // GNU-NEXT:   Owner                Data size        Description
 // GNU-NEXT:   AMD                  0x0000000a       NT_AMD_AMDGPU_HSA_METADATA (HSA Metadata)
@@ -23,6 +26,9 @@
 // GNU-NEXT: Displaying notes found in: .note.other
 // GNU-NEXT:   Owner                Data size        Description
 // GNU-NEXT:   AMD                  0x00000000       NT_AMD_AMDGPU_PAL_METADATA (PAL Metadata)
+// GNU-NEXT:   AMD                  0x00000008       NT_AMDGPU_LLPC_VERSION (LLPC Version)
+// GNU-NEXT:     LLPC Version:
+// GNU-NEXT:         45.6
 
 // LLVM:      Notes [
 // LLVM-NEXT:   NoteSection {
@@ -40,6 +46,12 @@
 // LLVM-NEXT:       Data size: 0x0
 // LLVM-NEXT:       Type: NT_AMD_AMDGPU_ISA (ISA Version)
 // LLVM-NEXT:       ISA Version:
+// LLVM-NEXT:     }
+// LLVM-NEXT:     Note {
+// LLVM-NEXT:       Owner: AMD
+// LLVM-NEXT:       Data size: 0x10
+// LLVM-NEXT:       Type: NT_AMDGPU_LLPC_CACHE_HASH (LLPC Cache Hash)
+// LLVM-NEXT:       LLPC Cache Hash: ddccbbaa 2211ffee 66554433 aa998877
 // LLVM-NEXT:     }
 // LLVM-NEXT:   }
 // LLVM-NEXT:   NoteSection {
@@ -68,6 +80,12 @@
 // LLVM-NEXT:       Data size: 0x0
 // LLVM-NEXT:       Type: NT_AMD_AMDGPU_PAL_METADATA (PAL Metadata)
 // LLVM-NEXT:     }
+// LLVM-NEXT:     Note {
+// LLVM-NEXT:       Owner: AMD
+// LLVM-NEXT:       Data size: 0x8
+// LLVM-NEXT:       Type: NT_AMDGPU_LLPC_VERSION (LLPC Version)
+// LLVM-NEXT:       LLPC Version: 45.6
+// LLVM-NEXT:     }
 // LLVM-NEXT:   }
 // LLVM-NEXT: ]
 
@@ -81,6 +99,14 @@
 	.long 0 /* descsz */
 	.long 11 /* type = NT_AMD_AMDGPU_ISA */
 	.asciz "AMD"
+	.long 4 /* namesz */
+	.long 16 /* descsz */
+	.long 33 /* type = NT_AMDGPU_LLPC_CACHE_HASH */
+	.asciz "AMD"
+	.long 0xaabbccdd
+	.long 0xeeff1122
+	.long 0x33445566
+	.long 0x778899aa
 .section ".note.desc", "a"
 	.align 4
 	.long 4 /* namesz */
@@ -105,3 +131,9 @@ end.isa:
 	.long 0 /* descsz */
 	.long 12 /* type = NT_AMD_AMDGPU_PAL_METADATA */
 	.asciz "AMD"
+	.long 4 /* namesz */
+	.long 8 /* descsz */
+	.long 34 /* type = NT_AMDGPU_LLPC_VERSION */
+	.asciz "AMD"
+	.long 45
+	.long 6

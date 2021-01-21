@@ -1371,6 +1371,9 @@ are deprecated and should not be used.
      ======== ============================== ======================================
      "AMDGPU" ``NT_AMDGPU_METADATA``         Metadata in Message Pack [MsgPack]_
                                              binary format.
+     "AMDGPU" ``NT_AMDGPU_LLPC_CACHE_HASH``  16-bytes cache hash of ELF.
+     "AMDGPU" ``NT_AMDGPU_LLPC_VERSION``     LLPC version with 4-bytes major
+                                             and 4-bytes minor version numbers
      ======== ============================== ======================================
 
 ..
@@ -1383,6 +1386,8 @@ are deprecated and should not be used.
      ============================== =====
      *reserved*                     0-31
      ``NT_AMDGPU_METADATA``         32
+     ``NT_AMDGPU_LLPC_CACHE_HASH``  33
+     ``NT_AMDGPU_LLPC_VERSION``     34
      ============================== =====
 
 ``NT_AMDGPU_METADATA``
@@ -1391,6 +1396,14 @@ are deprecated and should not be used.
   :ref:`amdgpu-amdhsa-code-object-metadata-v3` and
   :ref:`amdgpu-amdhsa-code-object-metadata-v4` for the map keys defined for the
   ``amdhsa`` OS.
+
+``NT_AMDGPU_LLPC_CACHE_HASH``
+  Specifies 16-bytes cache hash of the ELF.
+
+``NT_AMDGPU_LLPC_VERSION``
+  LLPC version that consists of 4-bytes major and 4-bytes minor version numbers.
+  The version information can be used to explain what hash algorithm was used to
+  generate the cache hash specified by ``NT_AMDGPU_LLPC_CACHE_HASH``.
 
 .. _amdgpu-symbols:
 
