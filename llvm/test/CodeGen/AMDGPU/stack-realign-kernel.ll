@@ -16,6 +16,7 @@ define amdgpu_kernel void @max_alignment_128() #0 {
 ; VI-NEXT:    v_mov_b32_e32 v0, 9
 ; VI-NEXT:    s_mov_b32 flat_scratch_lo, s5
 ; VI-NEXT:    buffer_store_dword v0, off, s[0:3], 0 offset:128
+; VI-NEXT:    s_waitcnt vmcnt(0)
 ; VI-NEXT:    s_endpgm
 ;
 ; GFX9-LABEL: max_alignment_128:
@@ -26,6 +27,7 @@ define amdgpu_kernel void @max_alignment_128() #0 {
 ; GFX9-NEXT:    s_addc_u32 s1, s1, 0
 ; GFX9-NEXT:    v_mov_b32_e32 v0, 9
 ; GFX9-NEXT:    buffer_store_dword v0, off, s[0:3], 0 offset:128
+; GFX9-NEXT:    s_waitcnt vmcnt(0)
 ; GFX9-NEXT:    s_endpgm
   %alloca.align = alloca i32, align 128, addrspace(5)
   store volatile i32 9, i32 addrspace(5)* %alloca.align, align 128
@@ -42,6 +44,7 @@ define amdgpu_kernel void @stackrealign_attr() #1 {
 ; VI-NEXT:    v_mov_b32_e32 v0, 9
 ; VI-NEXT:    s_mov_b32 flat_scratch_lo, s5
 ; VI-NEXT:    buffer_store_dword v0, off, s[0:3], 0 offset:4
+; VI-NEXT:    s_waitcnt vmcnt(0)
 ; VI-NEXT:    s_endpgm
 ;
 ; GFX9-LABEL: stackrealign_attr:
@@ -52,6 +55,7 @@ define amdgpu_kernel void @stackrealign_attr() #1 {
 ; GFX9-NEXT:    s_addc_u32 s1, s1, 0
 ; GFX9-NEXT:    v_mov_b32_e32 v0, 9
 ; GFX9-NEXT:    buffer_store_dword v0, off, s[0:3], 0 offset:4
+; GFX9-NEXT:    s_waitcnt vmcnt(0)
 ; GFX9-NEXT:    s_endpgm
   %alloca.align = alloca i32, align 4, addrspace(5)
   store volatile i32 9, i32 addrspace(5)* %alloca.align, align 4
@@ -68,6 +72,7 @@ define amdgpu_kernel void @alignstack_attr() #2 {
 ; VI-NEXT:    v_mov_b32_e32 v0, 9
 ; VI-NEXT:    s_mov_b32 flat_scratch_lo, s5
 ; VI-NEXT:    buffer_store_dword v0, off, s[0:3], 0 offset:4
+; VI-NEXT:    s_waitcnt vmcnt(0)
 ; VI-NEXT:    s_endpgm
 ;
 ; GFX9-LABEL: alignstack_attr:
@@ -78,6 +83,7 @@ define amdgpu_kernel void @alignstack_attr() #2 {
 ; GFX9-NEXT:    s_addc_u32 s1, s1, 0
 ; GFX9-NEXT:    v_mov_b32_e32 v0, 9
 ; GFX9-NEXT:    buffer_store_dword v0, off, s[0:3], 0 offset:4
+; GFX9-NEXT:    s_waitcnt vmcnt(0)
 ; GFX9-NEXT:    s_endpgm
   %alloca.align = alloca i32, align 4, addrspace(5)
   store volatile i32 9, i32 addrspace(5)* %alloca.align, align 4

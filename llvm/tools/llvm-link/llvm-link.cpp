@@ -142,9 +142,9 @@ static std::unique_ptr<Module> loadFile(const char *argv0,
   return Result;
 }
 
-static std::unique_ptr<Module>
-loadArFile(const char *Argv0, std::unique_ptr<MemoryBuffer> Buffer,
-           LLVMContext &Context, unsigned OrigFlags, unsigned ApplicableFlags) {
+static std::unique_ptr<Module> loadArFile(const char *Argv0,
+                                          std::unique_ptr<MemoryBuffer> Buffer,
+                                          LLVMContext &Context) {
   std::unique_ptr<Module> Result(new Module("ArchiveModule", Context));
   StringRef ArchiveName = Buffer->getBufferIdentifier();
   if (Verbose)
@@ -197,9 +197,8 @@ loadArFile(const char *Argv0, std::unique_ptr<MemoryBuffer> Buffer,
     }
     if (Verbose)
       errs() << "Linking member '" << ChildName << "' of archive library.\n";
-    if (Linker::linkModules(*Result, std::move(M), ApplicableFlags))
+    if (Linker::linkModules(*Result, std::move(M)))
       return nullptr;
-    ApplicableFlags = OrigFlags;
   } // end for each child
   ExitOnErr(std::move(Err));
   return Result;
@@ -354,8 +353,7 @@ static bool linkFiles(const char *argv0, LLVMContext &Context, Linker &L,
 
     std::unique_ptr<Module> M =
         identify_magic(Buffer->getBuffer()) == file_magic::archive
-            ? loadArFile(argv0, std::move(Buffer), Context, Flags,
-                         ApplicableFlags)
+            ? loadArFile(argv0, std::move(Buffer), Context)
             : loadFile(argv0, std::move(Buffer), Context);
     if (!M.get()) {
       errs() << argv0 << ": ";
@@ -458,7 +456,8 @@ int main(int argc, char **argv) {
     errs() << "Here's the assembly:\n" << *Composite;
 
   std::error_code EC;
-  ToolOutputFile Out(OutputFilename, EC, sys::fs::OF_None);
+  ToolOutputFile Out(OutputFilename, EC,
+                     OutputAssembly ? sys::fs::OF_Text : sys::fs::OF_None);
   if (EC) {
     WithColor::error() << EC.message() << '\n';
     return 1;

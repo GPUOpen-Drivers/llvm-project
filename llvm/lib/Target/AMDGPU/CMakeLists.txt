@@ -160,6 +160,7 @@ add_llvm_target(AMDGPUCodeGen
   Core
   IPO
   MC
+  Passes
   AMDGPUDesc
   AMDGPUInfo
   AMDGPUUtils

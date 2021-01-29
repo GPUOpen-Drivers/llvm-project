@@ -386,7 +386,11 @@ location of certain calls. For example, it will prevent tail merging otherwise
 identical code sequences that raise an exception or terminate the program. Tail
 merging normally reduces the precision of source location information, making
 stack traces less useful for debugging. This attribute gives the user control
-over the tradeoff between code size and debug information precision.
+over the tradeoff between code size and debug information precision. 
+
+``nomerge`` attribute can also be used as function attribute to prevent all 
+calls to the specified function from merging. It has no effect on indirect 
+calls.
   }];
 }
 
@@ -5158,6 +5162,59 @@ in the future.
   }];
 }
 
+def CalledOnceDocs : Documentation {
+  let Category = DocCatVariable;
+  let Content = [{
+The ``called_once`` attribute specifies that the annotated function or method
+parameter is invoked exactly once on all execution paths. It only applies
+to parameters with function-like types, i.e. function pointers or blocks. This
+concept is particularly useful for asynchronous programs.
+
+Clang implements a check for ``called_once`` parameters,
+``-Wcalled-once-parameter``. It is on by default and finds the following
+violations:
+
+* Parameter is not called at all.
+
+* Parameter is called more than once.
+
+* Parameter is not called on one of the execution paths.
+
+In the latter case, Clang pinpoints the path where parameter is not invoked
+by showing the control-flow statement where the path diverges.
+
+.. code-block:: objc
+
+  void fooWithCallback(void (^callback)(void) __attribute__((called_once))) {
+    if (somePredicate()) {
+      ...
+      callback();
+    } esle {
+      callback(); // OK: callback is called on every path
+    }
+  }
+
+  void barWithCallback(void (^callback)(void) __attribute__((called_once))) {
+    if (somePredicate()) {
+      ...
+      callback(); // note: previous call is here
+    }
+    callback(); // warning: callback is called twice
+  }
+
+  void foobarWithCallback(void (^callback)(void) __attribute__((called_once))) {
+    if (somePredicate()) {  // warning: callback is not called when condition is false
+      ...
+      callback();
+    }
+  }
+
+This attribute is useful for API developers who want to double-check if they
+implemented their method correctly.
+
+  }];
+}
+
 def GnuInlineDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
@@ -5647,5 +5704,49 @@ to and from secure state, respectively, and prevent flow of information
 to non-secure state, except via return values. See `ARMv8-M Security Extensions:
 Requirements on Development Tools - Engineering Specification Documentation
 <https://developer.arm.com/docs/ecm0359818/latest/>`_ for more information.
+  }];
+}
+
+def AlwaysInlineDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+Inlining heuristics are disabled and inlining is always attempted regardless of
+optimization level.
+
+Does not guarantee that inline substitution actually occurs.
+
+See also `the Microsoft Docs on Inline Functions`_, `the GCC Common Function
+Attribute docs`_, and `the GCC Inline docs`_.
+
+.. _the Microsoft Docs on Inline Functions: https://docs.microsoft.com/en-us/cpp/cpp/inline-functions-cpp
+.. _the GCC Common Function Attribute docs: https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
+.. _the GCC Inline docs: https://gcc.gnu.org/onlinedocs/gcc/Inline.html
+
+}];
+  let Heading = "always_inline, __force_inline";
+}
+
+def EnforceTCBDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+  The ``enforce_tcb`` attribute can be placed on functions to enforce that a
+  trusted compute base (TCB) does not call out of the TCB. This generates a
+  warning every time a function not marked with an ``enforce_tcb`` attribute is
+  called from a function with the ``enforce_tcb`` attribute. A function may be a
+  part of multiple TCBs. Invocations through function pointers are currently
+  not checked. Builtins are considered to a part of every TCB.
+
+  - ``enforce_tcb(Name)`` indicates that this function is a part of the TCB named ``Name``
+  }];
+}
+
+def EnforceTCBLeafDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+  The ``enforce_tcb_leaf`` attribute satisfies the requirement enforced by
+  ``enforce_tcb`` for the marked function to be in the named TCB but does not
+  continue to check the functions called from within the leaf function.
+
+  - ``enforce_tcb_leaf(Name)`` indicates that this function is a part of the TCB named ``Name``
   }];
 }

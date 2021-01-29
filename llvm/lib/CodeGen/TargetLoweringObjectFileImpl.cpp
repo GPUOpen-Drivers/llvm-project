@@ -128,6 +128,7 @@ void TargetLoweringObjectFileELF::Initialize(MCContext &Ctx,
     // Fallthrough if not using EHABI
     LLVM_FALLTHROUGH;
   case Triple::ppc:
+  case Triple::ppcle:
   case Triple::x86:
     PersonalityEncoding = isPositionIndependent()
                               ? dwarf::DW_EH_PE_indirect |
@@ -916,7 +917,7 @@ MCSection *TargetLoweringObjectFileELF::getSectionForMachineBasicBlock(
   }
 
   unsigned Flags = ELF::SHF_ALLOC | ELF::SHF_EXECINSTR;
-  std::string GroupName = "";
+  std::string GroupName;
   if (F.hasComdat()) {
     Flags |= ELF::SHF_GROUP;
     GroupName = F.getComdat()->getName().str();

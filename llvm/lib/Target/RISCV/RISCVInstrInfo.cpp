@@ -11,10 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "RISCVInstrInfo.h"
+#include "MCTargetDesc/RISCVMatInt.h"
 #include "RISCV.h"
 #include "RISCVSubtarget.h"
 #include "RISCVTargetMachine.h"
-#include "Utils/RISCVMatInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -763,10 +763,7 @@ outliner::OutlinedFunction RISCVInstrInfo::getOutliningCandidateInfo(
     return !LRU.available(RISCV::X5);
   };
 
-  RepeatedSequenceLocs.erase(std::remove_if(RepeatedSequenceLocs.begin(),
-                                            RepeatedSequenceLocs.end(),
-                                            CannotInsertCall),
-                             RepeatedSequenceLocs.end());
+  llvm::erase_if(RepeatedSequenceLocs, CannotInsertCall);
 
   // If the sequence doesn't have enough candidates left, then we're done.
   if (RepeatedSequenceLocs.size() < 2)

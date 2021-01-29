@@ -31,14 +31,6 @@ using namespace mlir::detail;
 /// ComplexType
 //===----------------------------------------------------------------------===//
 
-ComplexType ComplexType::get(Type elementType) {
-  return Base::get(elementType.getContext(), elementType);
-}
-
-ComplexType ComplexType::getChecked(Type elementType, Location location) {
-  return Base::getChecked(location, elementType);
-}
-
 /// Verify the construction of an integer type.
 LogicalResult ComplexType::verifyConstructionInvariants(Location loc,
                                                         Type elementType) {
@@ -46,8 +38,6 @@ LogicalResult ComplexType::verifyConstructionInvariants(Location loc,
     return emitError(loc, "invalid element type for complex");
   return success();
 }
-
-Type ComplexType::getElementType() { return getImpl()->elementType; }
 
 //===----------------------------------------------------------------------===//
 // Integer Type
@@ -76,7 +66,7 @@ IntegerType::SignednessSemantics IntegerType::getSignedness() const {
 IntegerType IntegerType::scaleElementBitwidth(unsigned scale) {
   if (!scale)
     return IntegerType();
-  return IntegerType::get(scale * getWidth(), getSignedness(), getContext());
+  return IntegerType::get(getContext(), scale * getWidth(), getSignedness());
 }
 
 //===----------------------------------------------------------------------===//
@@ -90,6 +80,10 @@ unsigned FloatType::getWidth() {
     return 32;
   if (isa<Float64Type>())
     return 64;
+  if (isa<Float80Type>())
+    return 80;
+  if (isa<Float128Type>())
+    return 128;
   llvm_unreachable("unexpected float type");
 }
 
@@ -103,6 +97,10 @@ const llvm::fltSemantics &FloatType::getFloatSemantics() {
     return APFloat::IEEEsingle();
   if (isa<Float64Type>())
     return APFloat::IEEEdouble();
+  if (isa<Float80Type>())
+    return APFloat::x87DoubleExtended();
+  if (isa<Float128Type>())
+    return APFloat::IEEEquad();
   llvm_unreachable("non-floating point type used");
 }
 
@@ -125,11 +123,6 @@ FloatType FloatType::scaleElementBitwidth(unsigned scale) {
 //===----------------------------------------------------------------------===//
 // FunctionType
 //===----------------------------------------------------------------------===//
-
-FunctionType FunctionType::get(TypeRange inputs, TypeRange results,
-                               MLIRContext *context) {
-  return Base::get(context, inputs, results);
-}
 
 unsigned FunctionType::getNumInputs() const { return getImpl()->numInputs; }
 
@@ -182,30 +175,12 @@ FunctionType::getWithoutArgsAndResults(ArrayRef<unsigned> argIndices,
     newResultTypes = newResultTypesBuffer;
   }
 
-  return get(newInputTypes, newResultTypes, getContext());
+  return get(getContext(), newInputTypes, newResultTypes);
 }
 
 //===----------------------------------------------------------------------===//
 // OpaqueType
 //===----------------------------------------------------------------------===//
-
-OpaqueType OpaqueType::get(Identifier dialect, StringRef typeData,
-                           MLIRContext *context) {
-  return Base::get(context, dialect, typeData);
-}
-
-OpaqueType OpaqueType::getChecked(Identifier dialect, StringRef typeData,
-                                  MLIRContext *context, Location location) {
-  return Base::getChecked(location, dialect, typeData);
-}
-
-/// Returns the dialect namespace of the opaque type.
-Identifier OpaqueType::getDialectNamespace() const {
-  return getImpl()->dialectNamespace;
-}
-
-/// Returns the raw type data of the opaque type.
-StringRef OpaqueType::getTypeData() const { return getImpl()->typeData; }
 
 /// Verify the construction of an opaque type.
 LogicalResult OpaqueType::verifyConstructionInvariants(Location loc,
@@ -313,8 +288,8 @@ VectorType VectorType::get(ArrayRef<int64_t> shape, Type elementType) {
   return Base::get(elementType.getContext(), shape, elementType);
 }
 
-VectorType VectorType::getChecked(ArrayRef<int64_t> shape, Type elementType,
-                                  Location location) {
+VectorType VectorType::getChecked(Location location, ArrayRef<int64_t> shape,
+                                  Type elementType) {
   return Base::getChecked(location, shape, elementType);
 }
 
@@ -379,9 +354,9 @@ RankedTensorType RankedTensorType::get(ArrayRef<int64_t> shape,
   return Base::get(elementType.getContext(), shape, elementType);
 }
 
-RankedTensorType RankedTensorType::getChecked(ArrayRef<int64_t> shape,
-                                              Type elementType,
-                                              Location location) {
+RankedTensorType RankedTensorType::getChecked(Location location,
+                                              ArrayRef<int64_t> shape,
+                                              Type elementType) {
   return Base::getChecked(location, shape, elementType);
 }
 
@@ -406,8 +381,8 @@ UnrankedTensorType UnrankedTensorType::get(Type elementType) {
   return Base::get(elementType.getContext(), elementType);
 }
 
-UnrankedTensorType UnrankedTensorType::getChecked(Type elementType,
-                                                  Location location) {
+UnrankedTensorType UnrankedTensorType::getChecked(Location location,
+                                                  Type elementType) {
   return Base::getChecked(location, elementType);
 }
 
@@ -448,9 +423,10 @@ MemRefType MemRefType::get(ArrayRef<int64_t> shape, Type elementType,
 /// UnknownLoc.  If the MemRefType defined by the arguments would be
 /// ill-formed, emits errors (to the handler registered with the context or to
 /// the error stream) and returns nullptr.
-MemRefType MemRefType::getChecked(ArrayRef<int64_t> shape, Type elementType,
+MemRefType MemRefType::getChecked(Location location, ArrayRef<int64_t> shape,
+                                  Type elementType,
                                   ArrayRef<AffineMap> affineMapComposition,
-                                  unsigned memorySpace, Location location) {
+                                  unsigned memorySpace) {
   return getImpl(shape, elementType, affineMapComposition, memorySpace,
                  location);
 }
@@ -524,9 +500,9 @@ UnrankedMemRefType UnrankedMemRefType::get(Type elementType,
   return Base::get(elementType.getContext(), elementType, memorySpace);
 }
 
-UnrankedMemRefType UnrankedMemRefType::getChecked(Type elementType,
-                                                  unsigned memorySpace,
-                                                  Location location) {
+UnrankedMemRefType UnrankedMemRefType::getChecked(Location location,
+                                                  Type elementType,
+                                                  unsigned memorySpace) {
   return Base::getChecked(location, elementType, memorySpace);
 }
 
@@ -692,15 +668,6 @@ LogicalResult mlir::getStridesAndOffset(MemRefType t,
 /// TupleType
 //===----------------------------------------------------------------------===//
 
-/// Get or create a new TupleType with the provided element types. Assumes the
-/// arguments define a well-formed type.
-TupleType TupleType::get(TypeRange elementTypes, MLIRContext *context) {
-  return Base::get(context, elementTypes);
-}
-
-/// Get or create an empty tuple type.
-TupleType TupleType::get(MLIRContext *context) { return get({}, context); }
-
 /// Return the elements types for this tuple.
 ArrayRef<Type> TupleType::getTypes() const { return getImpl()->getTypes(); }
 
@@ -719,6 +686,10 @@ void TupleType::getFlattenedTypes(SmallVectorImpl<Type> &types) {
 
 /// Return the number of element types.
 size_t TupleType::size() const { return getImpl()->size(); }
+
+//===----------------------------------------------------------------------===//
+// Type Utilities
+//===----------------------------------------------------------------------===//
 
 AffineMap mlir::makeStridedLinearLayoutMap(ArrayRef<int64_t> strides,
                                            int64_t offset,

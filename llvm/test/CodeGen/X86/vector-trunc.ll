@@ -107,11 +107,9 @@ define <8 x i32> @trunc8i64_8i32_lshr(<8 x i64> %a) {
 ;
 ; AVX2-SLOW-LABEL: trunc8i64_8i32_lshr:
 ; AVX2-SLOW:       # %bb.0: # %entry
-; AVX2-SLOW-NEXT:    vpsrlq $32, %ymm1, %ymm1
-; AVX2-SLOW-NEXT:    vpsrlq $32, %ymm0, %ymm0
-; AVX2-SLOW-NEXT:    vperm2i128 {{.*#+}} ymm2 = ymm0[2,3],ymm1[2,3]
-; AVX2-SLOW-NEXT:    vinserti128 $1, %xmm1, %ymm0, %ymm0
-; AVX2-SLOW-NEXT:    vshufps {{.*#+}} ymm0 = ymm0[0,2],ymm2[0,2],ymm0[4,6],ymm2[4,6]
+; AVX2-SLOW-NEXT:    vperm2f128 {{.*#+}} ymm2 = ymm0[2,3],ymm1[2,3]
+; AVX2-SLOW-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
+; AVX2-SLOW-NEXT:    vshufps {{.*#+}} ymm0 = ymm0[1,3],ymm2[1,3],ymm0[5,7],ymm2[5,7]
 ; AVX2-SLOW-NEXT:    retq
 ;
 ; AVX2-FAST-LABEL: trunc8i64_8i32_lshr:
@@ -454,10 +452,9 @@ define <8 x i16> @trunc8i32_8i16_lshr(<8 x i32> %a) {
 ;
 ; SSSE3-LABEL: trunc8i32_8i16_lshr:
 ; SSSE3:       # %bb.0: # %entry
-; SSSE3-NEXT:    movdqa {{.*#+}} xmm2 = [2,3,6,7,10,11,14,15,10,11,14,15,14,15,128,128]
-; SSSE3-NEXT:    pshufb %xmm2, %xmm1
-; SSSE3-NEXT:    pshufb %xmm2, %xmm0
-; SSSE3-NEXT:    punpcklqdq {{.*#+}} xmm0 = xmm0[0],xmm1[0]
+; SSSE3-NEXT:    psrad $16, %xmm1
+; SSSE3-NEXT:    psrad $16, %xmm0
+; SSSE3-NEXT:    packssdw %xmm1, %xmm0
 ; SSSE3-NEXT:    retq
 ;
 ; SSE41-LABEL: trunc8i32_8i16_lshr:

@@ -627,6 +627,10 @@ unsigned TargetTransformInfo::getMinVectorRegisterBitWidth() const {
   return TTIImpl->getMinVectorRegisterBitWidth();
 }
 
+Optional<unsigned> TargetTransformInfo::getMaxVScale() const {
+  return TTIImpl->getMaxVScale();
+}
+
 bool TargetTransformInfo::shouldMaximizeVectorBandwidth(bool OptSize) const {
   return TTIImpl->shouldMaximizeVectorBandwidth(OptSize);
 }
@@ -1054,6 +1058,10 @@ bool TargetTransformInfo::shouldExpandReduction(const IntrinsicInst *II) const {
 
 unsigned TargetTransformInfo::getGISelRematGlobalCost() const {
   return TTIImpl->getGISelRematGlobalCost();
+}
+
+bool TargetTransformInfo::supportsScalableVectors() const {
+  return TTIImpl->supportsScalableVectors();
 }
 
 int TargetTransformInfo::getInstructionLatency(const Instruction *I) const {

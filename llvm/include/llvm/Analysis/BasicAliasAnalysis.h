@@ -18,7 +18,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include <algorithm>
@@ -117,6 +116,9 @@ private:
     unsigned SExtBits;
 
     APInt Scale;
+
+    // Context instruction to use when querying information about this index.
+    const Instruction *CxtI;
 
     bool operator==(const VariableGEPIndex &Other) const {
       return V == Other.V && ZExtBits == Other.ZExtBits &&
@@ -230,18 +232,23 @@ private:
   AliasResult aliasPHI(const PHINode *PN, LocationSize PNSize,
                        const AAMDNodes &PNAAInfo, const Value *V2,
                        LocationSize V2Size, const AAMDNodes &V2AAInfo,
-                       const Value *UnderV2, AAQueryInfo &AAQI);
+                       AAQueryInfo &AAQI);
 
   AliasResult aliasSelect(const SelectInst *SI, LocationSize SISize,
                           const AAMDNodes &SIAAInfo, const Value *V2,
                           LocationSize V2Size, const AAMDNodes &V2AAInfo,
-                          const Value *UnderV2, AAQueryInfo &AAQI);
+                          AAQueryInfo &AAQI);
 
   AliasResult aliasCheck(const Value *V1, LocationSize V1Size,
                          const AAMDNodes &V1AATag, const Value *V2,
                          LocationSize V2Size, const AAMDNodes &V2AATag,
-                         AAQueryInfo &AAQI, const Value *O1 = nullptr,
-                         const Value *O2 = nullptr);
+                         AAQueryInfo &AAQI);
+
+  AliasResult aliasCheckRecursive(const Value *V1, LocationSize V1Size,
+                                  const AAMDNodes &V1AATag, const Value *V2,
+                                  LocationSize V2Size, const AAMDNodes &V2AATag,
+                                  AAQueryInfo &AAQI, const Value *O1,
+                                  const Value *O2);
 };
 
 /// Analysis pass providing a never-invalidated alias analysis result.

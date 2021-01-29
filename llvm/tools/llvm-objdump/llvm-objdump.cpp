@@ -29,6 +29,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/FaultMaps.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/Symbolize/Symbolize.h"
@@ -448,7 +449,7 @@ std::string objdump::getFileNameForError(const object::Archive::Child &C,
   return "<file index: " + std::to_string(Index) + ">";
 }
 
-void objdump::reportWarning(Twine Message, StringRef File) {
+void objdump::reportWarning(const Twine &Message, StringRef File) {
   // Output order between errs() and outs() matters especially for archive
   // files where the output is per member object.
   outs().flush();
@@ -457,7 +458,7 @@ void objdump::reportWarning(Twine Message, StringRef File) {
 }
 
 LLVM_ATTRIBUTE_NORETURN void objdump::reportError(StringRef File,
-                                                  Twine Message) {
+                                                  const Twine &Message) {
   outs().flush();
   WithColor::error(errs(), ToolName) << "'" << File << "': " << Message << "\n";
   exit(1);
@@ -480,11 +481,11 @@ LLVM_ATTRIBUTE_NORETURN void objdump::reportError(Error E, StringRef FileName,
   exit(1);
 }
 
-static void reportCmdLineWarning(Twine Message) {
+static void reportCmdLineWarning(const Twine &Message) {
   WithColor::warning(errs(), ToolName) << Message << "\n";
 }
 
-LLVM_ATTRIBUTE_NORETURN static void reportCmdLineError(Twine Message) {
+LLVM_ATTRIBUTE_NORETURN static void reportCmdLineError(const Twine &Message) {
   WithColor::error(errs(), ToolName) << Message << "\n";
   exit(1);
 }
@@ -806,19 +807,19 @@ public:
     bool IsASCII = DbgVariables == DVASCII;
     switch (C) {
     case LineChar::RangeStart:
-      return IsASCII ? "^" : u8"\u2548";
+      return IsASCII ? "^" : (const char *)u8"\u2548";
     case LineChar::RangeMid:
-      return IsASCII ? "|" : u8"\u2503";
+      return IsASCII ? "|" : (const char *)u8"\u2503";
     case LineChar::RangeEnd:
-      return IsASCII ? "v" : u8"\u253b";
+      return IsASCII ? "v" : (const char *)u8"\u253b";
     case LineChar::LabelVert:
-      return IsASCII ? "|" : u8"\u2502";
+      return IsASCII ? "|" : (const char *)u8"\u2502";
     case LineChar::LabelCornerNew:
-      return IsASCII ? "/" : u8"\u250c";
+      return IsASCII ? "/" : (const char *)u8"\u250c";
     case LineChar::LabelCornerActive:
-      return IsASCII ? "|" : u8"\u2520";
+      return IsASCII ? "|" : (const char *)u8"\u2520";
     case LineChar::LabelHoriz:
-      return IsASCII ? "-" : u8"\u2500";
+      return IsASCII ? "-" : (const char *)u8"\u2500";
     }
     llvm_unreachable("Unhandled LineChar enum");
   }

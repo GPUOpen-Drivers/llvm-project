@@ -1040,6 +1040,9 @@ struct NormalizedOther {
       Map["STO_MIPS_PLT"] = ELF::STO_MIPS_PLT;
       Map["STO_MIPS_OPTIONAL"] = ELF::STO_MIPS_OPTIONAL;
     }
+
+    if (EMachine == ELF::EM_AARCH64)
+      Map["STO_AARCH64_VARIANT_PCS"] = ELF::STO_AARCH64_VARIANT_PCS;
     return Map;
   }
 
@@ -1581,10 +1584,10 @@ void MappingTraits<ELFYAML::VerdefEntry>::mapping(IO &IO,
                                                   ELFYAML::VerdefEntry &E) {
   assert(IO.getContext() && "The IO context is not initialized");
 
-  IO.mapRequired("Version", E.Version);
-  IO.mapRequired("Flags", E.Flags);
-  IO.mapRequired("VersionNdx", E.VersionNdx);
-  IO.mapRequired("Hash", E.Hash);
+  IO.mapOptional("Version", E.Version);
+  IO.mapOptional("Flags", E.Flags);
+  IO.mapOptional("VersionNdx", E.VersionNdx);
+  IO.mapOptional("Hash", E.Hash);
   IO.mapRequired("Names", E.VerNames);
 }
 

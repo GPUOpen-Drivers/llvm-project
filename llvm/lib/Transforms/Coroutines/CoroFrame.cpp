@@ -758,6 +758,15 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
   // Because multiple allocas may own the same field slot,
   // we add allocas to field here.
   B.addFieldForAllocas(F, FrameData, Shape);
+  // Add PromiseAlloca to Allocas list so that
+  // 1. updateLayoutIndex could update its index after
+  // `performOptimizedStructLayout`
+  // 2. it is processed in insertSpills.
+  if (Shape.ABI == coro::ABI::Switch && PromiseAlloca)
+    // We assume that the promise alloca won't be modified before
+    // CoroBegin and no alias will be create before CoroBegin.
+    FrameData.Allocas.emplace_back(
+        PromiseAlloca, DenseMap<Instruction *, llvm::Optional<APInt>>{}, false);
   // Create an entry for every spilled value.
   for (auto &S : FrameData.Spills) {
     FieldIDType Id = B.addField(S.first->getType(), None);
@@ -1522,13 +1531,15 @@ static void rewritePHIs(BasicBlock &BB) {
   // so we need to create an additional "dispatcher" block.
   if (auto *CleanupPad =
           dyn_cast_or_null<CleanupPadInst>(BB.getFirstNonPHI())) {
-    SmallVector<BasicBlock *, 8> Preds(pred_begin(&BB), pred_end(&BB));
+    SmallVector<BasicBlock *, 8> Preds(predecessors(&BB));
     for (BasicBlock *Pred : Preds) {
       if (CatchSwitchInst *CS =
               dyn_cast<CatchSwitchInst>(Pred->getTerminator())) {
+        (void)CS;
         // CleanupPad with a CatchSwitch predecessor: therefore this is an
         // unwind destination that needs to be handle specially.
         assert(CS->getUnwindDest() == &BB);
+        (void)CS;
         rewritePHIsForCleanupPad(&BB, CleanupPad);
         return;
       }
@@ -1548,7 +1559,7 @@ static void rewritePHIs(BasicBlock &BB) {
     // ehAwareSplitEdge cloned it in the transition blocks.
   }
 
-  SmallVector<BasicBlock *, 8> Preds(pred_begin(&BB), pred_end(&BB));
+  SmallVector<BasicBlock *, 8> Preds(predecessors(&BB));
   for (BasicBlock *Pred : Preds) {
     auto *IncomingBB = ehAwareSplitEdge(Pred, &BB, LandingPad, ReplPHI);
     IncomingBB->setName(BB.getName() + Twine(".from.") + Pred->getName());
@@ -1992,17 +2003,14 @@ static void sinkSpillUsesAfterCoroBegin(Function &F,
 
   // Sort by dominance.
   SmallVector<Instruction *, 64> InsertionList(ToMove.begin(), ToMove.end());
-  std::sort(InsertionList.begin(), InsertionList.end(),
-            [&Dom](Instruction *A, Instruction *B) -> bool {
-              // If a dominates b it should preceed (<) b.
-              return Dom.dominates(A, B);
-            });
+  llvm::sort(InsertionList, [&Dom](Instruction *A, Instruction *B) -> bool {
+    // If a dominates b it should preceed (<) b.
+    return Dom.dominates(A, B);
+  });
 
   Instruction *InsertPt = CoroBegin->getNextNode();
   for (Instruction *Inst : InsertionList)
     Inst->moveBefore(InsertPt);
-
-  return;
 }
 
 /// For each local variable that all of its user are only used inside one of
@@ -2170,8 +2178,25 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
   }
 
   // Put CoroEnds into their own blocks.
-  for (CoroEndInst *CE : Shape.CoroEnds)
+  for (AnyCoroEndInst *CE : Shape.CoroEnds) {
     splitAround(CE, "CoroEnd");
+
+    // Emit the musttail call function in a new block before the CoroEnd.
+    // We do this here so that the right suspend crossing info is computed for
+    // the uses of the musttail call function call. (Arguments to the coro.end
+    // instructions would be ignored)
+    if (auto *AsyncEnd = dyn_cast<CoroAsyncEndInst>(CE)) {
+      auto *MustTailCallFn = AsyncEnd->getMustTailCallFunction();
+      if (!MustTailCallFn)
+        continue;
+      IRBuilder<> Builder(AsyncEnd);
+      SmallVector<Value *, 8> Args(AsyncEnd->args());
+      auto Arguments = ArrayRef<Value *>(Args).drop_front(3);
+      auto *Call = createMustTailCall(AsyncEnd->getDebugLoc(), MustTailCallFn,
+                                      Arguments, Builder);
+      splitAround(Call, "MustTailCall.Before.CoroEnd");
+    }
+  }
 
   // Transforms multi-edge PHI Nodes, so that any value feeding into a PHI will
   // never has its definition separated from the PHI by the suspend point.
@@ -2271,13 +2296,6 @@ void coro::buildCoroutineFrame(Function &F, Shape &Shape) {
       Shape.ABI == coro::ABI::Async)
     sinkSpillUsesAfterCoroBegin(F, FrameData, Shape.CoroBegin);
   Shape.FrameTy = buildFrameType(F, Shape, FrameData);
-  // Add PromiseAlloca to Allocas list so that it is processed in insertSpills.
-  if (Shape.ABI == coro::ABI::Switch && Shape.SwitchLowering.PromiseAlloca)
-    // We assume that the promise alloca won't be modified before
-    // CoroBegin and no alias will be create before CoroBegin.
-    FrameData.Allocas.emplace_back(
-        Shape.SwitchLowering.PromiseAlloca,
-        DenseMap<Instruction *, llvm::Optional<APInt>>{}, false);
   Shape.FramePtr = insertSpills(FrameData, Shape);
   lowerLocalAllocas(LocalAllocas, DeadInstructions);
 

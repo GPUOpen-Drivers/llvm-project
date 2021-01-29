@@ -246,7 +246,7 @@ LANGOPT(GPUExcludeWrongSideOverloads, 1, 0, "always exclude wrong side overloads
 
 LANGOPT(SYCL              , 1, 0, "SYCL")
 LANGOPT(SYCLIsDevice      , 1, 0, "Generate code for SYCL device")
-LANGOPT(SYCLVersion       , 32, 0, "Version of the SYCL standard used")
+ENUM_LANGOPT(SYCLVersion  , SYCLMajorVersion, 1, SYCL_None, "Version of the SYCL standard used")
 
 LANGOPT(HIPUseNewLaunchAPI, 1, 0, "Use new kernel launching API for HIP")
 
@@ -322,7 +322,8 @@ ENUM_LANGOPT(ExternDeclDLLImportVisibility, Visibility, 3, DefaultVisibility,
 ENUM_LANGOPT(ExternDeclNoDLLStorageClassVisibility, Visibility, 3, HiddenVisibility,
              "visibility for external declarations without an explicit DLL storage class [-fvisibility-from-dllstorageclass]")
 BENIGN_LANGOPT(SemanticInterposition        , 1, 0, "semantic interposition")
-BENIGN_LANGOPT(ExplicitNoSemanticInterposition, 1, 0, "explicitly no semantic interposition")
+BENIGN_LANGOPT(HalfNoSemanticInterposition, 1, 0,
+               "Like -fno-semantic-interposition but don't use local aliases")
 ENUM_LANGOPT(StackProtector, StackProtectorMode, 2, SSPOff,
              "stack protector mode")
 ENUM_LANGOPT(TrivialAutoVarInit, TrivialAutoVarInitKind, 2, TrivialAutoVarInitKind::Uninitialized,
@@ -352,6 +353,8 @@ ENUM_LANGOPT(VtorDispMode, MSVtorDispMode, 2, MSVtorDispMode::ForVBaseOverride,
              "How many vtordisps to insert")
 
 LANGOPT(ApplePragmaPack, 1, 0, "Apple gcc-compatible #pragma pack handling")
+
+LANGOPT(XLPragmaPack, 1, 0, "IBM XL #pragma pack handling")
 
 LANGOPT(RetainCommentsFromSystemHeaders, 1, 0, "retain documentation comments from system headers in the AST")
 

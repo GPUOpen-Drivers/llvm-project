@@ -2657,6 +2657,7 @@ addAssociatedClassesAndNamespaces(AssociatedLookup &Result,
     case TemplateArgument::Integral:
     case TemplateArgument::Expression:
     case TemplateArgument::NullPtr:
+    case TemplateArgument::UncommonValue:
       // [Note: non-type template arguments do not contribute to the set of
       //  associated namespaces. ]
       break;
@@ -3384,6 +3385,13 @@ Sema::LookupLiteralOperator(Scope *S, LookupResult &R,
       TemplateParameterList *Params = FD->getTemplateParameters();
       if (Params->size() == 1) {
         IsTemplate = true;
+        if (!Params->getParam(0)->isTemplateParameterPack() && !StringLit) {
+          // Implied but not stated: user-defined integer and floating literals
+          // only ever use numeric literal operator templates, not templates
+          // taking a parameter of class type.
+          F.erase();
+          continue;
+        }
 
         // A string literal template is only considered if the string literal
         // is a well-formed template argument for the template parameter.

@@ -16,8 +16,8 @@
 #include "mlir-c/BuiltinAttributes.h"
 #include "mlir-c/BuiltinTypes.h"
 #include "mlir-c/Diagnostics.h"
+#include "mlir-c/Dialect/Standard.h"
 #include "mlir-c/Registration.h"
-#include "mlir-c/StandardDialect.h"
 
 #include <assert.h>
 #include <math.h>
@@ -1007,7 +1007,7 @@ int printBuiltinAttributes(MlirContext ctx) {
 
 int printAffineMap(MlirContext ctx) {
   MlirAffineMap emptyAffineMap = mlirAffineMapEmptyGet(ctx);
-  MlirAffineMap affineMap = mlirAffineMapGet(ctx, 3, 2);
+  MlirAffineMap affineMap = mlirAffineMapZeroResultGet(ctx, 3, 2);
   MlirAffineMap constAffineMap = mlirAffineMapConstantGet(ctx, 2);
   MlirAffineMap multiDimIdentityAffineMap =
       mlirAffineMapMultiDimIdentityGet(ctx, 3);
@@ -1251,6 +1251,50 @@ int printAffineExpr(MlirContext ctx) {
   if (!mlirAffineExprIsACeilDiv(affineCeilDivExpr))
     return 13;
 
+  if (!mlirAffineExprIsABinary(affineAddExpr))
+    return 14;
+
+  // Test other 'IsA' method on affine expressions.
+  if (!mlirAffineExprIsAConstant(affineConstantExpr))
+    return 15;
+
+  if (!mlirAffineExprIsADim(affineDimExpr))
+    return 16;
+
+  if (!mlirAffineExprIsASymbol(affineSymbolExpr))
+    return 17;
+
+  // Test equality and nullity.
+  MlirAffineExpr otherDimExpr = mlirAffineDimExprGet(ctx, 5);
+  if (!mlirAffineExprEqual(affineDimExpr, otherDimExpr))
+    return 18;
+
+  if (mlirAffineExprIsNull(affineDimExpr))
+    return 19;
+
+  return 0;
+}
+
+int affineMapFromExprs(MlirContext ctx) {
+  MlirAffineExpr affineDimExpr = mlirAffineDimExprGet(ctx, 0);
+  MlirAffineExpr affineSymbolExpr = mlirAffineSymbolExprGet(ctx, 1);
+  MlirAffineExpr exprs[] = {affineDimExpr, affineSymbolExpr};
+  MlirAffineMap map = mlirAffineMapGet(ctx, 3, 3, 2, exprs);
+
+  // CHECK-LABEL: @affineMapFromExprs
+  fprintf(stderr, "@affineMapFromExprs");
+  // CHECK: (d0, d1, d2)[s0, s1, s2] -> (d0, s1)
+  mlirAffineMapDump(map);
+
+  if (mlirAffineMapGetNumResults(map) != 2)
+    return 1;
+
+  if (!mlirAffineExprEqual(mlirAffineMapGetResult(map, 0), affineDimExpr))
+    return 2;
+
+  if (!mlirAffineExprEqual(mlirAffineMapGetResult(map, 1), affineSymbolExpr))
+    return 3;
+
   return 0;
 }
 
@@ -1295,7 +1339,7 @@ MlirLogicalResult errorHandler(MlirDiagnostic diagnostic, void *userData) {
   MlirLocation loc = mlirDiagnosticGetLocation(diagnostic);
   mlirLocationPrint(loc, printToStderr, NULL);
   assert(mlirDiagnosticGetNumNotes(diagnostic) == 0);
-  fprintf(stderr, ">> end of diagnostic (userData: %ld)\n", (long)userData);
+  fprintf(stderr, "\n>> end of diagnostic (userData: %ld)\n", (long)userData);
   return mlirLogicalResultSuccess();
 }
 
@@ -1308,15 +1352,31 @@ void testDiagnostics() {
   MlirContext ctx = mlirContextCreate();
   MlirDiagnosticHandlerID id = mlirContextAttachDiagnosticHandler(
       ctx, errorHandler, (void *)42, deleteUserData);
-  MlirLocation loc = mlirLocationUnknownGet(ctx);
   fprintf(stderr, "@test_diagnostics\n");
-  mlirEmitError(loc, "test diagnostics");
+  MlirLocation unknownLoc = mlirLocationUnknownGet(ctx);
+  mlirEmitError(unknownLoc, "test diagnostics");
+  MlirLocation fileLineColLoc = mlirLocationFileLineColGet(
+      ctx, mlirStringRefCreateFromCString("file.c"), 1, 2);
+  mlirEmitError(fileLineColLoc, "test diagnostics");
+  MlirLocation callSiteLoc = mlirLocationCallSiteGet(
+      mlirLocationFileLineColGet(
+          ctx, mlirStringRefCreateFromCString("other-file.c"), 2, 3),
+      fileLineColLoc);
+  mlirEmitError(callSiteLoc, "test diagnostics");
   mlirContextDetachDiagnosticHandler(ctx, id);
-  mlirEmitError(loc, "more test diagnostics");
+  mlirEmitError(unknownLoc, "more test diagnostics");
   // CHECK-LABEL: @test_diagnostics
   // CHECK: processing diagnostic (userData: 42) <<
   // CHECK:   test diagnostics
   // CHECK:   loc(unknown)
+  // CHECK: >> end of diagnostic (userData: 42)
+  // CHECK: processing diagnostic (userData: 42) <<
+  // CHECK:   test diagnostics
+  // CHECK:   loc("file.c":1:2)
+  // CHECK: >> end of diagnostic (userData: 42)
+  // CHECK: processing diagnostic (userData: 42) <<
+  // CHECK:   test diagnostics
+  // CHECK:   loc(callsite("other-file.c":2:3 at "file.c":1:2))
   // CHECK: >> end of diagnostic (userData: 42)
   // CHECK: deleting user data (userData: 42)
   // CHECK-NOT: processing diagnostic
@@ -1338,8 +1398,10 @@ int main() {
     return 4;
   if (printAffineExpr(ctx))
     return 5;
-  if (registerOnlyStd())
+  if (affineMapFromExprs(ctx))
     return 6;
+  if (registerOnlyStd())
+    return 7;
 
   mlirContextDestroy(ctx);
 

@@ -1658,6 +1658,11 @@ public:
                           const MachineMemOperand &MMO,
                           bool *Fast = nullptr) const;
 
+  /// LLT handling variant.
+  bool allowsMemoryAccess(LLVMContext &Context, const DataLayout &DL, LLT Ty,
+                          const MachineMemOperand &MMO,
+                          bool *Fast = nullptr) const;
+
   /// Returns the target specific optimal type for load and store operations as
   /// a result of memset, memcpy, and memmove lowering.
   /// It returns EVT::Other if the type should be determined using generic
@@ -4366,6 +4371,11 @@ public:
 
   /// Expand fminnum/fmaxnum into fminnum_ieee/fmaxnum_ieee with quieted inputs.
   SDValue expandFMINNUM_FMAXNUM(SDNode *N, SelectionDAG &DAG) const;
+
+  /// Expand FP_TO_[US]INT_SAT into FP_TO_[US]INT and selects or min/max.
+  /// \param N Node to expand
+  /// \returns The expansion result
+  SDValue expandFP_TO_INT_SAT(SDNode *N, SelectionDAG &DAG) const;
 
   /// Expand CTPOP nodes. Expands vector/scalar CTPOP nodes,
   /// vector nodes can only succeed if all operations are legal/custom.

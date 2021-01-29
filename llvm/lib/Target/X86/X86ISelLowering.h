@@ -505,8 +505,6 @@ namespace llvm {
     VBROADCAST,
     // Broadcast mask to vector.
     VBROADCASTM,
-    // Broadcast subvector to vector.
-    SUBV_BROADCAST,
 
     /// SSE4A Extraction and Insertion.
     EXTRQI,
@@ -776,8 +774,11 @@ namespace llvm {
     // extract_vector_elt, store.
     VEXTRACT_STORE,
 
-    // scalar broadcast from memory
+    // scalar broadcast from memory.
     VBROADCAST_LOAD,
+
+    // subvector broadcast from memory.
+    SUBV_BROADCAST_LOAD,
 
     // Store FP control world into i16 memory.
     FNSTCW16m,
@@ -854,7 +855,7 @@ namespace llvm {
     /// Returns true of the given offset can be
     /// fit into displacement field of the instruction.
     bool isOffsetSuitableForCodeModel(int64_t Offset, CodeModel::Model M,
-                                      bool hasSymbolicDisplacement = true);
+                                      bool hasSymbolicDisplacement);
 
     /// Determines whether the callee is required to pop its
     /// own arguments. Callee pop is necessary to support tail calls.
@@ -1498,6 +1499,7 @@ namespace llvm {
     SDValue LowerUINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerTRUNCATE(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerFP_TO_INT_SAT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerLRINT_LLRINT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSETCC(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSETCCCARRY(SDValue Op, SelectionDAG &DAG) const;

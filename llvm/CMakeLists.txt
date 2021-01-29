@@ -2,18 +2,7 @@
 
 cmake_minimum_required(VERSION 3.13.4)
 
-if(POLICY CMP0068)
-  cmake_policy(SET CMP0068 NEW)
-  set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
-endif()
-
-if(POLICY CMP0075)
-  cmake_policy(SET CMP0075 NEW)
-endif()
-
-if(POLICY CMP0077)
-  cmake_policy(SET CMP0077 NEW)
-endif()
+set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
 
 if(NOT DEFINED LLVM_VERSION_MAJOR)
   set(LLVM_VERSION_MAJOR 12)
@@ -708,20 +697,7 @@ set(ENABLE_EXPERIMENTAL_NEW_PASS_MANAGER FALSE CACHE BOOL
 
 include(HandleLLVMOptions)
 
-find_package(Python3 COMPONENTS Interpreter)
-if(NOT Python3_Interpreter_FOUND)
-  message(WARNING "Python3 not found, using python2 as a fallback")
-  find_package(Python2 COMPONENTS Interpreter REQUIRED)
-  if(Python2_VERSION VERSION_LESS 2.7)
-    message(SEND_ERROR "Python 2.7 or newer is required")
-  endif()
-
-  # Treat python2 as python3
-  add_executable(Python3::Interpreter IMPORTED)
-  set_target_properties(Python3::Interpreter PROPERTIES
-    IMPORTED_LOCATION ${Python2_EXECUTABLE})
-  set(Python3_EXECUTABLE ${Python2_EXECUTABLE})
-endif()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 ######
 
@@ -923,13 +899,6 @@ if(LLVM_TARGET_IS_CROSSCOMPILE_HOST)
 # Dummy use to avoid CMake Warning: Manually-specified variables were not used
 # (this is a variable that CrossCompile sets on recursive invocations)
 endif()
-
-if(${CMAKE_SYSTEM_NAME} MATCHES "(FreeBSD|DragonFly)")
-  # On FreeBSD, /usr/local/* is not used by default. In order to build LLVM
-  # with libxml2, iconv.h, etc., we must add /usr/local paths.
-  include_directories(SYSTEM "/usr/local/include")
-  link_directories("/usr/local/lib")
-endif(${CMAKE_SYSTEM_NAME} MATCHES "(FreeBSD|DragonFly)")
 
 if( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
    # special hack for Solaris to handle crazy system sys/regset.h

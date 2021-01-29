@@ -23,7 +23,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
@@ -669,7 +668,8 @@ InlinerPass::getAdvisor(const ModuleAnalysisManagerCGSCCProxy::Result &MAM,
     // duration of the inliner pass, and thus the lifetime of the owned advisor.
     // The one we would get from the MAM can be invalidated as a result of the
     // inliner's activity.
-    OwnedDefaultAdvisor.emplace(FAM, getInlineParams());
+    OwnedDefaultAdvisor =
+        std::make_unique<DefaultInlineAdvisor>(FAM, getInlineParams());
     return *OwnedDefaultAdvisor;
   }
   assert(IAA->getAdvisor() &&
@@ -833,7 +833,7 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
         continue;
       }
 
-      auto Advice = Advisor.getAdvice(*CB);
+      auto Advice = Advisor.getAdvice(*CB, OnlyMandatory);
       // Check whether we want to inline this callsite.
       if (!Advice->isInliningRecommended()) {
         Advice->recordUnattemptedInlining();
@@ -1018,6 +1018,7 @@ PreservedAnalyses InlinerPass::run(LazyCallGraph::SCC &InitialC,
 
 ModuleInlinerWrapperPass::ModuleInlinerWrapperPass(InlineParams Params,
                                                    bool Debugging,
+                                                   bool MandatoryFirst,
                                                    InliningAdvisorMode Mode,
                                                    unsigned MaxDevirtIterations)
     : Params(Params), Mode(Mode), MaxDevirtIterations(MaxDevirtIterations),
@@ -1027,6 +1028,8 @@ ModuleInlinerWrapperPass::ModuleInlinerWrapperPass(InlineParams Params,
   // into the callers so that our optimizations can reflect that.
   // For PreLinkThinLTO pass, we disable hot-caller heuristic for sample PGO
   // because it makes profile annotation in the backend inaccurate.
+  if (MandatoryFirst)
+    PM.addPass(InlinerPass(/*OnlyMandatory*/ true));
   PM.addPass(InlinerPass());
 }
 

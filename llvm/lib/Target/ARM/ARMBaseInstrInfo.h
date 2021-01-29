@@ -132,6 +132,10 @@ public:
                                const ScheduleDAG *DAG) const override;
 
   ScheduleHazardRecognizer *
+  CreateTargetMIHazardRecognizer(const InstrItineraryData *II,
+                                 const ScheduleDAGMI *DAG) const override;
+
+  ScheduleHazardRecognizer *
   CreateTargetPostRAHazardRecognizer(const InstrItineraryData *II,
                                      const ScheduleDAG *DAG) const override;
 
@@ -400,6 +404,16 @@ private:
   /// after the LR is was restored from a register.
   void emitCFIForLRRestoreFromReg(MachineBasicBlock &MBB,
                                   MachineBasicBlock::iterator It) const;
+  /// \brief Sets the offsets on outlined instructions in \p MBB which use SP
+  /// so that they will be valid post-outlining.
+  ///
+  /// \param MBB A \p MachineBasicBlock in an outlined function.
+  void fixupPostOutline(MachineBasicBlock &MBB) const;
+
+  /// Returns true if the machine instruction offset can handle the stack fixup
+  /// and updates it if requested.
+  bool checkAndUpdateStackOffset(MachineInstr *MI, int64_t Fixup,
+                                 bool Updt) const;
 
   unsigned getInstBundleLength(const MachineInstr &MI) const;
 
@@ -630,9 +644,75 @@ static inline bool isJumpTableBranchOpcode(int Opc) {
          Opc == ARM::t2BR_JT;
 }
 
+static inline bool isLowOverheadTerminatorOpcode(int Opc) {
+  return Opc == ARM::t2DoLoopStartTP || Opc == ARM::t2WhileLoopStart ||
+         Opc == ARM::t2LoopEnd || Opc == ARM::t2LoopEndDec;
+}
+
 static inline
 bool isIndirectBranchOpcode(int Opc) {
   return Opc == ARM::BX || Opc == ARM::MOVPCRX || Opc == ARM::tBRIND;
+}
+
+static inline bool isIndirectCall(const MachineInstr &MI) {
+  int Opc = MI.getOpcode();
+  switch (Opc) {
+    // indirect calls:
+  case ARM::BLX:
+  case ARM::BLX_noip:
+  case ARM::BLX_pred:
+  case ARM::BLX_pred_noip:
+  case ARM::BX_CALL:
+  case ARM::BMOVPCRX_CALL:
+  case ARM::TCRETURNri:
+  case ARM::TAILJMPr:
+  case ARM::TAILJMPr4:
+  case ARM::tBLXr:
+  case ARM::tBLXr_noip:
+  case ARM::tBLXNSr:
+  case ARM::tBLXNS_CALL:
+  case ARM::tBX_CALL:
+  case ARM::tTAILJMPr:
+    assert(MI.isCall(MachineInstr::IgnoreBundle));
+    return true;
+    // direct calls:
+  case ARM::BL:
+  case ARM::BL_pred:
+  case ARM::BMOVPCB_CALL:
+  case ARM::BL_PUSHLR:
+  case ARM::BLXi:
+  case ARM::TCRETURNdi:
+  case ARM::TAILJMPd:
+  case ARM::SVC:
+  case ARM::HVC:
+  case ARM::TPsoft:
+  case ARM::tTAILJMPd:
+  case ARM::t2SMC:
+  case ARM::t2HVC:
+  case ARM::tBL:
+  case ARM::tBLXi:
+  case ARM::tBL_PUSHLR:
+  case ARM::tTAILJMPdND:
+  case ARM::tSVC:
+  case ARM::tTPsoft:
+    assert(MI.isCall(MachineInstr::IgnoreBundle));
+    return false;
+  }
+  assert(!MI.isCall(MachineInstr::IgnoreBundle));
+  return false;
+}
+
+static inline bool isIndirectControlFlowNotComingBack(const MachineInstr &MI) {
+  int opc = MI.getOpcode();
+  return MI.isReturn() || isIndirectBranchOpcode(MI.getOpcode()) ||
+         isJumpTableBranchOpcode(opc);
+}
+
+static inline bool isSpeculationBarrierEndBBOpcode(int Opc) {
+  return Opc == ARM::SpeculationBarrierISBDSBEndBB ||
+         Opc == ARM::SpeculationBarrierSBEndBB ||
+         Opc == ARM::t2SpeculationBarrierISBDSBEndBB ||
+         Opc == ARM::t2SpeculationBarrierSBEndBB;
 }
 
 static inline bool isPopOpcode(int Opc) {
@@ -849,6 +929,10 @@ inline bool isGatherScatter(IntrinsicInst *IntInst) {
     return false;
   return isGather(IntInst) || isScatter(IntInst);
 }
+
+unsigned getBLXOpcode(const MachineFunction &MF);
+unsigned gettBLXrOpcode(const MachineFunction &MF);
+unsigned getBLXpredOpcode(const MachineFunction &MF);
 
 } // end namespace llvm
 

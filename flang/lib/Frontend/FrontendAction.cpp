@@ -9,6 +9,8 @@
 #include "flang/Frontend/FrontendAction.h"
 #include "flang/Frontend/CompilerInstance.h"
 #include "flang/Frontend/FrontendActions.h"
+#include "flang/Frontend/FrontendOptions.h"
+#include "flang/FrontendTool/Utils.h"
 #include "llvm/Support/Errc.h"
 
 using namespace Fortran::frontend;
@@ -45,12 +47,30 @@ bool FrontendAction::ShouldEraseOutputFiles() {
 }
 
 llvm::Error FrontendAction::Execute() {
+  CompilerInstance &ci = this->instance();
+
   std::string currentInputPath{GetCurrentFileOrBufferName()};
 
   Fortran::parser::Options parserOptions =
       this->instance().invocation().fortranOpts();
+  // Set the fixed form flag based on the file extension
+  auto pathDotIndex{currentInputPath.rfind(".")};
+  if (pathDotIndex != std::string::npos) {
+    std::string pathSuffix{currentInputPath.substr(pathDotIndex + 1)};
+    parserOptions.isFixedForm = isFixedFormSuffix(pathSuffix);
+  }
 
-  this->instance().parsing().Prescan(currentInputPath, parserOptions);
+  // Prescan. In case of failure, report and return.
+  ci.parsing().Prescan(currentInputPath, parserOptions);
+
+  if (ci.parsing().messages().AnyFatalError()) {
+    const unsigned diagID = ci.diagnostics().getCustomDiagID(
+        clang::DiagnosticsEngine::Error, "Could not scan %0");
+    ci.diagnostics().Report(diagID) << GetCurrentFileOrBufferName();
+    ci.parsing().messages().Emit(llvm::errs(), ci.allCookedSources());
+
+    return llvm::Error::success();
+  }
 
   ExecuteAction();
 

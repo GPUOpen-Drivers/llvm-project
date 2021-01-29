@@ -28,6 +28,12 @@ enum NodeType : unsigned {
   SRET_FLAG,
   MRET_FLAG,
   CALL,
+  /// Select with condition operator - This selects between a true value and
+  /// a false value (ops #3 and #4) based on the boolean result of comparing
+  /// the lhs and rhs (ops #0 and #1) of a conditional expression with the
+  /// condition code in op #2, a XLenVT constant from the ISD::CondCode enum.
+  /// The lhs and rhs are XLenVT integers. The true and false values can be
+  /// integer or floating point.
   SELECT_CC,
   BuildPairF64,
   SplitF64,
@@ -77,6 +83,18 @@ enum NodeType : unsigned {
   GREVIW,
   GORCI,
   GORCIW,
+  // Vector Extension
+  // VMV_X_S matches the semantics of vmv.x.s. The result is always XLenVT
+  // sign extended from the vector element size. NOTE: The result size will
+  // never be less than the vector element size.
+  VMV_X_S,
+  // Splats an i64 scalar to a vector type (with element type i64) where the
+  // scalar is a sign-extended i32.
+  SPLAT_VECTOR_I64,
+  // Read VLENB CSR
+  READ_VLENB,
+  // Truncates a RVV integer vector by one power-of-two.
+  TRUNCATE_VECTOR,
 };
 } // namespace RISCVISD
 
@@ -115,6 +133,15 @@ public:
 
   SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const override;
 
+  bool targetShrinkDemandedConstant(SDValue Op, const APInt &DemandedBits,
+                                    const APInt &DemandedElts,
+                                    TargetLoweringOpt &TLO) const override;
+
+  void computeKnownBitsForTargetNode(const SDValue Op,
+                                     KnownBits &Known,
+                                     const APInt &DemandedElts,
+                                     const SelectionDAG &DAG,
+                                     unsigned Depth) const override;
   unsigned ComputeNumSignBitsForTargetNode(SDValue Op,
                                            const APInt &DemandedElts,
                                            const SelectionDAG &DAG,
@@ -252,6 +279,7 @@ private:
   SDValue lowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerConstantPool(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSELECT(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerVASTART(SDValue Op, SelectionDAG &DAG) const;
@@ -259,7 +287,12 @@ private:
   SDValue lowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerShiftLeftParts(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerShiftRightParts(SDValue Op, SelectionDAG &DAG, bool IsSRA) const;
+  SDValue lowerSPLATVECTOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerVectorMaskExt(SDValue Op, SelectionDAG &DAG,
+                             int64_t ExtTrueVal) const;
+  SDValue lowerVectorMaskTrunc(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;
 
   bool isEligibleForTailCallOptimization(
       CCState &CCInfo, CallLoweringInfo &CLI, MachineFunction &MF,

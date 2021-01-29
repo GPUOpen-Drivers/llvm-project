@@ -328,6 +328,7 @@ void unevaluated() {
                         // expected-warning@-1 {{declaration does not declare anything}}
   sizeof(co_await a); // expected-error {{'co_await' cannot be used in an unevaluated context}}
                       // expected-error@-1 {{invalid application of 'sizeof' to an incomplete type 'void'}}
+                      // expected-warning@-2 {{expression with side effects has no effect in an unevaluated context}}
   typeid(co_await a); // expected-error {{'co_await' cannot be used in an unevaluated context}}
                       // expected-warning@-1 {{expression with side effects has no effect in an unevaluated context}}
                       // expected-warning@-2 {{expression result unused}}
@@ -335,6 +336,7 @@ void unevaluated() {
                         // expected-warning@-1 {{declaration does not declare anything}}
   sizeof(co_yield 2); // expected-error {{'co_yield' cannot be used in an unevaluated context}}
                       // expected-error@-1 {{invalid application of 'sizeof' to an incomplete type 'void'}}
+                      // expected-warning@-2 {{expression with side effects has no effect in an unevaluated context}}
   typeid(co_yield 3); // expected-error {{'co_yield' cannot be used in an unevaluated context}}
                       // expected-warning@-1 {{expression with side effects has no effect in an unevaluated context}}
                       // expected-warning@-2 {{expression result unused}}
@@ -1177,8 +1179,8 @@ struct TestType {
   static CoroMemberTag test_static_template(const char *volatile &, unsigned) {
     auto TC = co_yield 0;
     using TCT = decltype(TC);
-    static_assert(TCT::MatchesArgs<const char *volatile &, unsigned>, "");
-    static_assert(!TCT::MatchesArgs<TestType &, const char *volatile &, unsigned>, "");
+    static_assert(TCT::template MatchesArgs<const char *volatile &, unsigned>, "");
+    static_assert(!TCT::template MatchesArgs<TestType &, const char *volatile &, unsigned>, "");
   }
 
   BadCoroMemberTag test_diagnostics() {
@@ -1261,31 +1263,31 @@ struct DepTestType {
   static CoroMemberTag test_static() {
     auto TC = co_yield 0;
     using TCT = decltype(TC);
-    static_assert(TCT::MatchesArgs<>, "");
-    static_assert(!TCT::MatchesArgs<DepTestType>, "");
-    static_assert(!TCT::MatchesArgs<DepTestType &>, "");
-    static_assert(!TCT::MatchesArgs<DepTestType *>, "");
+    static_assert(TCT::template MatchesArgs<>, "");
+    static_assert(!TCT::template MatchesArgs<DepTestType>, "");
+    static_assert(!TCT::template MatchesArgs<DepTestType &>, "");
+    static_assert(!TCT::template MatchesArgs<DepTestType *>, "");
 
     // Ensure diagnostics are actually being generated here
-    static_assert(TCT::MatchesArgs<int>, ""); // expected-error {{static_assert failed}}
+    static_assert(TCT::template MatchesArgs<int>, ""); // expected-error {{static_assert failed}}
   }
 
   static CoroMemberTag test_static(volatile void *const, char &&) {
     auto TC = co_yield 0;
     using TCT = decltype(TC);
-    static_assert(TCT::MatchesArgs<volatile void *const, char &&>, "");
+    static_assert(TCT::template MatchesArgs<volatile void *const, char &&>, "");
   }
 
   template <class Dummy>
   static CoroMemberTag test_static_template(const char *volatile &, unsigned) {
     auto TC = co_yield 0;
     using TCT = decltype(TC);
-    static_assert(TCT::MatchesArgs<const char *volatile &, unsigned>, "");
-    static_assert(!TCT::MatchesArgs<DepTestType &, const char *volatile &, unsigned>, "");
+    static_assert(TCT::template MatchesArgs<const char *volatile &, unsigned>, "");
+    static_assert(!TCT::template MatchesArgs<DepTestType &, const char *volatile &, unsigned>, "");
   }
 };
 
-template struct DepTestType<int>; // expected-note {{requested here}}
+template struct DepTestType<int>; // expected-note 2{{requested here}}
 template CoroMemberTag DepTestType<int>::test_member_template(long, const char *) const &&;
 
 template CoroMemberTag DepTestType<int>::test_static_template<void>(const char *volatile &, unsigned);

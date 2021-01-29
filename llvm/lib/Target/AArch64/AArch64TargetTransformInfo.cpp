@@ -770,6 +770,26 @@ AArch64TTIImpl::enableMemCmpExpansion(bool OptSize, bool IsZeroCmp) const {
   return Options;
 }
 
+unsigned AArch64TTIImpl::getGatherScatterOpCost(
+    unsigned Opcode, Type *DataTy, const Value *Ptr, bool VariableMask,
+    Align Alignment, TTI::TargetCostKind CostKind, const Instruction *I) {
+
+  if (!isa<ScalableVectorType>(DataTy))
+    return BaseT::getGatherScatterOpCost(Opcode, DataTy, Ptr, VariableMask,
+                                         Alignment, CostKind, I);
+  auto *VT = cast<VectorType>(DataTy);
+  auto LT = TLI->getTypeLegalizationCost(DL, DataTy);
+  ElementCount LegalVF = LT.second.getVectorElementCount();
+  Optional<unsigned> MaxNumVScale = getMaxVScale();
+  assert(MaxNumVScale && "Expected valid max vscale value");
+
+  unsigned MemOpCost =
+      getMemoryOpCost(Opcode, VT->getElementType(), Alignment, 0, CostKind, I);
+  unsigned MaxNumElementsPerGather =
+      MaxNumVScale.getValue() * LegalVF.getKnownMinValue();
+  return LT.first * MaxNumElementsPerGather * MemOpCost;
+}
+
 bool AArch64TTIImpl::useNeonVector(const Type *Ty) const {
   return isa<FixedVectorType>(Ty) && !ST->useSVEForFixedLengthVectors();
 }
@@ -1076,11 +1096,70 @@ bool AArch64TTIImpl::useReductionIntrinsic(unsigned Opcode, Type *Ty,
   return false;
 }
 
+int AArch64TTIImpl::getMinMaxReductionCost(VectorType *Ty, VectorType *CondTy,
+                                           bool IsPairwise, bool IsUnsigned,
+                                           TTI::TargetCostKind CostKind) {
+  if (!isa<ScalableVectorType>(Ty))
+    return BaseT::getMinMaxReductionCost(Ty, CondTy, IsPairwise, IsUnsigned,
+                                         CostKind);
+  assert((isa<ScalableVectorType>(Ty) && isa<ScalableVectorType>(CondTy)) &&
+         "Both vector needs to be scalable");
+
+  std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, Ty);
+  int LegalizationCost = 0;
+  if (LT.first > 1) {
+    Type *LegalVTy = EVT(LT.second).getTypeForEVT(Ty->getContext());
+    unsigned CmpOpcode =
+        Ty->isFPOrFPVectorTy() ? Instruction::FCmp : Instruction::ICmp;
+    LegalizationCost =
+        getCmpSelInstrCost(CmpOpcode, LegalVTy, LegalVTy,
+                           CmpInst::BAD_ICMP_PREDICATE, CostKind) +
+        getCmpSelInstrCost(Instruction::Select, LegalVTy, LegalVTy,
+                           CmpInst::BAD_ICMP_PREDICATE, CostKind);
+    LegalizationCost *= LT.first - 1;
+  }
+
+  return LegalizationCost + /*Cost of horizontal reduction*/ 2;
+}
+
+int AArch64TTIImpl::getArithmeticReductionCostSVE(
+    unsigned Opcode, VectorType *ValTy, bool IsPairwise,
+    TTI::TargetCostKind CostKind) {
+  assert(!IsPairwise && "Cannot be pair wise to continue");
+
+  std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, ValTy);
+  int LegalizationCost = 0;
+  if (LT.first > 1) {
+    Type *LegalVTy = EVT(LT.second).getTypeForEVT(ValTy->getContext());
+    LegalizationCost = getArithmeticInstrCost(Opcode, LegalVTy, CostKind);
+    LegalizationCost *= LT.first - 1;
+  }
+
+  int ISD = TLI->InstructionOpcodeToISD(Opcode);
+  assert(ISD && "Invalid opcode");
+  // Add the final reduction cost for the legal horizontal reduction
+  switch (ISD) {
+  case ISD::ADD:
+  case ISD::AND:
+  case ISD::OR:
+  case ISD::XOR:
+  case ISD::FADD:
+    return LegalizationCost + 2;
+  default:
+    // TODO: Replace for invalid when InstructionCost is used
+    // cases not supported by SVE
+    return 16;
+  }
+}
+
 int AArch64TTIImpl::getArithmeticReductionCost(unsigned Opcode,
                                                VectorType *ValTy,
                                                bool IsPairwiseForm,
                                                TTI::TargetCostKind CostKind) {
 
+  if (isa<ScalableVectorType>(ValTy))
+    return getArithmeticReductionCostSVE(Opcode, ValTy, IsPairwiseForm,
+                                         CostKind);
   if (IsPairwiseForm)
     return BaseT::getArithmeticReductionCost(Opcode, ValTy, IsPairwiseForm,
                                              CostKind);

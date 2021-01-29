@@ -571,6 +571,8 @@ public:
 
   unsigned getRegisterBitWidth(bool Vector) const { return 32; }
 
+  Optional<unsigned> getMaxVScale() const { return None; }
+
   /// Estimate the overhead of scalarizing an instruction. Insert and Extract
   /// are set if the demanded result elements need to be inserted and/or
   /// extracted from vectors.
@@ -1239,8 +1241,6 @@ public:
       return thisT()->getMemcpyCost(ICA.getInst());
 
     case Intrinsic::masked_scatter: {
-      if (isa<ScalableVectorType>(RetTy))
-        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       assert(VF.isScalar() && "Can't vectorize types here.");
       const Value *Mask = Args[3];
       bool VarMask = !isa<Constant>(Mask);
@@ -1250,8 +1250,6 @@ public:
                                              VarMask, Alignment, CostKind, I);
     }
     case Intrinsic::masked_gather: {
-      if (isa<ScalableVectorType>(RetTy))
-        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       assert(VF.isScalar() && "Can't vectorize types here.");
       const Value *Mask = Args[2];
       bool VarMask = !isa<Constant>(Mask);
@@ -1290,15 +1288,11 @@ public:
     case Intrinsic::vector_reduce_fmin:
     case Intrinsic::vector_reduce_umax:
     case Intrinsic::vector_reduce_umin: {
-      if (isa<ScalableVectorType>(RetTy))
-        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       IntrinsicCostAttributes Attrs(IID, RetTy, Args[0]->getType(), FMF, 1, I);
       return getTypeBasedIntrinsicInstrCost(Attrs, CostKind);
     }
     case Intrinsic::vector_reduce_fadd:
     case Intrinsic::vector_reduce_fmul: {
-      if (isa<ScalableVectorType>(RetTy))
-        return BaseT::getIntrinsicInstrCost(ICA, CostKind);
       IntrinsicCostAttributes Attrs(
           IID, RetTy, {Args[0]->getType(), Args[1]->getType()}, FMF, 1, I);
       return getTypeBasedIntrinsicInstrCost(Attrs, CostKind);
