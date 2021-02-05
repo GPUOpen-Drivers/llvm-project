@@ -4924,6 +4924,23 @@ static AMDNote getAMDNote(uint32_t NoteType, ArrayRef<uint8_t> Desc) {
     return {
         "ISA Version",
         std::string(reinterpret_cast<const char *>(Desc.data()), Desc.size())};
+  case ELF::NT_AMDGPU_LLPC_CACHE_HASH: {
+    std::string Hash;
+    raw_string_ostream StrOS(Hash);
+    StrOS << format_bytes(Desc);
+    return {"LLPC Cache Hash", Hash};
+  }
+  case ELF::NT_AMDGPU_LLPC_VERSION: {
+    assert(Desc.size() == 8);
+    uint64_t MajorVersion =
+        decodeULEB128(Desc.data(), nullptr, Desc.data() + 4);
+    uint64_t MinorVersion =
+        decodeULEB128(Desc.data() + 4, nullptr, Desc.data() + 8);
+    std::string Version;
+    raw_string_ostream StrOS(Version);
+    StrOS << MajorVersion << "." << MinorVersion;
+    return {"LLPC Version", Version};
+  }
   }
 }
 
@@ -5069,6 +5086,9 @@ static const NoteType AMDNoteTypes[] = {
     {ELF::NT_AMD_AMDGPU_ISA, "NT_AMD_AMDGPU_ISA (ISA Version)"},
     {ELF::NT_AMD_AMDGPU_PAL_METADATA,
      "NT_AMD_AMDGPU_PAL_METADATA (PAL Metadata)"},
+    {ELF::NT_AMDGPU_LLPC_CACHE_HASH,
+     "NT_AMDGPU_LLPC_CACHE_HASH (LLPC Cache Hash)"},
+    {ELF::NT_AMDGPU_LLPC_VERSION, "NT_AMDGPU_LLPC_VERSION (LLPC Version)"},
 };
 
 static const NoteType AMDGPUNoteTypes[] = {

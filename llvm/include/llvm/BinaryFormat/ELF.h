@@ -1544,7 +1544,9 @@ enum {
 // AMDGPU specific notes. (Code Object V3)
 enum {
   // Note types with values between 0 and 31 (inclusive) are reserved.
-  NT_AMDGPU_METADATA = 32
+  NT_AMDGPU_METADATA = 32,
+  NT_AMDGPU_LLPC_CACHE_HASH = 33,
+  NT_AMDGPU_LLPC_VERSION = 34,
 };
 
 enum {
