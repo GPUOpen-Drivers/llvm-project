@@ -13,18 +13,16 @@
 #define _TARGET_IMPL_H_
 
 #include <assert.h>
-#include <cuda.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "nvptx_interface.h"
 
-#define DEVICE __device__
-#define INLINE __forceinline__ DEVICE
-#define NOINLINE __noinline__ DEVICE
-#define SHARED __shared__
-#define ALIGN(N) __align__(N)
+#define DEVICE
+#define INLINE inline __attribute__((always_inline))
+#define NOINLINE __attribute__((noinline))
+#define ALIGN(N) __attribute__((aligned(N)))
 
 ////////////////////////////////////////////////////////////////////////////////
 // Kernel options
@@ -93,17 +91,8 @@ DEVICE uint32_t __kmpc_impl_smid();
 DEVICE double __kmpc_impl_get_wtick();
 DEVICE double __kmpc_impl_get_wtime();
 
-INLINE uint32_t __kmpc_impl_ffs(uint32_t x) { return __ffs(x); }
-
-INLINE uint32_t __kmpc_impl_popc(uint32_t x) { return __popc(x); }
-
-template <typename T> INLINE T __kmpc_impl_min(T x, T y) {
-  return min(x, y);
-}
-
-#ifndef CUDA_VERSION
-#error CUDA_VERSION macro is undefined, something wrong with cuda.
-#endif
+INLINE uint32_t __kmpc_impl_ffs(uint32_t x) { return __builtin_ffs(x); }
+INLINE uint32_t __kmpc_impl_popc(uint32_t x) { return __builtin_popcount(x); }
 
 DEVICE __kmpc_impl_lanemask_t __kmpc_impl_activemask();
 
@@ -134,6 +123,19 @@ DEVICE int GetNumberOfBlocksInKernel();
 DEVICE int GetNumberOfThreadsInBlock();
 DEVICE unsigned GetWarpId();
 DEVICE unsigned GetLaneId();
+
+// Atomics
+DEVICE uint32_t __kmpc_atomic_add(uint32_t *, uint32_t);
+DEVICE uint32_t __kmpc_atomic_inc(uint32_t *, uint32_t);
+DEVICE uint32_t __kmpc_atomic_max(uint32_t *, uint32_t);
+DEVICE uint32_t __kmpc_atomic_exchange(uint32_t *, uint32_t);
+DEVICE uint32_t __kmpc_atomic_cas(uint32_t *, uint32_t, uint32_t);
+
+static_assert(sizeof(unsigned long long) == sizeof(uint64_t), "");
+DEVICE unsigned long long __kmpc_atomic_exchange(unsigned long long *,
+                                                 unsigned long long);
+DEVICE unsigned long long __kmpc_atomic_add(unsigned long long *,
+                                            unsigned long long);
 
 // Locks
 DEVICE void __kmpc_impl_init_lock(omp_lock_t *lock);

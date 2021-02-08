@@ -3978,6 +3978,7 @@ void ASTWriter::WriteOpenCLExtensions(Sema &SemaRef) {
     Record.push_back(V.Enabled ? 1 : 0);
     Record.push_back(V.Avail);
     Record.push_back(V.Core);
+    Record.push_back(V.Opt);
   }
   Stream.EmitRecord(OPENCL_EXTENSIONS, Record);
 }
@@ -5218,7 +5219,6 @@ void ASTRecordWriter::AddTemplateArgumentLocInfo(
   case TemplateArgument::Integral:
   case TemplateArgument::Declaration:
   case TemplateArgument::NullPtr:
-  case TemplateArgument::UncommonValue:
   case TemplateArgument::Pack:
     // FIXME: Is this right?
     break;
