@@ -553,7 +553,10 @@ bool LTOCodeGenerator::optimize() {
   // via the internal option. Must be done before WPD invoked via the optimizer
   // pipeline run below.
   updateVCallVisibilityInModule(*MergedModule,
-                                /* WholeProgramVisibilityEnabledInLTO */ false);
+                                /* WholeProgramVisibilityEnabledInLTO */ false,
+                                // FIXME: This needs linker information via a
+                                // TBD new interface.
+                                /* DynamicExportSymbols */ {});
 
   // We always run the verifier once on the merged module, the `DisableVerify`
   // parameter only applies to subsequent verify.
@@ -613,14 +616,9 @@ bool LTOCodeGenerator::compileOptimized(ArrayRef<raw_pwrite_stream *> Out) {
   // for splitting
   restoreLinkageForExternals();
 
-  // Do code generation. We need to preserve the module in case the client calls
-  // writeMergedModules() after compilation, but we only need to allow this at
-  // parallelism level 1. This is achieved by having splitCodeGen return the
-  // original module at parallelism level 1 which we then assign back to
-  // MergedModule.
-  MergedModule = splitCodeGen(std::move(MergedModule), Out, {},
-                              [&]() { return createTargetMachine(); }, FileType,
-                              ShouldRestoreGlobalsLinkage);
+  splitCodeGen(
+      *MergedModule, Out, {}, [&]() { return createTargetMachine(); }, FileType,
+      ShouldRestoreGlobalsLinkage);
 
   // If statistics were requested, save them to the specified file or
   // print them out after codegen.

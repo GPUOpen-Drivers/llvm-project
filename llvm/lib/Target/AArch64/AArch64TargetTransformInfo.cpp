@@ -235,6 +235,22 @@ AArch64TTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
       return LT.first;
     break;
   }
+  case Intrinsic::sadd_sat:
+  case Intrinsic::ssub_sat:
+  case Intrinsic::uadd_sat:
+  case Intrinsic::usub_sat: {
+    static const auto ValidSatTys = {MVT::v8i8,  MVT::v16i8, MVT::v4i16,
+                                     MVT::v8i16, MVT::v2i32, MVT::v4i32,
+                                     MVT::v2i64};
+    auto LT = TLI->getTypeLegalizationCost(DL, RetTy);
+    // This is a base cost of 1 for the vadd, plus 3 extract shifts if we
+    // need to extend the type, as it uses shr(qadd(shl, shl)).
+    unsigned Instrs =
+        LT.second.getScalarSizeInBits() == RetTy->getScalarSizeInBits() ? 1 : 4;
+    if (any_of(ValidSatTys, [&LT](MVT M) { return M == LT.second; }))
+      return LT.first * Instrs;
+    break;
+  }
   default:
     break;
   }
@@ -1233,6 +1249,15 @@ int AArch64TTIImpl::getShuffleCost(TTI::ShuffleKind Kind, VectorType *Tp,
       { TTI::SK_PermuteSingleSrc, MVT::v2f32, 1 }, // mov.
       { TTI::SK_PermuteSingleSrc, MVT::v4f32, 3 }, // perfectshuffle worst case.
       { TTI::SK_PermuteSingleSrc, MVT::v2f64, 1 }, // mov.
+      // Broadcast shuffle kinds for scalable vectors
+      { TTI::SK_Broadcast, MVT::nxv16i8,  1 },
+      { TTI::SK_Broadcast, MVT::nxv8i16,  1 },
+      { TTI::SK_Broadcast, MVT::nxv4i32,  1 },
+      { TTI::SK_Broadcast, MVT::nxv2i64,  1 },
+      { TTI::SK_Broadcast, MVT::nxv8f16,  1 },
+      { TTI::SK_Broadcast, MVT::nxv8bf16, 1 },
+      { TTI::SK_Broadcast, MVT::nxv4f32,  1 },
+      { TTI::SK_Broadcast, MVT::nxv2f64,  1 },
     };
     std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, Tp);
     if (const auto *Entry = CostTableLookup(ShuffleTbl, Kind, LT.second))

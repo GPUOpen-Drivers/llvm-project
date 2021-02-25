@@ -1370,7 +1370,7 @@ int ARMTTIImpl::getInterleavedMemoryOpCost(
     // matched to more than one vldN/vstN instruction.
     int BaseCost = ST->hasMVEIntegerOps() ? ST->getMVEVectorCostFactor() : 1;
     if (NumElts % Factor == 0 &&
-        TLI->isLegalInterleavedAccessType(Factor, SubVecTy, DL))
+        TLI->isLegalInterleavedAccessType(Factor, SubVecTy, Alignment, DL))
       return Factor * BaseCost * TLI->getNumInterleavedAccesses(SubVecTy, DL);
 
     // Some smaller than legal interleaved patterns are cheap as we can make
@@ -1550,21 +1550,16 @@ int ARMTTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
   case Intrinsic::usub_sat: {
     if (!ST->hasMVEIntegerOps())
       break;
-    // Get the Return type, either directly of from ICA.ReturnType and ICA.VF.
     Type *VT = ICA.getReturnType();
-    if (!VT->isVectorTy() && !ICA.getVectorFactor().isScalar())
-      VT = VectorType::get(VT, ICA.getVectorFactor());
 
     std::pair<int, MVT> LT =
         TLI->getTypeLegalizationCost(DL, VT);
     if (LT.second == MVT::v4i32 || LT.second == MVT::v8i16 ||
         LT.second == MVT::v16i8) {
-      // This is a base cost of 1 for the vadd, plus 3 extract shifts if we
+      // This is a base cost of 1 for the vqadd, plus 3 extract shifts if we
       // need to extend the type, as it uses shr(qadd(shl, shl)).
-      unsigned Instrs = LT.second.getScalarSizeInBits() ==
-                                ICA.getReturnType()->getScalarSizeInBits()
-                            ? 1
-                            : 4;
+      unsigned Instrs =
+          LT.second.getScalarSizeInBits() == VT->getScalarSizeInBits() ? 1 : 4;
       return LT.first * ST->getMVEVectorCostFactor() * Instrs;
     }
     break;

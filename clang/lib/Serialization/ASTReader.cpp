@@ -2750,9 +2750,15 @@ ASTReader::ReadControlBlock(ModuleFile &F,
       }
 
       bool hasErrors = Record[6];
-      if (hasErrors && !DisableValidation && !AllowASTWithCompilerErrors) {
-        Diag(diag::err_pch_with_compiler_errors);
-        return HadErrors;
+      if (hasErrors && !DisableValidation) {
+        // Always rebuild modules from the cache on an error
+        if (F.Kind == MK_ImplicitModule)
+          return OutOfDate;
+
+        if (!AllowASTWithCompilerErrors) {
+          Diag(diag::err_pch_with_compiler_errors);
+          return HadErrors;
+        }
       }
       if (hasErrors) {
         Diags.ErrorOccurred = true;
@@ -8737,25 +8743,18 @@ ASTReader::getGlobalSelectorID(ModuleFile &M, unsigned LocalID) const {
 
 DeclarationNameLoc
 ASTRecordReader::readDeclarationNameLoc(DeclarationName Name) {
-  DeclarationNameLoc DNLoc;
   switch (Name.getNameKind()) {
   case DeclarationName::CXXConstructorName:
   case DeclarationName::CXXDestructorName:
   case DeclarationName::CXXConversionFunctionName:
-    DNLoc.NamedType.TInfo = readTypeSourceInfo();
-    break;
+    return DeclarationNameLoc::makeNamedTypeLoc(readTypeSourceInfo());
 
   case DeclarationName::CXXOperatorName:
-    DNLoc.CXXOperatorName.BeginOpNameLoc
-      = readSourceLocation().getRawEncoding();
-    DNLoc.CXXOperatorName.EndOpNameLoc
-      = readSourceLocation().getRawEncoding();
-    break;
+    return DeclarationNameLoc::makeCXXOperatorNameLoc(readSourceRange());
 
   case DeclarationName::CXXLiteralOperatorName:
-    DNLoc.CXXLiteralOperatorName.OpNameLoc
-      = readSourceLocation().getRawEncoding();
-    break;
+    return DeclarationNameLoc::makeCXXLiteralOperatorNameLoc(
+        readSourceLocation());
 
   case DeclarationName::Identifier:
   case DeclarationName::ObjCZeroArgSelector:
@@ -8765,7 +8764,7 @@ ASTRecordReader::readDeclarationNameLoc(DeclarationName Name) {
   case DeclarationName::CXXDeductionGuideName:
     break;
   }
-  return DNLoc;
+  return DeclarationNameLoc();
 }
 
 DeclarationNameInfo ASTRecordReader::readDeclarationNameInfo() {

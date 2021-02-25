@@ -178,7 +178,6 @@ public:
   /// Run the passes within this manager on the provided operation. The
   /// specified operation must have the same name as the one provided the pass
   /// manager on construction.
-  LLVM_NODISCARD
   LogicalResult run(Operation *op);
 
   /// Return an instance of the context.
@@ -374,6 +373,9 @@ private:
 
   /// An optional factory to use when generating a crash reproducer if valid.
   ReproducerStreamFactory crashReproducerStreamFactory;
+
+  /// A hash key used to detect when reinitialization is necessary.
+  llvm::hash_code initializationKey;
 
   /// Flag that specifies if pass timing is enabled.
   bool passTiming : 1;

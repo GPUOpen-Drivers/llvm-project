@@ -555,6 +555,7 @@ void ScalarBitSetTraits<ELFYAML::ELF_SHF>::bitset(IO &IO,
   BCase(SHF_GROUP);
   BCase(SHF_TLS);
   BCase(SHF_COMPRESSED);
+  BCase(SHF_GNU_RETAIN);
   switch (Object->getMachine()) {
   case ELF::EM_ARM:
     BCase(SHF_ARM_PURECODE);
@@ -1474,9 +1475,6 @@ std::string MappingTraits<std::unique_ptr<ELFYAML::Chunk>>::validate(
   if (const auto *SHT = dyn_cast<ELFYAML::SectionHeaderTable>(C.get())) {
     if (SHT->NoHeaders && (SHT->Sections || SHT->Excluded || SHT->Offset))
       return "NoHeaders can't be used together with Offset/Sections/Excluded";
-    if (!SHT->NoHeaders && !SHT->Sections && !SHT->Excluded)
-      return "SectionHeaderTable can't be empty. Use 'NoHeaders' key to drop "
-             "the section header table";
     return "";
   }
 

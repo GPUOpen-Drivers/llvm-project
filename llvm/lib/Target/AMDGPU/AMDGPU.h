@@ -17,7 +17,6 @@
 
 namespace llvm {
 
-class AMDGPUTargetMachine;
 class FunctionPass;
 class GCNTargetMachine;
 class ImmutablePass;

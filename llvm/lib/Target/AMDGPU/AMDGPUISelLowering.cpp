@@ -2907,9 +2907,8 @@ SDValue AMDGPUTargetLowering::performLoadCombine(SDNode *N,
     // Expand unaligned loads earlier than legalization. Due to visitation order
     // problems during legalization, the emitted instructions to pack and unpack
     // the bytes again are not eliminated in the case of an unaligned copy.
-    if (!allowsMisalignedMemoryAccesses(VT, AS, Alignment.value(),
-                                        LN->getMemOperand()->getFlags(),
-                                        &IsFast)) {
+    if (!allowsMisalignedMemoryAccesses(
+            VT, AS, Alignment, LN->getMemOperand()->getFlags(), &IsFast)) {
       SDValue Ops[2];
 
       if (VT.isVector())
@@ -2963,9 +2962,8 @@ SDValue AMDGPUTargetLowering::performStoreCombine(SDNode *N,
     // order problems during legalization, the emitted instructions to pack and
     // unpack the bytes again are not eliminated in the case of an unaligned
     // copy.
-    if (!allowsMisalignedMemoryAccesses(VT, AS, Alignment.value(),
-                                        SN->getMemOperand()->getFlags(),
-                                        &IsFast)) {
+    if (!allowsMisalignedMemoryAccesses(
+            VT, AS, Alignment, SN->getMemOperand()->getFlags(), &IsFast)) {
       if (VT.isVector())
         return scalarizeVectorStore(SN, DAG);
 

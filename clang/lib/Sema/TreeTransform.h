@@ -12241,7 +12241,8 @@ TreeTransform<Derived>::TransformCXXConstructExpr(CXXConstructExpr *E) {
         (E->getNumArgs() > 1 && getDerived().DropCallArgument(E->getArg(1)))) &&
        (!getDerived().DropCallArgument(E->getArg(0))) &&
        !E->isListInitialization()))
-    return getDerived().TransformExpr(E->getArg(0));
+    return getDerived().TransformInitializer(E->getArg(0),
+                                             /*DirectInit*/ false);
 
   TemporaryBase Rebase(*this, /*FIXME*/ E->getBeginLoc(), DeclarationName());
 
@@ -14334,11 +14335,9 @@ TreeTransform<Derived>::RebuildCXXOperatorCallExpr(OverloadedOperatorKind Op,
     SourceLocation RBrace;
 
     if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(Callee)) {
-        DeclarationNameLoc NameLoc = DRE->getNameInfo().getInfo();
-        LBrace = SourceLocation::getFromRawEncoding(
-                    NameLoc.CXXOperatorName.BeginOpNameLoc);
-        RBrace = SourceLocation::getFromRawEncoding(
-                    NameLoc.CXXOperatorName.EndOpNameLoc);
+      DeclarationNameLoc NameLoc = DRE->getNameInfo().getInfo();
+      LBrace = NameLoc.getCXXOperatorNameBeginLoc();
+      RBrace = NameLoc.getCXXOperatorNameEndLoc();
     } else {
       LBrace = Callee->getBeginLoc();
       RBrace = OpLoc;
