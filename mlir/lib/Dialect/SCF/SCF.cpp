@@ -708,7 +708,9 @@ void IfOp::getSuccessorRegions(Optional<unsigned> index,
   } else {
     // If the condition isn't constant, both regions may be executed.
     regions.push_back(RegionSuccessor(&thenRegion()));
-    regions.push_back(RegionSuccessor(elseRegion));
+    // If the else region does not exist, it is not a viable successor.
+    if (elseRegion)
+      regions.push_back(RegionSuccessor(elseRegion));
     return;
   }
 
@@ -1330,29 +1332,6 @@ static LogicalResult verify(scf::WhileOp op) {
       op, op.after(),
       "expects the 'after' region to terminate with 'scf.yield'");
   return success(afterTerminator != nullptr);
-}
-
-//===----------------------------------------------------------------------===//
-// YieldOp
-//===----------------------------------------------------------------------===//
-
-static ParseResult parseYieldOp(OpAsmParser &parser, OperationState &result) {
-  SmallVector<OpAsmParser::OperandType, 4> operands;
-  SmallVector<Type, 4> types;
-  llvm::SMLoc loc = parser.getCurrentLocation();
-  // Parse variadic operands list, their types, and resolve operands to SSA
-  // values.
-  if (parser.parseOperandList(operands) ||
-      parser.parseOptionalColonTypeList(types) ||
-      parser.resolveOperands(operands, types, loc, result.operands))
-    return failure();
-  return success();
-}
-
-static void print(OpAsmPrinter &p, scf::YieldOp op) {
-  p << op.getOperationName();
-  if (op.getNumOperands() != 0)
-    p << ' ' << op.getOperands() << " : " << op.getOperandTypes();
 }
 
 //===----------------------------------------------------------------------===//

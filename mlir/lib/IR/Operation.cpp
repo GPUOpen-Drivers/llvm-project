@@ -57,10 +57,6 @@ Identifier OperationName::getIdentifier() const {
   return representation.get<Identifier>();
 }
 
-const AbstractOperation *OperationName::getAbstractOperation() const {
-  return representation.dyn_cast<const AbstractOperation *>();
-}
-
 OperationName OperationName::getFromOpaquePointer(const void *pointer) {
   return OperationName(
       RepresentationUnion::getFromOpaqueValue(const_cast<void *>(pointer)));
@@ -76,7 +72,7 @@ Operation *Operation::create(Location location, OperationName name,
                              ArrayRef<NamedAttribute> attributes,
                              BlockRange successors, unsigned numRegions) {
   return create(location, name, resultTypes, operands,
-                DictionaryAttr::get(attributes, location.getContext()),
+                DictionaryAttr::get(location.getContext(), attributes),
                 successors, numRegions);
 }
 
@@ -139,7 +135,7 @@ Operation *Operation::create(Location location, OperationName name,
       ::new (rawMem) Operation(location, name, resultTypes, numSuccessors,
                                numRegions, attributes, needsOperandStorage);
 
-  assert((numSuccessors == 0 || !op->isKnownNonTerminator()) &&
+  assert((numSuccessors == 0 || op->mightHaveTrait<OpTrait::IsTerminator>()) &&
          "unexpected successors in a non-terminator operation");
 
   // Initialize the results.
@@ -1286,7 +1282,7 @@ void impl::ensureRegionTerminator(
     builder.createBlock(&region);
 
   Block &block = region.back();
-  if (!block.empty() && block.back().isKnownTerminator())
+  if (!block.empty() && block.back().hasTrait<OpTrait::IsTerminator>())
     return;
 
   builder.setInsertionPointToEnd(&block);

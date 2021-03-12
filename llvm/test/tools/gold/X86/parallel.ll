@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llvm-as -o %t.bc %s
 ; RUN: rm -f %t.0.5.precodegen.bc %t.1.5.precodegen.bc %t.lto.o %t.lto.o1
 ; RUN: env LD_PRELOAD=%llvmshlibdir/LLVMgold%shlibext %gold -plugin %llvmshlibdir/LLVMgold%shlibext -u foo -u bar -plugin-opt lto-partitions=2 -plugin-opt save-temps -m elf_x86_64 -o %t %t.bc

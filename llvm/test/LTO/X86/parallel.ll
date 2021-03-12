@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llvm-as -o %t.bc %s
 ; RUN: llvm-lto -exported-symbol=foo -exported-symbol=bar -j2 -o %t.o %t.bc
 ; RUN: llvm-nm %t.o.0 | FileCheck --check-prefix=CHECK0 %s

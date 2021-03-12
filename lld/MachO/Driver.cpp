@@ -126,15 +126,19 @@ static Optional<std::string> findFramework(StringRef name) {
 }
 
 static TargetInfo *createTargetInfo(opt::InputArgList &args) {
-  StringRef arch = args.getLastArgValue(OPT_arch, "x86_64");
-  config->arch = MachO::getArchitectureFromName(
-      args.getLastArgValue(OPT_arch, arch));
-  switch (config->arch) {
-  case MachO::AK_x86_64:
-  case MachO::AK_x86_64h:
+  // TODO: should unspecified arch be an error rather than defaulting?
+  // Jez: ld64 seems to make unspecified arch an error when LTO is
+  // being used. I'm not sure why though. Feels like we should be able
+  // to infer the arch from our input files regardless
+  StringRef archName = args.getLastArgValue(OPT_arch, "x86_64");
+  config->arch = MachO::getArchitectureFromName(archName);
+  switch (MachO::getCPUTypeFromArchitecture(config->arch).first) {
+  case MachO::CPU_TYPE_X86_64:
     return createX86_64TargetInfo();
+  case MachO::CPU_TYPE_ARM64:
+    return createARM64TargetInfo();
   default:
-    fatal("missing or unsupported -arch " + arch);
+    fatal("missing or unsupported -arch " + archName);
   }
 }
 
@@ -257,7 +261,8 @@ static std::vector<ArchiveMember> getArchiveMembers(MemoryBufferRef mb) {
   return v;
 }
 
-static InputFile *addFile(StringRef path, bool forceLoadArchive) {
+static InputFile *addFile(StringRef path, bool forceLoadArchive,
+                          bool isBundleLoader = false) {
   Optional<MemoryBufferRef> buffer = readFile(path);
   if (!buffer)
     return nullptr;
@@ -320,6 +325,16 @@ static InputFile *addFile(StringRef path, bool forceLoadArchive) {
     break;
   case file_magic::bitcode:
     newFile = make<BitcodeFile>(mbref);
+    break;
+  case file_magic::macho_executable:
+  case file_magic::macho_bundle:
+    // We only allow executable and bundle type here if it is used
+    // as a bundle loader.
+    if (!isBundleLoader)
+      error(path + ": unhandled file type");
+    if (Optional<DylibFile *> dylibFile =
+            loadDylib(mbref, nullptr, isBundleLoader))
+      newFile = *dylibFile;
     break;
   default:
     error(path + ": unhandled file type");
@@ -436,7 +451,8 @@ static void parseOrderFile(StringRef path) {
     if (cpuType != CPU_TYPE_ANY)
       line = line.drop_until([](char c) { return c == ':'; }).drop_front();
     // TODO: Update when we extend support for other CPUs
-    if (cpuType != CPU_TYPE_ANY && cpuType != CPU_TYPE_X86_64)
+    if (cpuType != CPU_TYPE_ANY && cpuType != CPU_TYPE_X86_64 &&
+        cpuType != CPU_TYPE_ARM64)
       continue;
 
     constexpr std::array<StringRef, 2> fileEnds = {".o:", ".o):"};
@@ -577,18 +593,27 @@ static void handlePlatformVersion(const opt::Arg *arg) {
 
 static void handleUndefined(const opt::Arg *arg) {
   StringRef treatmentStr = arg->getValue(0);
-  config->undefinedSymbolTreatment =
+  auto treatment =
       StringSwitch<UndefinedSymbolTreatment>(treatmentStr)
           .Case("error", UndefinedSymbolTreatment::error)
           .Case("warning", UndefinedSymbolTreatment::warning)
           .Case("suppress", UndefinedSymbolTreatment::suppress)
           .Case("dynamic_lookup", UndefinedSymbolTreatment::dynamic_lookup)
           .Default(UndefinedSymbolTreatment::unknown);
-  if (config->undefinedSymbolTreatment == UndefinedSymbolTreatment::unknown) {
+  if (treatment == UndefinedSymbolTreatment::unknown) {
     warn(Twine("unknown -undefined TREATMENT '") + treatmentStr +
          "', defaulting to 'error'");
-    config->undefinedSymbolTreatment = UndefinedSymbolTreatment::error;
+    treatment = UndefinedSymbolTreatment::error;
+  } else if (config->namespaceKind == NamespaceKind::twolevel &&
+             (treatment == UndefinedSymbolTreatment::warning ||
+              treatment == UndefinedSymbolTreatment::suppress)) {
+    if (treatment == UndefinedSymbolTreatment::warning)
+      error("'-undefined warning' only valid with '-flat_namespace'");
+    else
+      error("'-undefined suppress' only valid with '-flat_namespace'");
+    treatment = UndefinedSymbolTreatment::error;
   }
+  config->undefinedSymbolTreatment = treatment;
 }
 
 static void warnIfDeprecatedOption(const opt::Option &opt) {
@@ -634,9 +659,11 @@ static const char *getReproduceOption(opt::InputArgList &args) {
 static bool isPie(opt::InputArgList &args) {
   if (config->outputType != MH_EXECUTE || args.hasArg(OPT_no_pie))
     return false;
+  if (config->arch == AK_arm64 || config->arch == AK_arm64e)
+    return true;
 
   // TODO: add logic here as we support more archs. E.g. i386 should default
-  // to PIE from 10.7, arm64 should always be PIE, etc
+  // to PIE from 10.7
   assert(config->arch == AK_x86_64 || config->arch == AK_x86_64h);
 
   PlatformKind kind = config->platform.kind;
@@ -727,6 +754,10 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
   config->entry = symtab->addUndefined(args.getLastArgValue(OPT_e, "_main"),
                                        /*file=*/nullptr,
                                        /*isWeakRef=*/false);
+  for (auto *arg : args.filtered(OPT_u)) {
+    config->explicitUndefineds.push_back(symtab->addUndefined(
+        arg->getValue(), /*file=*/nullptr, /*isWeakRef=*/false));
+  }
   config->outputFile = args.getLastArgValue(OPT_o, "a.out");
   config->installName =
       args.getLastArgValue(OPT_install_name, config->outputFile);
@@ -736,6 +767,11 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
   config->printEachFile = args.hasArg(OPT_t);
   config->printWhyLoad = args.hasArg(OPT_why_load);
   config->outputType = getOutputType(args);
+  if (const opt::Arg *arg = args.getLastArg(OPT_bundle_loader)) {
+    if (config->outputType != MH_BUNDLE)
+      error("-bundle_loader can only be used with MachO bundle output");
+    addFile(arg->getValue(), false, true);
+  }
   config->ltoObjPath = args.getLastArgValue(OPT_object_path_lto);
   config->ltoNewPassManager =
       args.hasFlag(OPT_no_lto_legacy_pass_manager, OPT_lto_legacy_pass_manager,
@@ -748,6 +784,18 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
 
   if (const opt::Arg *arg = args.getLastArg(OPT_static, OPT_dynamic))
     config->staticLink = (arg->getOption().getID() == OPT_static);
+
+  if (const opt::Arg *arg =
+          args.getLastArg(OPT_flat_namespace, OPT_twolevel_namespace)) {
+    config->namespaceKind = arg->getOption().getID() == OPT_twolevel_namespace
+                                ? NamespaceKind::twolevel
+                                : NamespaceKind::flat;
+    if (config->namespaceKind == NamespaceKind::flat) {
+      warn("Option '" + arg->getOption().getPrefixedName() +
+           "' is not yet implemented. Stay tuned...");
+      config->namespaceKind = NamespaceKind::twolevel;
+    }
+  }
 
   config->systemLibraryRoots = getSystemLibraryRoots(args);
   config->librarySearchPaths =
@@ -785,6 +833,7 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
     const auto &opt = arg->getOption();
     warnIfDeprecatedOption(opt);
     warnIfUnimplementedOption(opt);
+
     // TODO: are any of these better handled via filtered() or getLastArg()?
     switch (opt.getID()) {
     case OPT_INPUT:
@@ -856,6 +905,15 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
   if (config->outputType == MH_EXECUTE && isa<Undefined>(config->entry)) {
     error("undefined symbol: " + toString(*config->entry));
     return false;
+  }
+  // FIXME: This prints symbols that are undefined both in input files and
+  // via -u flag twice.
+  for (const auto *undefined : config->explicitUndefineds) {
+    if (isa<Undefined>(undefined)) {
+      error("undefined symbol: " + toString(*undefined) +
+            "\n>>> referenced by flag -u " + toString(*undefined));
+      return false;
+    }
   }
 
   createSyntheticSections();

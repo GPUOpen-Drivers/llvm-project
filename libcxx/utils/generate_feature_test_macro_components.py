@@ -204,7 +204,6 @@ feature_test_macros = [ add_version_header(x) for x in [
     "name": "__cpp_lib_constexpr_memory",
     "values": { "c++20": 201811 },
     "headers": ["memory"],
-    "unimplemented": True,
   }, {
     "name": "__cpp_lib_constexpr_numeric",
     "values": { "c++20": 201911 },
@@ -821,7 +820,11 @@ def produce_version_header():
 #pragma GCC system_header
 #endif
 
+// clang-format off
+
 {cxx_macros}
+
+// clang-format on
 
 #endif // _LIBCPP_VERSIONH
 """

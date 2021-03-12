@@ -1098,6 +1098,20 @@ template <template <class> class TT> int foo() {
   EXPECT_THAT(Completions, Contains(Named("TT")));
 }
 
+TEST(CompletionTest, NestedTemplateHeuristics) {
+  auto Completions = completions(R"cpp(
+struct Plain { int xxx; };
+template <typename T> class Templ { Plain ppp; };
+template <typename T> void foo(Templ<T> &t) {
+  // Formally ppp has DependentTy, because Templ may be specialized.
+  // However we sholud be able to see into it using the primary template.
+  t.ppp.^
+}
+)cpp")
+                         .Completions;
+  EXPECT_THAT(Completions, Contains(Named("xxx")));
+}
+
 TEST(CompletionTest, RecordCCResultCallback) {
   std::vector<CodeCompletion> RecordedCompletions;
   CodeCompleteOptions Opts;
@@ -3100,10 +3114,13 @@ TEST(CompletionTest, FunctionArgsExist) {
       Contains(AllOf(Labeled("Container<typename T>(int Size)"),
                      SnippetSuffix("<${1:typename T}>(${2:int Size})"),
                      Kind(CompletionItemKind::Constructor))));
-  // FIXME(kirillbobyrev): It would be nice to still produce the template
-  // snippet part: in this case it should be "<${1:typename T}>".
   EXPECT_THAT(
       completions(Context + "Container c = Cont^()", {}, Opts).Completions,
+      Contains(AllOf(Labeled("Container<typename T>(int Size)"),
+                     SnippetSuffix("<${1:typename T}>"),
+                     Kind(CompletionItemKind::Constructor))));
+  EXPECT_THAT(
+      completions(Context + "Container c = Cont^<int>()", {}, Opts).Completions,
       Contains(AllOf(Labeled("Container<typename T>(int Size)"),
                      SnippetSuffix(""),
                      Kind(CompletionItemKind::Constructor))));

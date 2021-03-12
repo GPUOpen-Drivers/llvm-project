@@ -523,7 +523,7 @@ class Foo {})cpp";
         )cpp",
        [](HoverInfo &HI) {
          HI.Name = "result";
-         HI.Definition = "static constexpr int result = 1 + 2";
+         HI.Definition = "static constexpr int result = a + b";
          HI.Kind = index::SymbolKind::StaticProperty;
          HI.Type = "const int";
          HI.NamespaceScope = "";
@@ -1449,7 +1449,7 @@ TEST(Hover, All) {
             HI.NamespaceScope = "";
             // FIXME: This should be `(anon enum)::`
             HI.LocalScope = "";
-            HI.Type = "enum (anonymous)";
+            HI.Type = "enum (unnamed)";
             HI.Definition = "ONE";
             HI.Value = "0";
           }},
@@ -2167,7 +2167,8 @@ TEST(Hover, All) {
             HI.Name = "data";
             HI.Type = "char";
             HI.Kind = index::SymbolKind::Field;
-            HI.NamespaceScope = "ObjC::"; // FIXME: fix it
+            HI.LocalScope = "ObjC::";
+            HI.NamespaceScope = "";
             HI.Definition = "char data";
           }},
       {
@@ -2260,6 +2261,86 @@ TEST(Hover, All) {
             HI.Name = "this";
             HI.Definition = "const Foo<int, F> *";
           }},
+      {
+          R"cpp(
+          @interface MYObject
+          @end
+          @interface MYObject (Private)
+          @property(nonatomic, assign) int privateField;
+          @end
+
+          int someFunction() {
+            MYObject *obj = [MYObject sharedInstance];
+            return obj.[[private^Field]];
+          }
+          )cpp",
+          [](HoverInfo &HI) {
+            HI.Name = "privateField";
+            HI.Kind = index::SymbolKind::InstanceProperty;
+            HI.LocalScope = "MYObject(Private)::";
+            HI.NamespaceScope = "";
+            HI.Definition = "@property(nonatomic, assign, unsafe_unretained, "
+                            "readwrite) int privateField;";
+          }},
+      {
+          R"cpp(
+          @protocol MYProtocol
+          @property(nonatomic, assign) int prop1;
+          @end
+
+          int someFunction() {
+            id<MYProtocol> obj = 0;
+            return obj.[[pro^p1]];
+          }
+          )cpp",
+          [](HoverInfo &HI) {
+            HI.Name = "prop1";
+            HI.Kind = index::SymbolKind::InstanceProperty;
+            HI.LocalScope = "MYProtocol::";
+            HI.NamespaceScope = "";
+            HI.Definition = "@property(nonatomic, assign, unsafe_unretained, "
+                            "readwrite) int prop1;";
+          }},
+      {R"objc(
+        @interface Foo
+        @end
+
+        @implementation Foo(Private)
+        + (int)somePrivateMethod {
+          int [[res^ult]] = 2;
+          return result;
+        }
+        @end
+        )objc",
+       [](HoverInfo &HI) {
+         HI.Name = "result";
+         HI.Definition = "int result = 2";
+         HI.Kind = index::SymbolKind::Variable;
+         HI.Type = "int";
+         HI.LocalScope = "+[Foo(Private) somePrivateMethod]::";
+         HI.NamespaceScope = "";
+         HI.Value = "2";
+       }},
+      {R"objc(
+        @interface Foo
+        @end
+
+        @implementation Foo
+        - (int)variadicArgMethod:(id)first, ... {
+          int [[res^ult]] = 0;
+          return result;
+        }
+        @end
+        )objc",
+       [](HoverInfo &HI) {
+         HI.Name = "result";
+         HI.Definition = "int result = 0";
+         HI.Kind = index::SymbolKind::Variable;
+         HI.Type = "int";
+         HI.LocalScope = "-[Foo variadicArgMethod:, ...]::";
+         HI.NamespaceScope = "";
+         HI.Value = "0";
+       }},
   };
 
   // Create a tiny index, so tests above can verify documentation is fetched.

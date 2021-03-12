@@ -77,6 +77,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Host.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Process.h"
@@ -1444,7 +1445,9 @@ void Driver::generateCompilationDiagnostics(
   llvm::SmallString<128> Script(CrashInfo.Filename);
   llvm::sys::path::replace_extension(Script, "sh");
   std::error_code EC;
-  llvm::raw_fd_ostream ScriptOS(Script, EC, llvm::sys::fs::CD_CreateNew);
+  llvm::raw_fd_ostream ScriptOS(Script, EC, llvm::sys::fs::CD_CreateNew,
+                                llvm::sys::fs::FA_Write,
+                                llvm::sys::fs::OF_Text);
   if (EC) {
     Diag(clang::diag::note_drv_command_failed_diag_msg)
         << "Error generating run script: " << Script << " " << EC.message();
@@ -1481,8 +1484,7 @@ void Driver::generateCompilationDiagnostics(
     }
   }
 
-  for (const auto &A : C.getArgs().filtered(options::OPT_frewrite_map_file,
-                                            options::OPT_frewrite_map_file_EQ))
+  for (const auto &A : C.getArgs().filtered(options::OPT_frewrite_map_file_EQ))
     Diag(clang::diag::note_drv_command_failed_diag_msg) << A->getValue();
 
   Diag(clang::diag::note_drv_command_failed_diag_msg)
@@ -2189,15 +2191,20 @@ void Driver::BuildInputs(const ToolChain &TC, DerivedArgList &Args,
 
         // stdin must be handled specially.
         if (memcmp(Value, "-", 2) == 0) {
-          // If running with -E, treat as a C input (this changes the builtin
-          // macros, for example). This may be overridden by -ObjC below.
-          //
-          // Otherwise emit an error but still use a valid type to avoid
-          // spurious errors (e.g., no inputs).
-          if (!Args.hasArgNoClaim(options::OPT_E) && !CCCIsCPP())
-            Diag(IsCLMode() ? clang::diag::err_drv_unknown_stdin_type_clang_cl
-                            : clang::diag::err_drv_unknown_stdin_type);
-          Ty = types::TY_C;
+          if (IsFlangMode()) {
+            Ty = types::TY_Fortran;
+          } else {
+            // If running with -E, treat as a C input (this changes the
+            // builtin macros, for example). This may be overridden by -ObjC
+            // below.
+            //
+            // Otherwise emit an error but still use a valid type to avoid
+            // spurious errors (e.g., no inputs).
+            if (!Args.hasArgNoClaim(options::OPT_E) && !CCCIsCPP())
+              Diag(IsCLMode() ? clang::diag::err_drv_unknown_stdin_type_clang_cl
+                              : clang::diag::err_drv_unknown_stdin_type);
+            Ty = types::TY_C;
+          }
         } else {
           // Otherwise lookup by extension.
           // Fallback is C if invoked as C preprocessor, C++ if invoked with
@@ -2453,6 +2460,14 @@ class OffloadingActionBuilder final {
     /// Default GPU architecture if there's no one specified.
     CudaArch DefaultCudaArch = CudaArch::UNKNOWN;
 
+    /// Method to generate compilation unit ID specified by option
+    /// '-fuse-cuid='.
+    enum UseCUIDKind { CUID_Hash, CUID_Random, CUID_None, CUID_Invalid };
+    UseCUIDKind UseCUID = CUID_Hash;
+
+    /// Compilation unit ID specified by option '-cuid='.
+    StringRef FixedCUID;
+
   public:
     CudaActionBuilderBase(Compilation &C, DerivedArgList &Args,
                           const Driver::InputList &Inputs,
@@ -2489,9 +2504,32 @@ class OffloadingActionBuilder final {
         // Replicate inputs for each GPU architecture.
         auto Ty = IA->getType() == types::TY_HIP ? types::TY_HIP_DEVICE
                                                  : types::TY_CUDA_DEVICE;
+        std::string CUID = FixedCUID.str();
+        if (CUID.empty()) {
+          if (UseCUID == CUID_Random)
+            CUID = llvm::utohexstr(llvm::sys::Process::GetRandomNumber(),
+                                   /*LowerCase=*/true);
+          else if (UseCUID == CUID_Hash) {
+            llvm::MD5 Hasher;
+            llvm::MD5::MD5Result Hash;
+            SmallString<256> RealPath;
+            llvm::sys::fs::real_path(IA->getInputArg().getValue(), RealPath,
+                                     /*expand_tilde=*/true);
+            Hasher.update(RealPath);
+            for (auto *A : Args) {
+              if (A->getOption().matches(options::OPT_INPUT))
+                continue;
+              Hasher.update(A->getAsString(Args));
+            }
+            Hasher.final(Hash);
+            CUID = llvm::utohexstr(Hash.low(), /*LowerCase=*/true);
+          }
+        }
+        IA->setId(CUID);
+
         for (unsigned I = 0, E = GpuArchList.size(); I != E; ++I) {
           CudaDeviceActions.push_back(
-              C.MakeAction<InputAction>(IA->getInputArg(), Ty));
+              C.MakeAction<InputAction>(IA->getInputArg(), Ty, IA->getId()));
         }
 
         return ABRT_Success;
@@ -2613,6 +2651,21 @@ class OffloadingActionBuilder final {
                               options::OPT_cuda_device_only);
       EmitLLVM = Args.getLastArg(options::OPT_emit_llvm);
       EmitAsm = Args.getLastArg(options::OPT_S);
+      FixedCUID = Args.getLastArgValue(options::OPT_cuid_EQ);
+      if (Arg *A = Args.getLastArg(options::OPT_fuse_cuid_EQ)) {
+        StringRef UseCUIDStr = A->getValue();
+        UseCUID = llvm::StringSwitch<UseCUIDKind>(UseCUIDStr)
+                      .Case("hash", CUID_Hash)
+                      .Case("random", CUID_Random)
+                      .Case("none", CUID_None)
+                      .Default(CUID_Invalid);
+        if (UseCUID == CUID_Invalid) {
+          C.getDriver().Diag(diag::err_drv_invalid_value)
+              << A->getAsString(Args) << UseCUIDStr;
+          C.setContainsError();
+          return true;
+        }
+      }
 
       // Collect all cuda_gpu_arch parameters, removing duplicates.
       std::set<StringRef> GpuArchs;
@@ -2796,12 +2849,15 @@ class OffloadingActionBuilder final {
   class HIPActionBuilder final : public CudaActionBuilderBase {
     /// The linker inputs obtained for each device arch.
     SmallVector<ActionList, 8> DeviceLinkerInputs;
+    bool GPUSanitize;
 
   public:
     HIPActionBuilder(Compilation &C, DerivedArgList &Args,
                      const Driver::InputList &Inputs)
         : CudaActionBuilderBase(C, Args, Inputs, Action::OFK_HIP) {
       DefaultCudaArch = CudaArch::GFX803;
+      GPUSanitize = Args.hasFlag(options::OPT_fgpu_sanitize,
+                                 options::OPT_fno_gpu_sanitize, false);
     }
 
     bool canUseBundlerUnbundler() const override { return true; }
@@ -2850,17 +2906,33 @@ class OffloadingActionBuilder final {
         // a fat binary containing all the code objects for different GPU's.
         // The fat binary is then an input to the host action.
         for (unsigned I = 0, E = GpuArchList.size(); I != E; ++I) {
-          auto BackendAction = C.getDriver().ConstructPhaseAction(
-              C, Args, phases::Backend, CudaDeviceActions[I],
-              AssociatedOffloadKind);
-          auto AssembleAction = C.getDriver().ConstructPhaseAction(
-              C, Args, phases::Assemble, BackendAction, AssociatedOffloadKind);
-          // Create a link action to link device IR with device library
-          // and generate ISA.
-          ActionList AL;
-          AL.push_back(AssembleAction);
-          CudaDeviceActions[I] =
-              C.MakeAction<LinkJobAction>(AL, types::TY_Image);
+          if (GPUSanitize) {
+            // When GPU sanitizer is enabled, since we need to link in the
+            // the sanitizer runtime library after the sanitize pass, we have
+            // to skip the backend and assemble phases and use lld to link
+            // the bitcode.
+            ActionList AL;
+            AL.push_back(CudaDeviceActions[I]);
+            // Create a link action to link device IR with device library
+            // and generate ISA.
+            CudaDeviceActions[I] =
+                C.MakeAction<LinkJobAction>(AL, types::TY_Image);
+          } else {
+            // When GPU sanitizer is not enabled, we follow the conventional
+            // compiler phases, including backend and assemble phases.
+            ActionList AL;
+            auto BackendAction = C.getDriver().ConstructPhaseAction(
+                C, Args, phases::Backend, CudaDeviceActions[I],
+                AssociatedOffloadKind);
+            auto AssembleAction = C.getDriver().ConstructPhaseAction(
+                C, Args, phases::Assemble, BackendAction,
+                AssociatedOffloadKind);
+            AL.push_back(AssembleAction);
+            // Create a link action to link device IR with device library
+            // and generate ISA.
+            CudaDeviceActions[I] =
+                C.MakeAction<LinkJobAction>(AL, types::TY_Image);
+          }
 
           // OffloadingActionBuilder propagates device arch until an offload
           // action. Since the next action for creating fatbin does
@@ -4608,11 +4680,12 @@ InputInfo Driver::BuildJobsForActionNoCache(
         /*CreatePrefixForHost=*/!!A->getOffloadingHostActiveKinds() &&
             !AtTopLevel);
     if (isa<OffloadWrapperJobAction>(JA)) {
-      OffloadingPrefix += "-wrapper";
       if (Arg *FinalOutput = C.getArgs().getLastArg(options::OPT_o))
         BaseInput = FinalOutput->getValue();
       else
         BaseInput = getDefaultImageName();
+      BaseInput =
+          C.getArgs().MakeArgString(std::string(BaseInput) + "-wrapper");
     }
     Result = InputInfo(A, GetNamedOutputPath(C, *JA, BaseInput, BoundArch,
                                              AtTopLevel, MultipleArchs,

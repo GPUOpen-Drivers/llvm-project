@@ -540,6 +540,11 @@ enum NodeType {
   /// vector, but not the other way around.
   EXTRACT_SUBVECTOR,
 
+  /// VECTOR_REVERSE(VECTOR) - Returns a vector, of the same type as VECTOR,
+  /// whose elements are shuffled using the following algorithm:
+  ///   RESULT[i] = VECTOR[VECTOR.ElementCount - 1 - i]
+  VECTOR_REVERSE,
+
   /// VECTOR_SHUFFLE(VEC1, VEC2) - Returns a vector, of the same type as
   /// VEC1/VEC2.  A VECTOR_SHUFFLE node also contains an array of constant int
   /// values that indicate which value (or undef) each result element will
@@ -1039,7 +1044,8 @@ enum NodeType {
   /// DEBUGTRAP - Trap intended to get the attention of a debugger.
   DEBUGTRAP,
 
-  /// UBSANTRAP - Trap with an immediate describing the kind of sanitizer failure.
+  /// UBSANTRAP - Trap with an immediate describing the kind of sanitizer
+  /// failure.
   UBSANTRAP,
 
   /// PREFETCH - This corresponds to a prefetch intrinsic. The first operand

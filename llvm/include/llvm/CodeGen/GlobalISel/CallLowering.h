@@ -164,13 +164,14 @@ public:
                                       uint64_t Size, MachinePointerInfo &MPO,
                                       CCValAssign &VA) = 0;
 
-    /// An overload which takes an ArgInfo if additional information about
-    /// the arg is needed.
-    virtual void assignValueToAddress(const ArgInfo &Arg, Register Addr,
-                                      uint64_t Size, MachinePointerInfo &MPO,
+    /// An overload which takes an ArgInfo if additional information about the
+    /// arg is needed. \p ValRegIndex is the index in \p Arg.Regs for the value
+    /// to store.
+    virtual void assignValueToAddress(const ArgInfo &Arg, unsigned ValRegIndex,
+                                      Register Addr, uint64_t Size,
+                                      MachinePointerInfo &MPO,
                                       CCValAssign &VA) {
-      assert(Arg.Regs.size() == 1);
-      assignValueToAddress(Arg.Regs[0], Addr, Size, MPO, VA);
+      assignValueToAddress(Arg.Regs[ValRegIndex], Addr, Size, MPO, VA);
     }
 
     /// Handle custom values, which may be passed into one or more of \p VAs.
@@ -266,13 +267,14 @@ protected:
   ///
   /// \return True if everything has succeeded, false otherwise.
   bool handleAssignments(MachineIRBuilder &MIRBuilder,
-                         SmallVectorImpl<ArgInfo> &Args,
-                         ValueHandler &Handler) const;
+                         SmallVectorImpl<ArgInfo> &Args, ValueHandler &Handler,
+                         CallingConv::ID CallConv, bool IsVarArg,
+                         Register ThisReturnReg = Register()) const;
   bool handleAssignments(CCState &CCState,
                          SmallVectorImpl<CCValAssign> &ArgLocs,
                          MachineIRBuilder &MIRBuilder,
-                         SmallVectorImpl<ArgInfo> &Args,
-                         ValueHandler &Handler) const;
+                         SmallVectorImpl<ArgInfo> &Args, ValueHandler &Handler,
+                         Register ThisReturnReg = Register()) const;
 
   /// Analyze passed or returned values from a call, supplied in \p ArgInfo,
   /// incorporating info about the passed values into \p CCState.
@@ -456,6 +458,10 @@ public:
                  ArrayRef<Register> ResRegs,
                  ArrayRef<ArrayRef<Register>> ArgRegs, Register SwiftErrorVReg,
                  std::function<unsigned()> GetCalleeReg) const;
+
+  /// For targets which support the "returned" parameter attribute, returns
+  /// true if the given type is a valid one to use with "returned".
+  virtual bool isTypeIsValidForThisReturn(EVT Ty) const { return false; }
 };
 
 } // end namespace llvm

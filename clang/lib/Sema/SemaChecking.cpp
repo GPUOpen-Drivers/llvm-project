@@ -1429,6 +1429,9 @@ bool Sema::CheckTSBuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,
     return CheckPPCBuiltinFunctionCall(TI, BuiltinID, TheCall);
   case llvm::Triple::amdgcn:
     return CheckAMDGCNBuiltinFunctionCall(BuiltinID, TheCall);
+  case llvm::Triple::riscv32:
+  case llvm::Triple::riscv64:
+    return CheckRISCVBuiltinFunctionCall(TI, BuiltinID, TheCall);
   }
 }
 
@@ -3379,6 +3382,23 @@ bool Sema::CheckAMDGCNBuiltinFunctionCall(unsigned BuiltinID,
   if (!ArgExpr->EvaluateAsConstantExpr(ArgResult1, Context))
     return Diag(ArgExpr->getExprLoc(), diag::err_expr_not_string_literal)
            << ArgExpr->getType();
+
+  return false;
+}
+
+bool Sema::CheckRISCVBuiltinFunctionCall(const TargetInfo &TI,
+                                         unsigned BuiltinID,
+                                         CallExpr *TheCall) {
+  switch (BuiltinID) {
+  default:
+    break;
+#define BUILTIN(ID, TYPE, ATTRS) case RISCV::BI##ID:
+#include "clang/Basic/BuiltinsRISCV.def"
+    if (!TI.hasFeature("experimental-v"))
+      return Diag(TheCall->getBeginLoc(), diag::err_riscvv_builtin_requires_v)
+             << TheCall->getSourceRange();
+    break;
+  }
 
   return false;
 }
@@ -12051,7 +12071,16 @@ static void CheckImplicitConversion(Sema &S, Expr *E, QualType T,
     checkObjCDictionaryLiteral(S, QualType(Target, 0), DictionaryLiteral);
 
   // Strip vector types.
-  if (isa<VectorType>(Source)) {
+  if (const auto *SourceVT = dyn_cast<VectorType>(Source)) {
+    if (Target->isVLSTBuiltinType()) {
+      auto SourceVectorKind = SourceVT->getVectorKind();
+      if (SourceVectorKind == VectorType::SveFixedLengthDataVector ||
+          SourceVectorKind == VectorType::SveFixedLengthPredicateVector ||
+          (SourceVectorKind == VectorType::GenericVector &&
+           S.Context.getTypeSize(Source) == S.getLangOpts().ArmSveVectorBits))
+        return;
+    }
+
     if (!isa<VectorType>(Target)) {
       if (S.SourceMgr.isInSystemMacro(CC))
         return;
@@ -14387,63 +14416,62 @@ void Sema::CheckArrayAccess(const Expr *BaseExpr, const Expr *IndexExpr,
                         PDiag(diag::note_array_declared_here) << ND);
 }
 
-void Sema::CheckArrayAccess(const Expr *expr, int AllowOnePastEnd) {
-  if (!expr)
-    return;
-
-  expr = expr->IgnoreParenCasts();
-  switch (expr->getStmtClass()) {
-  case Stmt::ArraySubscriptExprClass: {
-    const ArraySubscriptExpr *ASE = cast<ArraySubscriptExpr>(expr);
-    CheckArrayAccess(ASE->getBase(), ASE->getIdx(), ASE, AllowOnePastEnd > 0);
-    CheckArrayAccess(ASE->getBase(), AllowOnePastEnd);
-    return;
-  }
-  case Stmt::MemberExprClass: {
-    expr = cast<MemberExpr>(expr)->getBase();
-    CheckArrayAccess(expr, /*AllowOnePastEnd=*/0);
-    return;
-  }
-  case Stmt::OMPArraySectionExprClass: {
-    const OMPArraySectionExpr *ASE = cast<OMPArraySectionExpr>(expr);
-    if (ASE->getLowerBound())
-      CheckArrayAccess(ASE->getBase(), ASE->getLowerBound(),
-                       /*ASE=*/nullptr, AllowOnePastEnd > 0);
-    return;
-  }
-  case Stmt::UnaryOperatorClass: {
-    // Only unwrap the * and & unary operators
-    const UnaryOperator *UO = cast<UnaryOperator>(expr);
-    expr = UO->getSubExpr();
-    switch (UO->getOpcode()) {
-    case UO_AddrOf:
-      AllowOnePastEnd++;
-      break;
-    case UO_Deref:
-      AllowOnePastEnd--;
-      break;
-    default:
-      return;
+void Sema::CheckArrayAccess(const Expr *expr) {
+  int AllowOnePastEnd = 0;
+  while (expr) {
+    expr = expr->IgnoreParenImpCasts();
+    switch (expr->getStmtClass()) {
+      case Stmt::ArraySubscriptExprClass: {
+        const ArraySubscriptExpr *ASE = cast<ArraySubscriptExpr>(expr);
+        CheckArrayAccess(ASE->getBase(), ASE->getIdx(), ASE,
+                         AllowOnePastEnd > 0);
+        expr = ASE->getBase();
+        break;
+      }
+      case Stmt::MemberExprClass: {
+        expr = cast<MemberExpr>(expr)->getBase();
+        break;
+      }
+      case Stmt::OMPArraySectionExprClass: {
+        const OMPArraySectionExpr *ASE = cast<OMPArraySectionExpr>(expr);
+        if (ASE->getLowerBound())
+          CheckArrayAccess(ASE->getBase(), ASE->getLowerBound(),
+                           /*ASE=*/nullptr, AllowOnePastEnd > 0);
+        return;
+      }
+      case Stmt::UnaryOperatorClass: {
+        // Only unwrap the * and & unary operators
+        const UnaryOperator *UO = cast<UnaryOperator>(expr);
+        expr = UO->getSubExpr();
+        switch (UO->getOpcode()) {
+          case UO_AddrOf:
+            AllowOnePastEnd++;
+            break;
+          case UO_Deref:
+            AllowOnePastEnd--;
+            break;
+          default:
+            return;
+        }
+        break;
+      }
+      case Stmt::ConditionalOperatorClass: {
+        const ConditionalOperator *cond = cast<ConditionalOperator>(expr);
+        if (const Expr *lhs = cond->getLHS())
+          CheckArrayAccess(lhs);
+        if (const Expr *rhs = cond->getRHS())
+          CheckArrayAccess(rhs);
+        return;
+      }
+      case Stmt::CXXOperatorCallExprClass: {
+        const auto *OCE = cast<CXXOperatorCallExpr>(expr);
+        for (const auto *Arg : OCE->arguments())
+          CheckArrayAccess(Arg);
+        return;
+      }
+      default:
+        return;
     }
-    CheckArrayAccess(expr, AllowOnePastEnd);
-    return;
-  }
-  case Stmt::ConditionalOperatorClass: {
-    const ConditionalOperator *cond = cast<ConditionalOperator>(expr);
-    if (const Expr *lhs = cond->getLHS())
-      CheckArrayAccess(lhs, AllowOnePastEnd);
-    if (const Expr *rhs = cond->getRHS())
-      CheckArrayAccess(rhs, AllowOnePastEnd);
-    return;
-  }
-  case Stmt::CXXOperatorCallExprClass: {
-    const auto *OCE = cast<CXXOperatorCallExpr>(expr);
-    for (const auto *Arg : OCE->arguments())
-      CheckArrayAccess(Arg);
-    return;
-  }
-  default:
-    return;
   }
 }
 

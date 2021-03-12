@@ -178,6 +178,7 @@ GCNSubtarget::initializeSubtargetDependencies(const Triple &TT,
 
 AMDGPUSubtarget::AMDGPUSubtarget(const Triple &TT) :
   TargetTriple(TT),
+  GCN3Encoding(false),
   Has16BitInsts(false),
   HasMadMixInsts(false),
   HasMadMacF32Insts(false),
@@ -209,6 +210,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     FastFMAF32(false),
     FastDenormalF32(false),
     HalfRate64Ops(false),
+    FullRate64Ops(false),
 
     FlatForGlobal(false),
     AutoWaitcntBeforeBarrier(false),
@@ -218,6 +220,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     HasApertureRegs(false),
     SupportsXNACK(false),
     EnableXNACK(false),
+    EnableTgSplit(false),
     EnableCuMode(false),
     TrapHandler(false),
 
@@ -230,10 +233,10 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     DumpCode(false),
 
     FP64(false),
-    GCN3Encoding(false),
     CIInsts(false),
     GFX8Insts(false),
     GFX9Insts(false),
+    GFX90AInsts(false),
     GFX10Insts(false),
     GFX10_3Insts(false),
     GFX7GFX8GFX9Insts(false),
@@ -252,6 +255,9 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     HasSDWAOutModsVOPC(false),
     HasDPP(false),
     HasDPP8(false),
+    Has64BitDPP(false),
+    HasPackedFP32Ops(false),
+    HasExtendedImageInsts(false),
     HasR128A16(false),
     HasGFX10A16(false),
     HasG16(false),
@@ -287,6 +293,7 @@ GCNSubtarget::GCNSubtarget(const Triple &TT, StringRef GPU, StringRef FS,
     HasMFMAInlineLiteralBug(false),
     UnalignedBufferAccess(false),
     UnalignedDSAccess(false),
+    HasPackedTID(false),
 
     ScalarizeGlobal(false),
 
@@ -778,6 +785,9 @@ unsigned GCNSubtarget::getMaxNumVGPRs(const MachineFunction &MF) const {
   if (F.hasFnAttribute("amdgpu-num-vgpr")) {
     unsigned Requested = AMDGPU::getIntegerAttribute(
       F, "amdgpu-num-vgpr", MaxNumVGPRs);
+
+    if (hasGFX90AInsts())
+      Requested *= 2;
 
     // Make sure requested value is compatible with values implied by
     // default/requested minimum/maximum number of waves per execution unit.

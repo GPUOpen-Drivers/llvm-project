@@ -175,33 +175,26 @@ public:
     unsigned p0 = latSets[s0][0];
     for (unsigned p1 : latSets[s0]) {
       bool add = true;
-      llvm::BitVector simple = simplifyCond(s0, p1);
       if (p0 != p1) {
         // Is this a straightforward copy?
         unsigned e = latPoints[p1].exp;
         if (exp(e).kind == Kind::kTensor && exp(e).e0 == outTensor)
           continue;
-        // Only dense exhausted?
-        llvm::BitVector tmp = latPoints[p1].bits;
-        tmp ^= latPoints[p0].bits;
-        if (!hasAnyDimOf(tmp, Dim::kSparse))
-          continue;
-        // Duplication of an earlier conjunction?
+        // Conjunction already covered?
         for (unsigned p2 : latSets[s]) {
-          tmp = simple;
-          tmp ^= latPoints[p2].simple;
-          if (tmp.count() == 0) {
+          assert(!latGT(p1, p2)); // Lj => Li would be bad
+          if (onlyDenseDiff(p2, p1)) {
             add = false;
             break;
           }
         }
         assert(!add || latGT(p0, p1));
       }
-      if (add) {
+      if (add)
         latSets[s].push_back(p1);
-        latPoints[latSets[s].back()].simple = simple;
-      }
     }
+    for (unsigned p : latSets[s])
+      latPoints[p].simple = simplifyCond(s, p);
     return s;
   }
 
@@ -215,15 +208,8 @@ public:
     bool isSingleton = true;
     for (unsigned p1 : latSets[s]) {
       if (p0 != p1 && latGT(p0, p1)) {
-        unsigned e = latPoints[p1].exp;
-        if (exp(e).kind == Kind::kTensor && exp(e).e0 == outTensor)
-          continue;
-        llvm::BitVector tmp = latPoints[p1].bits;
-        tmp ^= latPoints[p0].bits;
-        if (hasAnyDimOf(tmp, Dim::kSparse)) {
-          isSingleton = false;
-          break;
-        }
+        isSingleton = false;
+        break;
       }
     }
     // Now apply the two basic rules.
@@ -253,6 +239,13 @@ public:
     return false;
   }
 
+  /// Returns true if Li and Lj only differ in dense.
+  bool onlyDenseDiff(unsigned i, unsigned j) {
+    llvm::BitVector tmp = latPoints[j].bits;
+    tmp ^= latPoints[i].bits;
+    return !hasAnyDimOf(tmp, Dim::kSparse);
+  }
+
   /// Bit translation.
   unsigned tensor(unsigned b) const { return b % numTensors; }
   unsigned index(unsigned b) const { return b / numTensors; }
@@ -274,12 +267,12 @@ public:
     return false;
   }
 
-  // Returns true if tensor has any sparse dimension.
+  /// Returns true if tensor has any sparse dimension.
   bool isSparseTensor(unsigned t) const {
     return llvm::any_of(dims[t], [](Dim d) { return d == Dim::kSparse; });
   }
 
-  // Setter
+  /// Setter
   void setDim(unsigned t, unsigned i, Dim d) { dims[t][i] = d; }
 
   /// Getters.
@@ -520,6 +513,37 @@ static Type genIntType(PatternRewriter &rewriter, linalg::SparseIntType tp) {
   llvm_unreachable("unexpected SparseIntType");
 }
 
+/// Returns true if tensor was set up with sparse storage scheme.
+static bool linkedSparse(linalg::GenericOp op, unsigned tensor) {
+  if (tensor < op.getNumInputs())
+    return isa_and_nonnull<linalg::SparseTensorFromPointerOp>(
+        op.getInput(tensor).getDefiningOp());
+  return false;
+}
+
+/// Generates buffer for the output tensor.
+static Value genOutputBuffer(CodeGen &codegen, PatternRewriter &rewriter,
+                             linalg::GenericOp op, MemRefType denseTp,
+                             ArrayRef<Value> args) {
+  Location loc = op.getLoc();
+  Value tensor = op.getOutput(0);
+  // The output tensor simply could materialize from the buffer that will
+  // be generated for the tensor present in the outs() clause. This has
+  // the major advantage that the sparse kernel only updates the nonzero
+  // positions for the output tensor. Currently this results in functional,
+  // but slightly imprecise IR, so it is put under an experimental option.
+  if (codegen.options.fastOutput)
+    return rewriter.create<TensorToMemrefOp>(loc, denseTp, tensor);
+  // By default, a new buffer is allocated which is initialized to the
+  // tensor defined in the outs() clause. This is always correct but
+  // introduces a dense initialization component that may negatively
+  // impact the running complexity of the sparse kernel.
+  Value init = rewriter.create<TensorToMemrefOp>(loc, denseTp, tensor);
+  Value alloc = rewriter.create<AllocOp>(loc, denseTp, args);
+  rewriter.create<linalg::CopyOp>(loc, init, alloc);
+  return alloc;
+}
+
 /// Local bufferization of all dense and sparse data structures.
 /// This code enables testing the first prototype sparse compiler.
 // TODO: replace this with a proliferated bufferization strategy
@@ -529,53 +553,63 @@ static void genBuffers(Merger &merger, CodeGen &codegen,
   unsigned numTensors = op.getNumShapedOperands();
   unsigned numInputs = op.getNumInputs();
   assert(numTensors == numInputs + 1);
-
-  // For now, set all unknown dimensions to 999.
-  // TODO: compute these values (using sparsity or by reading tensor)
-  Value unknown = rewriter.create<ConstantIndexOp>(loc, 999);
-
   // For every tensor, find lower and upper bound on dimensions, set the
-  // same bounds on loop indices, and allocate dense or sparse buffer(s).
+  // same bounds on loop indices, and obtain dense or sparse buffer(s).
   SmallVector<Value, 4> args;
   for (unsigned t = 0; t < numTensors; t++) {
+    Value tensor = t < numInputs ? op.getInput(t) : op.getOutput(0);
     auto tensorType = op.getShapedType(t);
     auto shape = tensorType.getShape();
     auto map = op.getIndexingMap(t);
     // Scan all dimensions of current tensor.
-    bool allDense = true;
+    bool dense = !linkedSparse(op, t);
     args.clear();
     for (unsigned d = 0, rank = shape.size(); d < rank; d++) {
       unsigned i = map.getDimPosition(d);
       // Handle sparse storage schemes.
       if (merger.isDim(t, i, Dim::kSparse)) {
-        allDense = false;
+        dense = false;
         auto dynShape = {ShapedType::kDynamicSize};
         auto ptrTp = MemRefType::get(
             dynShape, genIntType(rewriter, codegen.options.ptrType));
         auto indTp = MemRefType::get(
             dynShape, genIntType(rewriter, codegen.options.indType));
-        codegen.pointers[t][i] = rewriter.create<AllocaOp>(loc, ptrTp, unknown);
-        codegen.indices[t][i] = rewriter.create<AllocaOp>(loc, indTp, unknown);
+        Value dim = rewriter.create<ConstantIndexOp>(loc, d);
+        // Generate sparse primitives to obtains pointer and indices.
+        codegen.pointers[t][i] =
+            rewriter.create<linalg::SparseTensorToPointersMemRefOp>(
+                loc, ptrTp, tensor, dim);
+        codegen.indices[t][i] =
+            rewriter.create<linalg::SparseTensorToIndicesMemRefOp>(loc, indTp,
+                                                                   tensor, dim);
       }
       // Find lower and upper bound in current dimension.
       Value up;
       if (shape[d] == TensorType::kDynamicSize) {
-        Value arg = t < numInputs ? op.getInput(t) : op.getOutput(0);
-        up = rewriter.create<DimOp>(loc, arg, d);
+        up = rewriter.create<DimOp>(loc, tensor, d);
         args.push_back(up);
       } else {
         up = rewriter.create<ConstantIndexOp>(loc, shape[d]);
       }
       codegen.sizes[i] = codegen.highs[t][i] = up;
     }
-    // Allocate dense or sparse buffer for numerical values.
-    if (allDense) {
+    // Perform the required bufferization. All dense inputs materialize
+    // from the input tensor. The dense output tensor needs special
+    // handling. Sparse inputs use a sparse primitive to obtain the values.
+    if (dense) {
       auto denseTp = MemRefType::get(shape, tensorType.getElementType());
-      codegen.buffers[t] = rewriter.create<AllocaOp>(loc, denseTp, args);
+      if (t < numInputs)
+        codegen.buffers[t] =
+            rewriter.create<TensorToMemrefOp>(loc, denseTp, tensor);
+      else
+        codegen.buffers[t] =
+            genOutputBuffer(codegen, rewriter, op, denseTp, args);
     } else {
-      auto sparseTp = MemRefType::get({ShapedType::kDynamicSize},
-                                      tensorType.getElementType());
-      codegen.buffers[t] = rewriter.create<AllocaOp>(loc, sparseTp, unknown);
+      auto dynShape = {ShapedType::kDynamicSize};
+      auto sparseTp = MemRefType::get(dynShape, tensorType.getElementType());
+      codegen.buffers[t] =
+          rewriter.create<linalg::SparseTensorToValuesMemRefOp>(loc, sparseTp,
+                                                                tensor);
     }
   }
 }
@@ -657,7 +691,7 @@ static Value genTensorLoad(Merger &merger, CodeGen &codegen,
   SmallVector<Value, 4> args;
   unsigned tensor = merger.exp(exp).e0;
   auto map = op.getIndexingMap(tensor);
-  bool sparse = false;
+  bool sparse = linkedSparse(op, tensor);
   for (unsigned i = 0, m = map.getNumResults(); i < m; ++i) {
     unsigned idx = map.getDimPosition(i);
     args.push_back(codegen.loops[idx]); // universal dense index
@@ -717,6 +751,17 @@ static Value genInvariantValue(Merger &merger, CodeGen &codegen,
   if (codegen.curVecLength > 1)
     return genVectorInvariantValue(codegen, rewriter, val);
   return val;
+}
+
+/// Generates an address computation "sz * p + i".
+static Value genAddress(CodeGen &codegen, PatternRewriter &rewriter,
+                        Location loc, Value size, Value p, Value i) {
+  Value mul = rewriter.create<MulIOp>(loc, size, p);
+  if (auto vtp = i.getType().dyn_cast<VectorType>()) {
+    Value inv = rewriter.create<IndexCastOp>(loc, mul, vtp.getElementType());
+    mul = genVectorInvariantValue(codegen, rewriter, inv);
+  }
+  return rewriter.create<AddIOp>(loc, mul, i);
 }
 
 /// Recursively generates tensor expression.
@@ -1040,9 +1085,8 @@ static void genLocals(Merger &merger, CodeGen &codegen,
           break;
       Value p = (pat == 0) ? rewriter.create<ConstantIndexOp>(loc, 0)
                            : codegen.pidxs[tensor][topSort[pat - 1]];
-      Value m = rewriter.create<MulIOp>(loc, codegen.sizes[idx], p);
-      codegen.pidxs[tensor][idx] =
-          rewriter.create<AddIOp>(loc, m, codegen.loops[idx]);
+      codegen.pidxs[tensor][idx] = genAddress(
+          codegen, rewriter, loc, codegen.sizes[idx], p, codegen.loops[idx]);
     }
   }
 }
@@ -1152,12 +1196,6 @@ static void genStmt(Merger &merger, CodeGen &codegen, PatternRewriter &rewriter,
       unsigned lj = merger.set(lts)[j];
       unsigned ej = merger.lat(lj).exp;
       if (li == lj || merger.latGT(li, lj)) {
-        if (li != lj) {
-          llvm::BitVector tmp = merger.lat(lj).bits;
-          tmp ^= merger.lat(li).bits;
-          if (!merger.hasAnyDimOf(tmp, Dim::kSparse))
-            continue; // only dense exhausted within if/else
-        }
         // Recurse into body of each branch.
         if (isWhile) {
           scf::IfOp ifOp =

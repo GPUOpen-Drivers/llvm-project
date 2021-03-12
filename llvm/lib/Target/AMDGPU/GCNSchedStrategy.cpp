@@ -335,7 +335,7 @@ void GCNScheduleDAGMILive::schedule() {
              PressureAfter.print(dbgs()));
 
   if (PressureAfter.getSGPRNum() <= S.SGPRCriticalLimit &&
-      PressureAfter.getVGPRNum() <= S.VGPRCriticalLimit) {
+      PressureAfter.getVGPRNum(ST.hasGFX90AInsts()) <= S.VGPRCriticalLimit) {
     Pressure[RegionIdx] = PressureAfter;
     LLVM_DEBUG(dbgs() << "Pressure in desired limits, done.\n");
     return;
@@ -366,7 +366,8 @@ void GCNScheduleDAGMILive::schedule() {
 
   unsigned MaxVGPRs = ST.getMaxNumVGPRs(MF);
   unsigned MaxSGPRs = ST.getMaxNumSGPRs(MF);
-  if (PressureAfter.getVGPRNum() > MaxVGPRs ||
+  if (PressureAfter.getVGPRNum(false) > MaxVGPRs ||
+      PressureAfter.getAGPRNum() > MaxVGPRs ||
       PressureAfter.getSGPRNum() > MaxSGPRs)
     RescheduleRegions[RegionIdx] = true;
 
@@ -460,7 +461,9 @@ void GCNScheduleDAGMILive::computeBlockPressure(const MachineBasicBlock *MBB) {
     I = Rgn.first;
     auto *NonDbgMI = &*skipDebugInstructionsForward(Rgn.first, Rgn.second);
     auto LRS = BBLiveInMap.lookup(NonDbgMI);
+#ifdef EXPENSIVE_CHECKS
     assert(isEqual(getLiveRegsBefore(*NonDbgMI, *LIS), LRS));
+#endif
     RPTracker.reset(*I, &LRS);
   }
 

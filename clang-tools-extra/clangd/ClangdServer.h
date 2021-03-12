@@ -14,6 +14,7 @@
 #include "ConfigProvider.h"
 #include "GlobalCompilationDatabase.h"
 #include "Hover.h"
+#include "Module.h"
 #include "Protocol.h"
 #include "SemanticHighlighting.h"
 #include "TUScheduler.h"
@@ -67,12 +68,6 @@ public:
     /// Called whenever the file status is updated.
     /// May be called concurrently for separate files, not for a single file.
     virtual void onFileUpdated(PathRef File, const TUStatus &Status) {}
-
-    /// Called by ClangdServer when some \p Highlightings for \p File are ready.
-    /// May be called concurrently for separate files, not for a single file.
-    virtual void
-    onHighlightingsReady(PathRef File, llvm::StringRef Version,
-                         std::vector<HighlightingToken> Highlightings) {}
 
     /// Called when background indexing tasks are enqueued/started/completed.
     /// Not called concurrently.
@@ -145,11 +140,10 @@ public:
     /// fetch system include path.
     std::vector<std::string> QueryDriverGlobs;
 
-    /// Enable notification-based semantic highlighting.
-    bool TheiaSemanticHighlighting = false;
-
     /// Enable preview of FoldingRanges feature.
     bool FoldingRanges = false;
+
+    ModuleSet *Modules = nullptr;
 
     explicit operator TUScheduler::Options() const;
   };
@@ -166,6 +160,16 @@ public:
   /// if compilation arguments changed on calls to forceReparse().
   ClangdServer(const GlobalCompilationDatabase &CDB, const ThreadsafeFS &TFS,
                const Options &Opts, Callbacks *Callbacks = nullptr);
+  ~ClangdServer();
+
+  /// Gets the installed module of a given type, if any.
+  /// This exposes access the public interface of modules that have one.
+  template <typename Mod> Mod *getModule() {
+    return Modules ? Modules->get<Mod>() : nullptr;
+  }
+  template <typename Mod> const Mod *getModule() const {
+    return Modules ? Modules->get<Mod>() : nullptr;
+  }
 
   /// Add a \p File to the list of tracked C++ files or update the contents if
   /// \p File is already tracked. Also schedules parsing of the AST for it on a
@@ -332,6 +336,8 @@ public:
 
   // Blocks the main thread until the server is idle. Only for use in tests.
   // Returns false if the timeout expires.
+  // FIXME: various subcomponents each get the full timeout, so it's more of
+  // an order of magnitude than a hard deadline.
   LLVM_NODISCARD bool
   blockUntilIdleForTest(llvm::Optional<double> TimeoutSeconds = 10);
 
@@ -343,6 +349,7 @@ private:
                   ArrayRef<tooling::Range> Ranges,
                   Callback<tooling::Replacements> CB);
 
+  ModuleSet *Modules;
   const GlobalCompilationDatabase &CDB;
   const ThreadsafeFS &TFS;
 
@@ -369,10 +376,7 @@ private:
   mutable std::mutex CachedCompletionFuzzyFindRequestMutex;
 
   llvm::Optional<std::string> WorkspaceRoot;
-  // WorkScheduler has to be the last member, because its destructor has to be
-  // called before all other members to stop the worker thread that references
-  // ClangdServer.
-  TUScheduler WorkScheduler;
+  llvm::Optional<TUScheduler> WorkScheduler;
 };
 
 } // namespace clangd

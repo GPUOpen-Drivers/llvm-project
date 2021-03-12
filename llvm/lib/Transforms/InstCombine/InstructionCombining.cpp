@@ -2799,6 +2799,20 @@ Instruction *InstCombinerImpl::visitFree(CallInst &FI) {
   if (isa<ConstantPointerNull>(Op))
     return eraseInstFromFunction(FI);
 
+  // If we free a pointer we've been explicitly told won't be freed, this
+  // would be full UB and thus we can conclude this is unreachable. Cases:
+  // 1) freeing a pointer which is explicitly nofree
+  // 2) calling free from a call site marked nofree
+  // 3) calling free in a function scope marked nofree
+  if (auto *A = dyn_cast<Argument>(Op->stripPointerCasts()))
+    if (A->hasAttribute(Attribute::NoFree) ||
+        FI.hasFnAttr(Attribute::NoFree) ||
+        FI.getFunction()->hasFnAttribute(Attribute::NoFree)) {
+      // Leave a marker since we can't modify the CFG here.
+      CreateNonTerminatorUnreachable(&FI);
+      return eraseInstFromFunction(FI);
+    }
+
   // If we optimize for code size, try to move the call to free before the null
   // test so that simplify cfg can remove the empty block and dead code
   // elimination the branch. I.e., helps to turn something like:
@@ -3083,9 +3097,8 @@ Instruction *InstCombinerImpl::visitExtractValueInst(ExtractValueInst &EV) {
       SmallVector<Value*, 4> Indices;
       // Prefix an i32 0 since we need the first element.
       Indices.push_back(Builder.getInt32(0));
-      for (ExtractValueInst::idx_iterator I = EV.idx_begin(), E = EV.idx_end();
-            I != E; ++I)
-        Indices.push_back(Builder.getInt32(*I));
+      for (unsigned Idx : EV.indices())
+        Indices.push_back(Builder.getInt32(Idx));
 
       // We need to insert these at the location of the old load, not at that of
       // the extractvalue.
@@ -3878,9 +3891,10 @@ static bool prepareICWorklistFromFunction(Function &F, const DataLayout &DL,
         }
       }
 
-      // Skip processing debug intrinsics in InstCombine. Processing these call instructions
-      // consumes non-trivial amount of time and provides no value for the optimization.
-      if (!isa<DbgInfoIntrinsic>(Inst)) {
+      // Skip processing debug and pseudo intrinsics in InstCombine. Processing
+      // these call instructions consumes non-trivial amount of time and
+      // provides no value for the optimization.
+      if (!Inst->isDebugOrPseudoInst()) {
         InstrsForInstCombineWorklist.push_back(Inst);
         SeenAliasScopes.analyse(Inst);
       }

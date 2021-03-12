@@ -93,34 +93,6 @@ void VPDef::dump() const {
   dbgs() << "\n";
 }
 
-VPUser *VPRecipeBase::toVPUser() {
-  if (auto *U = dyn_cast<VPInstruction>(this))
-    return U;
-  if (auto *U = dyn_cast<VPWidenRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPWidenCallRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPWidenSelectRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPWidenGEPRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPBlendRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPInterleaveRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPReplicateRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPBranchOnMaskRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPWidenMemoryInstructionRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPReductionRecipe>(this))
-    return U;
-  if (auto *U = dyn_cast<VPPredInstPHIRecipe>(this))
-    return U;
-  return nullptr;
-}
-
 // Get the top-most entry block of \p Start. This is the entry block of the
 // containing VPlan. This function is templated to support both const and non-const blocks
 template <typename T> static T *getPlanEntry(T *Start) {
@@ -199,6 +171,58 @@ VPBlockBase *VPBlockBase::getEnclosingBlockWithPredecessors() {
   return Parent->getEnclosingBlockWithPredecessors();
 }
 
+static VPValue *getSingleOperandOrNull(VPUser &U) {
+  if (U.getNumOperands() == 1)
+    return U.getOperand(0);
+
+  return nullptr;
+}
+
+static const VPValue *getSingleOperandOrNull(const VPUser &U) {
+  if (U.getNumOperands() == 1)
+    return U.getOperand(0);
+
+  return nullptr;
+}
+
+static void resetSingleOpUser(VPUser &U, VPValue *NewVal) {
+  assert(U.getNumOperands() <= 1 && "Didn't expect more than one operand!");
+  if (!NewVal) {
+    if (U.getNumOperands() == 1)
+      U.removeLastOperand();
+    return;
+  }
+
+  if (U.getNumOperands() == 1)
+    U.setOperand(0, NewVal);
+  else
+    U.addOperand(NewVal);
+}
+
+VPValue *VPBlockBase::getCondBit() {
+  return getSingleOperandOrNull(CondBitUser);
+}
+
+const VPValue *VPBlockBase::getCondBit() const {
+  return getSingleOperandOrNull(CondBitUser);
+}
+
+void VPBlockBase::setCondBit(VPValue *CV) {
+  resetSingleOpUser(CondBitUser, CV);
+}
+
+VPValue *VPBlockBase::getPredicate() {
+  return getSingleOperandOrNull(PredicateUser);
+}
+
+const VPValue *VPBlockBase::getPredicate() const {
+  return getSingleOperandOrNull(PredicateUser);
+}
+
+void VPBlockBase::setPredicate(VPValue *CV) {
+  resetSingleOpUser(PredicateUser, CV);
+}
+
 void VPBlockBase::deleteCFG(VPBlockBase *Entry) {
   SmallVector<VPBlockBase *, 8> Blocks(depth_first(Entry));
 
@@ -223,18 +247,17 @@ Value *VPTransformState::get(VPValue *Def, const VPIteration &Instance) {
   if (hasScalarValue(Def, Instance))
     return Data.PerPartScalars[Def][Instance.Part][Instance.Lane];
 
-  if (hasVectorValue(Def, Instance.Part)) {
-    assert(Data.PerPartOutput.count(Def));
-    auto *VecPart = Data.PerPartOutput[Def][Instance.Part];
-    if (!VecPart->getType()->isVectorTy()) {
-      assert(Instance.Lane == 0 && "cannot get lane > 0 for scalar");
-      return VecPart;
-    }
-    // TODO: Cache created scalar values.
-    return Builder.CreateExtractElement(VecPart,
-                                        Builder.getInt32(Instance.Lane));
+  assert(hasVectorValue(Def, Instance.Part));
+  auto *VecPart = Data.PerPartOutput[Def][Instance.Part];
+  if (!VecPart->getType()->isVectorTy()) {
+    assert(Instance.Lane == 0 && "cannot get lane > 0 for scalar");
+    return VecPart;
   }
-  return Callback.getOrCreateScalarValue(VPValue2Value[Def], Instance);
+  // TODO: Cache created scalar values.
+  auto *Extract =
+      Builder.CreateExtractElement(VecPart, Builder.getInt32(Instance.Lane));
+  // set(Def, Extract, Instance);
+  return Extract;
 }
 
 BasicBlock *
@@ -327,17 +350,15 @@ void VPBasicBlock::execute(VPTransformState *State) {
 
   VPValue *CBV;
   if (EnableVPlanNativePath && (CBV = getCondBit())) {
-    Value *IRCBV = CBV->getUnderlyingValue();
-    assert(IRCBV && "Unexpected null underlying value for condition bit");
+    assert(CBV->getUnderlyingValue() &&
+           "Unexpected null underlying value for condition bit");
 
     // Condition bit value in a VPBasicBlock is used as the branch selector. In
     // the VPlan-native path case, since all branches are uniform we generate a
     // branch instruction using the condition value from vector lane 0 and dummy
     // successors. The successors are fixed later when the successor blocks are
     // visited.
-    Value *NewCond = State->Callback.getOrCreateVectorValues(IRCBV, 0);
-    NewCond = State->Builder.CreateExtractElement(NewCond,
-                                                  State->Builder.getInt32(0));
+    Value *NewCond = State->get(CBV, {0, 0});
 
     // Replace the temporary unreachable terminator with the new conditional
     // branch.
@@ -358,9 +379,8 @@ void VPBasicBlock::dropAllReferences(VPValue *NewValue) {
     for (auto *Def : R.definedValues())
       Def->replaceAllUsesWith(NewValue);
 
-    if (auto *User = R.toVPUser())
-      for (unsigned I = 0, E = User->getNumOperands(); I != E; I++)
-        User->setOperand(I, NewValue);
+    for (unsigned I = 0, E = R.getNumOperands(); I != E; I++)
+      R.setOperand(I, NewValue);
   }
 }
 
@@ -913,7 +933,7 @@ void VPWidenGEPRecipe::print(raw_ostream &O, const Twine &Indent,
 
 void VPWidenPHIRecipe::print(raw_ostream &O, const Twine &Indent,
                              VPSlotTracker &SlotTracker) const {
-  O << "WIDEN-PHI " << VPlanIngredient(Phi);
+  O << "WIDEN-PHI " << VPlanIngredient(getUnderlyingValue());
 }
 
 void VPBlendRecipe::print(raw_ostream &O, const Twine &Indent,
@@ -970,6 +990,8 @@ void VPReplicateRecipe::print(raw_ostream &O, const Twine &Indent,
 void VPPredInstPHIRecipe::print(raw_ostream &O, const Twine &Indent,
                                 VPSlotTracker &SlotTracker) const {
   O << "PHI-PREDICATED-INSTRUCTION ";
+  printAsOperand(O, SlotTracker);
+  O << " = ";
   printOperands(O, SlotTracker);
 }
 
@@ -1069,6 +1091,8 @@ void VPInterleavedAccessInfo::visitBlock(VPBlockBase *Block, Old2NewTy &Old2New,
                                          InterleavedAccessInfo &IAI) {
   if (VPBasicBlock *VPBB = dyn_cast<VPBasicBlock>(Block)) {
     for (VPRecipeBase &VPI : *VPBB) {
+      if (isa<VPWidenPHIRecipe>(&VPI))
+        continue;
       assert(isa<VPInstruction>(&VPI) && "Can only handle VPInstructions");
       auto *VPInst = cast<VPInstruction>(&VPI);
       auto *Inst = cast<Instruction>(VPInst->getUnderlyingValue());
@@ -1130,9 +1154,6 @@ void VPSlotTracker::assignSlots(const VPBasicBlock *VPBB) {
 void VPSlotTracker::assignSlots(const VPlan &Plan) {
 
   for (const VPValue *V : Plan.VPExternalDefs)
-    assignSlot(V);
-
-  for (const VPValue *V : Plan.VPCBVs)
     assignSlot(V);
 
   if (Plan.BackedgeTakenCount)

@@ -289,9 +289,8 @@ GVN::Expression GVN::ValueTable::createExpr(Instruction *I) {
   Expression e;
   e.type = I->getType();
   e.opcode = I->getOpcode();
-  for (Instruction::op_iterator OI = I->op_begin(), OE = I->op_end();
-       OI != OE; ++OI)
-    e.varargs.push_back(lookupOrAdd(*OI));
+  for (Use &Op : I->operands())
+    e.varargs.push_back(lookupOrAdd(Op));
   if (I->isCommutative()) {
     // Ensure that commutative instructions that only differ by a permutation
     // of their operands get the same value number by sorting the operand value
@@ -362,9 +361,8 @@ GVN::Expression GVN::ValueTable::createExtractvalueExpr(ExtractValueInst *EI) {
   // Not a recognised intrinsic. Fall back to producing an extract value
   // expression.
   e.opcode = EI->getOpcode();
-  for (Instruction::op_iterator OI = EI->op_begin(), OE = EI->op_end();
-       OI != OE; ++OI)
-    e.varargs.push_back(lookupOrAdd(*OI));
+  for (Use &Op : EI->operands())
+    e.varargs.push_back(lookupOrAdd(Op));
 
   append_range(e.varargs, EI->indices());
 
@@ -1776,7 +1774,7 @@ bool GVN::processLoad(LoadInst *L) {
       MSSAU->removeMemoryAccess(L);
     ++NumGVNLoad;
     reportLoadElim(L, AvailableValue, ORE);
-    // Tell MDA to rexamine the reused pointer since we might have more
+    // Tell MDA to reexamine the reused pointer since we might have more
     // information after forwarding it.
     if (MD && AvailableValue->getType()->isPtrOrPtrVectorTy())
       MD->invalidateCachedPointerInfo(AvailableValue);

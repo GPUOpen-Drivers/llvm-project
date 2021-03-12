@@ -76,7 +76,7 @@ def NS_AOp : NS_Op<"a_op", [IsolatedFromAbove, IsolatedFromAbove]> {
 // CHECK:   ::mlir::Operation::result_range getODSResults(unsigned index);
 // CHECK:   ::mlir::Value r();
 // CHECK:   ::mlir::Region &someRegion();
-// CHECK:   ::mlir::MutableArrayRef<Region> someRegions();
+// CHECK:   ::mlir::MutableArrayRef<::mlir::Region> someRegions();
 // CHECK:   ::mlir::IntegerAttr attr1Attr()
 // CHECK:   uint32_t attr1();
 // CHECK:   ::mlir::FloatAttr attr2Attr()
@@ -247,6 +247,19 @@ def NS_JOp : NS_Op<"op_with_InferTypeOpInterface_interface", [DeclareOpInterface
 // CHECK: static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::TypeRange resultTypes, ::mlir::Value a, ::mlir::Value b);
 // CHECK: static void build(::mlir::OpBuilder &, ::mlir::OperationState &odsState, ::mlir::TypeRange resultTypes, ::mlir::ValueRange operands, ::llvm::ArrayRef<::mlir::NamedAttribute> attributes = {});
 // CHECK: static void build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, ::mlir::ValueRange operands, ::llvm::ArrayRef<::mlir::NamedAttribute> attributes = {});
+
+// Check native OpTrait usage
+// ---
+
+def NS_TestTrait : NativeOpTrait<"TestTrait"> {
+    let cppNamespace = "SomeNamespace";
+}
+
+def NS_KWithTraitOp : NS_Op<"KWithTrait", [NS_TestTrait]>;
+
+// CHECK-LABEL: NS::KWithTraitOp declarations
+// CHECK:       class KWithTraitOp : public ::mlir::Op<KWithTraitOp
+// CHECK-SAME:      SomeNamespace::TestTrait
 
 // Test that type defs have the proper namespaces when used as a constraint.
 // ---

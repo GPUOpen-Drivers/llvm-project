@@ -252,9 +252,10 @@ private:
 
   /// Emit a CSet for an integer compare.
   ///
-  /// \p DefReg is expected to be a 32-bit scalar register.
+  /// \p DefReg and \p SrcReg are expected to be 32-bit scalar registers.
   MachineInstr *emitCSetForICMP(Register DefReg, unsigned Pred,
-                                MachineIRBuilder &MIRBuilder) const;
+                                MachineIRBuilder &MIRBuilder,
+                                Register SrcReg = AArch64::WZR) const;
   /// Emit a CSet for a FP compare.
   ///
   /// \p Dst is expected to be a 32-bit scalar register.
@@ -1085,7 +1086,9 @@ AArch64InstructionSelector::emitSelect(Register Dst, Register True,
     //
     // Into:
     // %select = CSINC %reg, %x, cc
-    if (mi_match(Reg, MRI, m_GAdd(m_Reg(MatchReg), m_SpecificICst(1)))) {
+    if (mi_match(Reg, MRI,
+                 m_any_of(m_GAdd(m_Reg(MatchReg), m_SpecificICst(1)),
+                          m_GPtrAdd(m_Reg(MatchReg), m_SpecificICst(1))))) {
       Opc = Is32Bit ? AArch64::CSINCWr : AArch64::CSINCXr;
       Reg = MatchReg;
       if (Invert) {
@@ -2153,6 +2156,41 @@ bool AArch64InstructionSelector::earlySelect(MachineInstr &I) const {
     I.setDesc(TII.get(TargetOpcode::COPY));
     return true;
   }
+
+  case TargetOpcode::G_ADD: {
+    // Check if this is being fed by a G_ICMP on either side.
+    //
+    // (cmp pred, x, y) + z
+    //
+    // In the above case, when the cmp is true, we increment z by 1. So, we can
+    // fold the add into the cset for the cmp by using cinc.
+    //
+    // FIXME: This would probably be a lot nicer in PostLegalizerLowering.
+    Register X = I.getOperand(1).getReg();
+
+    // Only handle scalars. Scalar G_ICMP is only legal for s32, so bail out
+    // early if we see it.
+    LLT Ty = MRI.getType(X);
+    if (Ty.isVector() || Ty.getSizeInBits() != 32)
+      return false;
+
+    Register CmpReg = I.getOperand(2).getReg();
+    MachineInstr *Cmp = getOpcodeDef(TargetOpcode::G_ICMP, CmpReg, MRI);
+    if (!Cmp) {
+      std::swap(X, CmpReg);
+      Cmp = getOpcodeDef(TargetOpcode::G_ICMP, CmpReg, MRI);
+      if (!Cmp)
+        return false;
+    }
+    MachineIRBuilder MIRBuilder(I);
+    auto Pred =
+        static_cast<CmpInst::Predicate>(Cmp->getOperand(1).getPredicate());
+    emitIntegerCompare(Cmp->getOperand(2), Cmp->getOperand(3),
+                       Cmp->getOperand(1), MIRBuilder);
+    emitCSetForICMP(I.getOperand(0).getReg(), Pred, MIRBuilder, X);
+    I.eraseFromParent();
+    return true;
+  }
   default:
     return false;
   }
@@ -3156,14 +3194,18 @@ bool AArch64InstructionSelector::select(MachineInstr &I) {
     // difficult because at RBS we may end up pessimizing the fpr case if we
     // decided to add an anyextend to fix this. Manual selection is the most
     // robust solution for now.
-    Register SrcReg = I.getOperand(1).getReg();
-    if (RBI.getRegBank(SrcReg, MRI, TRI)->getID() != AArch64::GPRRegBankID)
+    if (RBI.getRegBank(I.getOperand(1).getReg(), MRI, TRI)->getID() !=
+        AArch64::GPRRegBankID)
       return false; // We expect the fpr regbank case to be imported.
-    LLT SrcTy = MRI.getType(SrcReg);
-    if (SrcTy.getSizeInBits() == 16)
-      I.setDesc(TII.get(AArch64::DUPv8i16gpr));
-    else if (SrcTy.getSizeInBits() == 8)
+    LLT VecTy = MRI.getType(I.getOperand(0).getReg());
+    if (VecTy == LLT::vector(8, 8))
+      I.setDesc(TII.get(AArch64::DUPv8i8gpr));
+    else if (VecTy == LLT::vector(16, 8))
       I.setDesc(TII.get(AArch64::DUPv16i8gpr));
+    else if (VecTy == LLT::vector(4, 16))
+      I.setDesc(TII.get(AArch64::DUPv4i16gpr));
+    else if (VecTy == LLT::vector(8, 16))
+      I.setDesc(TII.get(AArch64::DUPv8i16gpr));
     else
       return false;
     return constrainSelectedInstRegOperands(I, TII, TRI, RBI);
@@ -3201,6 +3243,21 @@ bool AArch64InstructionSelector::selectReduction(
   Register VecReg = I.getOperand(1).getReg();
   LLT VecTy = MRI.getType(VecReg);
   if (I.getOpcode() == TargetOpcode::G_VECREDUCE_ADD) {
+    // For <2 x i32> ADDPv2i32 generates an FPR64 value, so we need to emit
+    // a subregister copy afterwards.
+    if (VecTy == LLT::vector(2, 32)) {
+      MachineIRBuilder MIB(I);
+      Register DstReg = I.getOperand(0).getReg();
+      auto AddP = MIB.buildInstr(AArch64::ADDPv2i32, {&AArch64::FPR64RegClass},
+                                 {VecReg, VecReg});
+      auto Copy = MIB.buildInstr(TargetOpcode::COPY, {DstReg}, {})
+                      .addReg(AddP.getReg(0), 0, AArch64::ssub)
+                      .getReg(0);
+      RBI.constrainGenericRegister(Copy, AArch64::FPR32RegClass, MRI);
+      I.eraseFromParent();
+      return constrainSelectedInstRegOperands(*AddP, TII, TRI, RBI);
+    }
+
     unsigned Opc = 0;
     if (VecTy == LLT::vector(16, 8))
       Opc = AArch64::ADDVv16i8v;
@@ -4365,14 +4422,13 @@ MachineInstr *AArch64InstructionSelector::emitFMovForFConstant(
 
 MachineInstr *
 AArch64InstructionSelector::emitCSetForICMP(Register DefReg, unsigned Pred,
-                                     MachineIRBuilder &MIRBuilder) const {
+                                            MachineIRBuilder &MIRBuilder,
+                                            Register SrcReg) const {
   // CSINC increments the result when the predicate is false. Invert it.
   const AArch64CC::CondCode InvCC = changeICMPPredToAArch64CC(
       CmpInst::getInversePredicate((CmpInst::Predicate)Pred));
-  auto I =
-      MIRBuilder
-    .buildInstr(AArch64::CSINCWr, {DefReg}, {Register(AArch64::WZR), Register(AArch64::WZR)})
-          .addImm(InvCC);
+  auto I = MIRBuilder.buildInstr(AArch64::CSINCWr, {DefReg}, {SrcReg, SrcReg})
+               .addImm(InvCC);
   constrainSelectedInstRegOperands(*I, TII, TRI, RBI);
   return &*I;
 }
@@ -5182,7 +5238,7 @@ bool AArch64InstructionSelector::isWorthFoldingIntoExtendedReg(
   // Always fold if there is one use, or if we're optimizing for size.
   Register DefReg = MI.getOperand(0).getReg();
   if (MRI.hasOneNonDBGUse(DefReg) ||
-      MI.getParent()->getParent()->getFunction().hasMinSize())
+      MI.getParent()->getParent()->getFunction().hasOptSize())
     return true;
 
   // It's better to avoid folding and recomputing shifts when we don't have a

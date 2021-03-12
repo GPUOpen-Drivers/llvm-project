@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: opt -bdce -S < %s | FileCheck %s
 ; RUN: opt -passes=bdce -S < %s | FileCheck %s
 

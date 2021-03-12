@@ -19,7 +19,7 @@ template<class SizeClassAllocator> struct SizeClassAllocator64LocalCache;
 // The template parameter Params is a class containing the actual parameters.
 //
 // Space: a portion of address space of kSpaceSize bytes starting at SpaceBeg.
-// If kSpaceBeg is ~0 then SpaceBeg is chosen dynamically my mmap.
+// If kSpaceBeg is ~0 then SpaceBeg is chosen dynamically by mmap.
 // Otherwise SpaceBeg=kSpaceBeg (fixed address).
 // kSpaceSize is a power of two.
 // At the beginning the entire space is mprotect-ed, then small parts of it
@@ -144,6 +144,17 @@ class SizeClassAllocator64 {
     CompactPtrT *free_array = GetFreeArray(region_beg);
 
     BlockingMutexLock l(&region->mutex);
+#if SANITIZER_WINDOWS
+    /* On Windows unmapping of memory during __sanitizer_purge_allocator is
+    explicit and immediate, so unmapped regions must be explicitly mapped back
+    in when they are accessed again. */
+    if (region->rtoi.last_released_bytes > 0) {
+      MmapFixedOrDie(region_beg, region->mapped_user,
+                                      "SizeClassAllocator: region data");
+      region->rtoi.n_freed_at_last_release = 0;
+      region->rtoi.last_released_bytes = 0;
+    }
+#endif
     if (UNLIKELY(region->num_freed_chunks < n_chunks)) {
       if (UNLIKELY(!PopulateFreeArray(stat, class_id, region,
                                       n_chunks - region->num_freed_chunks)))

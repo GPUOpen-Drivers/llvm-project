@@ -3349,7 +3349,7 @@ Target::StopHookCommandLine::HandleStop(ExecutionContext &exc_ctx,
   // Force Async:
   bool old_async = debugger.GetAsyncExecution();
   debugger.SetAsyncExecution(true);
-  debugger.GetCommandInterpreter().HandleCommands(GetCommands(), &exc_ctx,
+  debugger.GetCommandInterpreter().HandleCommands(GetCommands(), exc_ctx,
                                                   options, result);
   debugger.SetAsyncExecution(old_async);
   lldb::ReturnStatus status = result.GetStatus();
@@ -4305,6 +4305,17 @@ void TargetProperties::DisableSTDIOValueChangedCallback() {
     m_launch_info.GetFlags().Set(lldb::eLaunchFlagDisableSTDIO);
   else
     m_launch_info.GetFlags().Clear(lldb::eLaunchFlagDisableSTDIO);
+}
+
+bool TargetProperties::GetDebugUtilityExpression() const {
+  const uint32_t idx = ePropertyDebugUtilityExpression;
+  return m_collection_sp->GetPropertyAtIndexAsBoolean(
+      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+}
+
+void TargetProperties::SetDebugUtilityExpression(bool debug) {
+  const uint32_t idx = ePropertyDebugUtilityExpression;
+  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, debug);
 }
 
 // Target::TargetEventData

@@ -2804,8 +2804,8 @@ static bool isI24(SDValue Op, SelectionDAG &DAG) {
     AMDGPUTargetLowering::numBitsSigned(Op, DAG) < 24;
 }
 
-static SDValue simplifyI24(SDNode *Node24,
-                           TargetLowering::DAGCombinerInfo &DCI) {
+static SDValue simplifyMul24(SDNode *Node24,
+                             TargetLowering::DAGCombinerInfo &DCI) {
   SelectionDAG &DAG = DCI.DAG;
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   bool IsIntrin = Node24->getOpcode() == ISD::INTRINSIC_WO_CHAIN;
@@ -3025,7 +3025,7 @@ SDValue AMDGPUTargetLowering::performIntrinsicWOChainCombine(
   switch (IID) {
   case Intrinsic::amdgcn_mul_i24:
   case Intrinsic::amdgcn_mul_u24:
-    return simplifyI24(N, DCI);
+    return simplifyMul24(N, DCI);
   case Intrinsic::amdgcn_fract:
   case Intrinsic::amdgcn_rsq:
   case Intrinsic::amdgcn_rcp_legacy:
@@ -3326,6 +3326,13 @@ static SDValue getMul24(SelectionDAG &DAG, const SDLoc &SL,
 SDValue AMDGPUTargetLowering::performMulCombine(SDNode *N,
                                                 DAGCombinerInfo &DCI) const {
   EVT VT = N->getValueType(0);
+
+  // Don't generate 24-bit multiplies on values that are in SGPRs, since
+  // we only have a 32-bit scalar multiply (avoid values being moved to VGPRs
+  // unnecessarily). isDivergent() is used as an approximation of whether the
+  // value is in an SGPR.
+  if (!N->isDivergent())
+    return SDValue();
 
   unsigned Size = VT.getSizeInBits();
   if (VT.isVector() || Size > 64)
@@ -4000,11 +4007,8 @@ SDValue AMDGPUTargetLowering::PerformDAGCombine(SDNode *N,
   case AMDGPUISD::MUL_I24:
   case AMDGPUISD::MUL_U24:
   case AMDGPUISD::MULHI_I24:
-  case AMDGPUISD::MULHI_U24: {
-    if (SDValue V = simplifyI24(N, DCI))
-      return V;
-    return SDValue();
-  }
+  case AMDGPUISD::MULHI_U24:
+    return simplifyMul24(N, DCI);
   case ISD::SELECT:
     return performSelectCombine(N, DCI);
   case ISD::FNEG:
@@ -4366,6 +4370,8 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(BUFFER_ATOMIC_CMPSWAP)
   NODE_NAME_CASE(BUFFER_ATOMIC_CSUB)
   NODE_NAME_CASE(BUFFER_ATOMIC_FADD)
+  NODE_NAME_CASE(BUFFER_ATOMIC_FMIN)
+  NODE_NAME_CASE(BUFFER_ATOMIC_FMAX)
 
   case AMDGPUISD::LAST_AMDGPU_ISD_NUMBER: break;
   }

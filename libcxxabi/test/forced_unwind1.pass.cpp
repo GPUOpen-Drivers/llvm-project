@@ -15,7 +15,13 @@
 #include <string.h>
 #include <unwind.h>
 #include <tuple>
+#include <__cxxabi_config.h>
 
+#if defined(_LIBCXXABI_ARM_EHABI)
+int main(int, char**) {
+  return 0;
+}
+#else
 static int bits = 0;
 
 struct C {
@@ -71,7 +77,8 @@ static void test() {
   }
 }
 
-int main() {
+int main(int, char**) {
   test();
   return bits != 15;
 }
+#endif

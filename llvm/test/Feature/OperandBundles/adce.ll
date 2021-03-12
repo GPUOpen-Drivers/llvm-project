@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: opt -S -adce < %s | FileCheck %s
 
 ; While it is normally okay to DCE out calls to @readonly_function and

@@ -560,10 +560,10 @@ func @init_tensor_reshape_expansion(%arg0 : index) -> tensor<2x3x5x4x?x7xf32> {
      tensor<6x5x?xf32> into tensor<2x3x5x4x?x7xf32>
   return %1 : tensor<2x3x5x4x?x7xf32>
 }
+//      CHECK: #[[MAP:.+]] = affine_map<()[s0] -> (s0 floordiv 28)>
 //      CHECK: func @init_tensor_reshape_expansion
 // CHECK-SAME:   %[[ARG0:.+]]: index
-//      CHECK:   %[[C28:.+]] = constant 28 : index
-//      CHECK:   %[[T0:.+]] = divi_unsigned %[[ARG0]], %[[C28]]
+//      CHECK:   %[[T0:.+]] = affine.apply #[[MAP]]()[%[[ARG0]]]
 //      CHECK:   %[[T1:.+]] = linalg.init_tensor [2, 3, 5, 4, %[[T0]], 7]
 //      CHECK:   return %[[T1]]
 
@@ -578,10 +578,10 @@ func @init_tensor_reshape_collapse(%arg0 : index) -> tensor<6x5x?xf32> {
     tensor<2x3x5x4x?x7xf32> into tensor<6x5x?xf32>
   return %1 : tensor<6x5x?xf32>
 }
+//      CHECK: #[[MAP:.+]] = affine_map<()[s0] -> (s0 * 28)>
 //      CHECK: func @init_tensor_reshape_collapse
 // CHECK-SAME:   %[[ARG0:.+]]: index
-//      CHECK:   %[[C28:.+]] = constant 28 : index
-//      CHECK:   %[[T0:.+]] = muli %[[ARG0]], %[[C28]]
+//      CHECK:   %[[T0:.+]] = affine.apply #[[MAP]]()[%[[ARG0]]]
 //      CHECK:   %[[T1:.+]] = linalg.init_tensor [6, 5, %[[T0]]]
 //      CHECK:   return %[[T1]]
 
@@ -696,9 +696,13 @@ func @fold_init_tensor_with_subtensor
 //   CHECK-NOT:   linalg.fill
 //   CHECK-NOT:   linalg.matmul
 //   CHECK-NOT:   linalg.generic
+//   CHECK-NOT:   linalg.pad_tensor
 //       CHECK:   return
-func @dead_linalg_tensor(%arg0 : tensor<7x7xi32>, %arg1 : tensor<7x7xf32>) {
+func @dead_linalg_tensor(%arg0 : tensor<7x7xi32>, %arg1 : tensor<7x7xf32>,
+                         %arg2: tensor<?x?xf32>, %high : index) {
   %c0_i32 = constant 0 : i32
+  %c0 = constant 0 : index
+  %cst = constant 0.000000e+00 : f32
   %0 = linalg.fill(%arg0, %c0_i32) : tensor<7x7xi32>, i32 -> tensor<7x7xi32>
   %1 = linalg.matmul ins(%arg1, %arg1: tensor<7x7xf32>, tensor<7x7xf32>)
                      outs(%arg1: tensor<7x7xf32>) -> tensor<7x7xf32>
@@ -706,5 +710,60 @@ func @dead_linalg_tensor(%arg0 : tensor<7x7xi32>, %arg1 : tensor<7x7xf32>) {
   ^bb(%3: i32) :
     linalg.yield %3 : i32
   } -> tensor<7x7xi32>
+  %3 = linalg.pad_tensor %arg2 low[%c0, %c0] high[%high, %high] {
+        ^bb0(%arg9: index, %arg10: index):  // no predecessors
+          linalg.yield %cst : f32
+  } : tensor<?x?xf32> to tensor<2x4xf32>
   return
 }
+
+// -----
+
+func @dim_reshape_expansion(%arg0 : tensor<6x5x?xf32>) -> (index, index, index)
+{
+  %c1 = constant 1 : index
+  %c3 = constant 3 : index
+  %c4 = constant 4 : index
+  %0 = linalg.tensor_reshape %arg0
+    [affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1)>,
+     affine_map<(d0, d1, d2, d3, d4, d5) -> (d2)>,
+     affine_map<(d0, d1, d2, d3, d4, d5) -> (d3, d4, d5)>] :
+     tensor<6x5x?xf32> into tensor<2x3x5x4x?x7xf32>
+  %1 = dim %0, %c1 : tensor<2x3x5x4x?x7xf32>
+  %2 = dim %0, %c3 : tensor<2x3x5x4x?x7xf32>
+  %3 = dim %0, %c4 : tensor<2x3x5x4x?x7xf32>
+  return %1, %2, %3 : index, index, index
+}
+//      CHECK: #[[MAP:.+]] = affine_map<()[s0] -> (s0 floordiv 28)>
+//      CHECK: func @dim_reshape_expansion
+// CHECK-SAME:   %[[ARG0:[a-zA-Z0-9_]+]]: tensor<6x5x?xf32>
+//  CHECK-DAG:   %[[C2:.+]] = constant 2 : index
+//  CHECK-DAG:   %[[C3:.+]] = constant 3 : index
+//  CHECK-DAG:   %[[C4:.+]] = constant 4 : index
+//      CHECK:   %[[D0:.+]] = dim %[[ARG0]], %[[C2]]
+//      CHECK:   %[[D1:.+]] = affine.apply #[[MAP]]()[%[[D0]]]
+//      CHECK:   return %[[C3]], %[[C4]], %[[D1]]
+
+// -----
+
+func @dim_reshape_collapse(%arg0 : tensor<2x3x5x4x?x7xf32>) -> (index, index)
+{
+  %c1 = constant 1 : index
+  %c2 = constant 2 : index
+  %0 = linalg.tensor_reshape %arg0
+    [affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1)>,
+     affine_map<(d0, d1, d2, d3, d4, d5) -> (d2)>,
+     affine_map<(d0, d1, d2, d3, d4, d5) -> (d3, d4, d5)>] :
+     tensor<2x3x5x4x?x7xf32> into tensor<6x5x?xf32>
+  %1 = dim %0, %c1 : tensor<6x5x?xf32>
+  %2 = dim %0, %c2 : tensor<6x5x?xf32>
+  return %1, %2 : index, index
+}
+//      CHECK: #[[MAP:.+]] = affine_map<()[s0] -> (s0 * 28)>
+//      CHECK: func @dim_reshape_collapse
+// CHECK-SAME:   %[[ARG0:[a-zA-Z0-9_]+]]: tensor<2x3x5x4x?x7xf32>
+//  CHECK-DAG:   %[[C4:.+]] = constant 4 : index
+//  CHECK-DAG:   %[[C5:.+]] = constant 5 : index
+//      CHECK:   %[[D0:.+]] = dim %[[ARG0]], %[[C4]]
+//      CHECK:   %[[D1:.+]] = affine.apply #[[MAP]]()[%[[D0]]]
+//      CHECK:   return %[[C5]], %[[D1]]

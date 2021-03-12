@@ -1048,8 +1048,8 @@ def NoDebugDocs : Documentation {
   let Category = DocCatVariable;
   let Content = [{
 The ``nodebug`` attribute allows you to suppress debugging information for a
-function or method, or for a variable that is not a parameter or a non-static
-data member.
+function or method, for a variable that is not a parameter or a non-static
+data member, or for a typedef or using declaration.
   }];
 }
 
@@ -4484,6 +4484,47 @@ attribute is either ``swift_private`` or ``not_swift_private`` to indicate
 whether the function/method is private to the current framework, and the second
 argument is the index of the completion handler parameter.
   }];
+}
+
+def SwiftAsyncErrorDocs : Documentation {
+  let Category = SwiftDocs;
+  let Heading = "swift_async_error";
+  let Content = [{
+The ``swift_async_error`` attribute specifies how an error state will be
+represented in a swift async method. It's a bit analogous to the ``swift_error``
+attribute for the generated async method. The ``swift_async_error`` attribute
+can indicate a variety of different ways of representing an error.
+
+- ``__attribute__((swift_async_error(zero_argument, N)))``, specifies that the
+  async method is considered to have failed if the Nth argument to the
+  completion handler is zero.
+
+- ``__attribute__((swift_async_error(nonzero_argument, N)))``, specifies that
+  the async method is considered to have failed if the Nth argument to the
+  completion handler is non-zero.
+
+- ``__attribute__((swift_async_error(nonnull_error)))``, specifies that the
+  async method is considered to have failed if the ``NSError *`` argument to the
+  completion handler is non-null.
+
+- ``__attribute__((swift_async_error(none)))``, specifies that the async method
+  cannot fail.
+
+
+For instance:
+
+.. code-block:: objc
+
+  @interface MyClass : NSObject
+  -(void)asyncMethod:(void (^)(char, int, float))handler
+      __attribute__((swift_async(swift_private, 1)))
+      __attribute__((swift_async_error(zero_argument, 2)));
+  @end
+
+Here, the ``swift_async`` attribute specifies that ``handler`` is the completion
+handler for this method, and the ``swift_async_error`` attribute specifies that
+the ``int`` parameter is the one that represents the error.
+}];
 }
 
 def SuppressDocs : Documentation {
