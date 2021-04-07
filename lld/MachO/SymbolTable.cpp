@@ -37,9 +37,9 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef name) {
   return {sym, true};
 }
 
-Symbol *SymbolTable::addDefined(StringRef name, InputFile *file,
-                                InputSection *isec, uint32_t value,
-                                bool isWeakDef, bool isPrivateExtern) {
+Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
+                                 InputSection *isec, uint32_t value,
+                                 bool isWeakDef, bool isPrivateExtern) {
   Symbol *s;
   bool wasInserted;
   bool overridesWeakDef = false;
@@ -52,7 +52,7 @@ Symbol *SymbolTable::addDefined(StringRef name, InputFile *file,
         // If one of them isn't private extern, the merged symbol isn't.
         if (defined->isWeakDef())
           defined->privateExtern &= isPrivateExtern;
-        return s;
+        return defined;
       }
       if (!defined->isWeakDef()) {
         error("duplicate symbol: " + name + "\n>>> defined in " +
@@ -70,7 +70,7 @@ Symbol *SymbolTable::addDefined(StringRef name, InputFile *file,
       replaceSymbol<Defined>(s, name, file, isec, value, isWeakDef,
                              /*isExternal=*/true, isPrivateExtern);
   defined->overridesWeakDef = overridesWeakDef;
-  return s;
+  return defined;
 }
 
 Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
@@ -79,7 +79,7 @@ Symbol *SymbolTable::addUndefined(StringRef name, InputFile *file,
   bool wasInserted;
   std::tie(s, wasInserted) = insert(name);
 
-  auto refState = isWeakRef ? RefState::Weak : RefState::Strong;
+  RefState refState = isWeakRef ? RefState::Weak : RefState::Strong;
 
   if (wasInserted)
     replaceSymbol<Undefined>(s, name, file, refState);
@@ -119,7 +119,7 @@ Symbol *SymbolTable::addDylib(StringRef name, DylibFile *file, bool isWeakDef,
   bool wasInserted;
   std::tie(s, wasInserted) = insert(name);
 
-  auto refState = RefState::Unreferenced;
+  RefState refState = RefState::Unreferenced;
   if (!wasInserted) {
     if (auto *defined = dyn_cast<Defined>(s)) {
       if (isWeakDef && !defined->isWeakDef())
@@ -131,11 +131,18 @@ Symbol *SymbolTable::addDylib(StringRef name, DylibFile *file, bool isWeakDef,
     }
   }
 
+  bool isDynamicLookup = file == nullptr;
   if (wasInserted || isa<Undefined>(s) ||
-      (isa<DylibSymbol>(s) && !isWeakDef && s->isWeakDef()))
+      (isa<DylibSymbol>(s) &&
+       ((!isWeakDef && s->isWeakDef()) ||
+        (!isDynamicLookup && cast<DylibSymbol>(s)->isDynamicLookup()))))
     replaceSymbol<DylibSymbol>(s, file, name, isWeakDef, refState, isTlv);
 
   return s;
+}
+
+Symbol *SymbolTable::addDynamicLookup(StringRef name) {
+  return addDylib(name, /*file=*/nullptr, /*isWeakDef=*/false, /*isTlv=*/false);
 }
 
 Symbol *SymbolTable::addLazy(StringRef name, ArchiveFile *file,
@@ -151,38 +158,33 @@ Symbol *SymbolTable::addLazy(StringRef name, ArchiveFile *file,
   return s;
 }
 
-Symbol *SymbolTable::addDSOHandle(const MachHeaderSection *header) {
-  Symbol *s;
-  bool wasInserted;
-  std::tie(s, wasInserted) = insert(DSOHandle::name);
-  if (!wasInserted) {
-    // FIXME: Make every symbol (including absolute symbols) contain a
-    // reference to their originating file, then add that file name to this
-    // error message.
-    if (isa<Defined>(s))
-      error("found defined symbol with illegal name " + DSOHandle::name);
-  }
-  replaceSymbol<DSOHandle>(s, header);
+Defined *SymbolTable::addSynthetic(StringRef name, InputSection *isec,
+                                   uint32_t value, bool isPrivateExtern,
+                                   bool isLinkerInternal) {
+  Defined *s = addDefined(name, nullptr, isec, value, /*isWeakDef=*/false,
+                          isPrivateExtern);
+  s->linkerInternal = isLinkerInternal;
   return s;
 }
 
 void lld::macho::treatUndefinedSymbol(const Undefined &sym) {
-  std::string message = "undefined symbol: " + toString(sym);
-  std::string fileName = toString(sym.getFile());
-
-  if (!fileName.empty())
-    message += "\n>>> referenced by " + fileName;
+  auto message = [](const Undefined &sym) {
+    std::string message = "undefined symbol: " + toString(sym);
+    std::string fileName = toString(sym.getFile());
+    if (!fileName.empty())
+      message += "\n>>> referenced by " + fileName;
+    return message;
+  };
   switch (config->undefinedSymbolTreatment) {
-  case UndefinedSymbolTreatment::suppress:
-    break;
   case UndefinedSymbolTreatment::error:
-    error(message);
+    error(message(sym));
     break;
   case UndefinedSymbolTreatment::warning:
-    warn(message);
-    break;
+    warn(message(sym));
+    LLVM_FALLTHROUGH;
   case UndefinedSymbolTreatment::dynamic_lookup:
-    error("dynamic_lookup unimplemented for " + message);
+  case UndefinedSymbolTreatment::suppress:
+    symtab->addDynamicLookup(sym.getName());
     break;
   case UndefinedSymbolTreatment::unknown:
     llvm_unreachable("unknown -undefined TREATMENT");

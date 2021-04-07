@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: opt -S -bdce < %s | FileCheck %s
 
 target triple = "x86_64-unknown-linux-gnu"
@@ -16,5 +14,5 @@ define void @PR34211(i16* %p) {
 
 declare void @no_side_effects_so_dead(i16) #0
 
-attributes #0 = { nounwind readnone }
+attributes #0 = { nounwind readnone willreturn }
 

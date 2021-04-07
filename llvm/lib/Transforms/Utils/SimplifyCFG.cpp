@@ -57,6 +57,7 @@
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/PseudoProbe.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/User.h"
@@ -420,8 +421,8 @@ static bool dominatesMergePoint(Value *V, BasicBlock *BB,
 
   // Okay, we can only really hoist these out if their operands do
   // not take us over the cost threshold.
-  for (User::op_iterator i = I->op_begin(), e = I->op_end(); i != e; ++i)
-    if (!dominatesMergePoint(*i, BB, AggressiveInsts, Cost, Budget, TTI,
+  for (Use &Op : I->operands())
+    if (!dominatesMergePoint(Op, BB, AggressiveInsts, Cost, Budget, TTI,
                              Depth + 1))
       return false;
   // Okay, it's safe to do this!  Remember this instruction.
@@ -1630,6 +1631,11 @@ static bool canSinkInstructions(
         I->getType()->isTokenTy())
       return false;
 
+    // Do not try to sink an instruction in an infinite loop - it can cause
+    // this algorithm to infinite loop.
+    if (I->getParent()->getSingleSuccessor() == I->getParent())
+      return false;
+
     // Conservatively return false if I is an inline-asm instruction. Sinking
     // and merging inline-asm instructions can potentially create arguments
     // that cannot satisfy the inline-asm constraints.
@@ -1716,13 +1722,13 @@ static bool canSinkInstructions(
   return true;
 }
 
-// Assuming canSinkLastInstruction(Blocks) has returned true, sink the last
+// Assuming canSinkInstructions(Blocks) has returned true, sink the last
 // instruction of every block in Blocks to their common successor, commoning
 // into one instruction.
 static bool sinkLastInstruction(ArrayRef<BasicBlock*> Blocks) {
   auto *BBEnd = Blocks[0]->getTerminator()->getSuccessor(0);
 
-  // canSinkLastInstruction returning true guarantees that every block has at
+  // canSinkInstructions returning true guarantees that every block has at
   // least one non-terminator instruction.
   SmallVector<Instruction*,4> Insts;
   for (auto *BB : Blocks) {
@@ -1735,9 +1741,9 @@ static bool sinkLastInstruction(ArrayRef<BasicBlock*> Blocks) {
   }
 
   // The only checking we need to do now is that all users of all instructions
-  // are the same PHI node. canSinkLastInstruction should have checked this but
-  // it is slightly over-aggressive - it gets confused by commutative instructions
-  // so double-check it here.
+  // are the same PHI node. canSinkInstructions should have checked this but
+  // it is slightly over-aggressive - it gets confused by commutative
+  // instructions so double-check it here.
   Instruction *I0 = Insts.front();
   if (!I0->user_empty()) {
     auto *PNUse = dyn_cast<PHINode>(*I0->user_begin());
@@ -1748,11 +1754,11 @@ static bool sinkLastInstruction(ArrayRef<BasicBlock*> Blocks) {
       return false;
   }
 
-  // We don't need to do any more checking here; canSinkLastInstruction should
+  // We don't need to do any more checking here; canSinkInstructions should
   // have done it all for us.
   SmallVector<Value*, 4> NewOperands;
   for (unsigned O = 0, E = I0->getNumOperands(); O != E; ++O) {
-    // This check is different to that in canSinkLastInstruction. There, we
+    // This check is different to that in canSinkInstructions. There, we
     // cared about the global view once simplifycfg (and instcombine) have
     // completed - it takes into account PHIs that become trivially
     // simplifiable.  However here we need a more local view; if an operand
@@ -2252,7 +2258,6 @@ bool SimplifyCFGOpt::SpeculativelyExecuteBB(BranchInst *BI, BasicBlock *ThenBB,
     // probability for ThenBB, which is fine since the optimization here takes
     // place regardless of the branch probability.
     if (isa<PseudoProbeInst>(I)) {
-      SpeculatedDbgIntrinsics.push_back(I);
       continue;
     }
 
@@ -2337,6 +2342,12 @@ bool SimplifyCFGOpt::SpeculativelyExecuteBB(BranchInst *BI, BasicBlock *ThenBB,
       I.setDebugLoc(DebugLoc());
     I.dropUnknownNonDebugMetadata();
   }
+
+  // A hoisted conditional probe should be treated as dangling so that it will
+  // not be over-counted when the samples collected on the non-conditional path
+  // are counted towards the conditional path. We leave it for the counts
+  // inference algorithm to figure out a proper count for a danglng probe.
+  moveAndDanglePseudoProbes(ThenBB, BI);
 
   // Hoist the instructions.
   BB->getInstList().splice(BI->getIterator(), ThenBB->getInstList(),
@@ -2598,13 +2609,17 @@ static bool FoldTwoEntryPHINode(PHINode *PN, const TargetTransformInfo &TTI,
     return match(V0, m_Not(m_Value())) && match(V1, Invertible);
   };
 
-  // Don't fold i1 branches on PHIs which contain binary operators, unless one
-  // of the incoming values is an 'not' and another one is freely invertible.
+  // Don't fold i1 branches on PHIs which contain binary operators or
+  // select form of or/ands, unless one of the incoming values is an 'not' and
+  // another one is freely invertible.
   // These can often be turned into switches and other things.
+  auto IsBinOpOrAnd = [](Value *V) {
+    return match(
+        V, m_CombineOr(m_BinOp(), m_CombineOr(m_LogicalAnd(), m_LogicalOr())));
+  };
   if (PN->getType()->isIntegerTy(1) &&
-      (isa<BinaryOperator>(PN->getIncomingValue(0)) ||
-       isa<BinaryOperator>(PN->getIncomingValue(1)) ||
-       isa<BinaryOperator>(IfCond)) &&
+      (IsBinOpOrAnd(PN->getIncomingValue(0)) ||
+       IsBinOpOrAnd(PN->getIncomingValue(1)) || IsBinOpOrAnd(IfCond)) &&
       !CanHoistNotFromBothValues(PN->getIncomingValue(0),
                                  PN->getIncomingValue(1)))
     return Changed;
@@ -4160,9 +4175,8 @@ bool SimplifyCFGOpt::simplifyCommonResume(ResumeInst *RI) {
     while (PhiLPInst->getBasicBlockIndex(TrivialBB) != -1)
       BB->removePredecessor(TrivialBB, true);
 
-    for (pred_iterator PI = pred_begin(TrivialBB), PE = pred_end(TrivialBB);
-         PI != PE;) {
-      BasicBlock *Pred = *PI++;
+    for (BasicBlock *Pred :
+         llvm::make_early_inc_range(predecessors(TrivialBB))) {
       removeUnwindEdge(Pred, DTU);
       ++NumInvokes;
     }
@@ -4202,8 +4216,7 @@ bool SimplifyCFGOpt::simplifySingleResume(ResumeInst *RI) {
     return false;
 
   // Turn all invokes that unwind here into calls and delete the basic block.
-  for (pred_iterator PI = pred_begin(BB), PE = pred_end(BB); PI != PE;) {
-    BasicBlock *Pred = *PI++;
+  for (BasicBlock *Pred : llvm::make_early_inc_range(predecessors(BB))) {
     removeUnwindEdge(Pred, DTU);
     ++NumInvokes;
   }
@@ -4325,9 +4338,8 @@ static bool removeEmptyCleanup(CleanupReturnInst *RI, DomTreeUpdater *DTU) {
 
   std::vector<DominatorTree::UpdateType> Updates;
 
-  for (pred_iterator PI = pred_begin(BB), PE = pred_end(BB); PI != PE;) {
-    // The iterator must be updated here because we are removing this pred.
-    BasicBlock *PredBB = *PI++;
+  // We use make_early_inc_range here because we may remove some predecessors.
+  for (BasicBlock *PredBB : llvm::make_early_inc_range(predecessors(BB))) {
     if (UnwindDest == nullptr) {
       if (DTU)
         DTU->applyUpdates(Updates);
@@ -6225,7 +6237,7 @@ bool SimplifyCFGOpt::simplifyUncondBranch(BranchInst *BI,
       Options.NeedCanonicalLoop &&
       (!LoopHeaders.empty() && BB->hasNPredecessorsOrMore(2) &&
        (is_contained(LoopHeaders, BB) || is_contained(LoopHeaders, Succ)));
-  BasicBlock::iterator I = BB->getFirstNonPHIOrDbg()->getIterator();
+  BasicBlock::iterator I = BB->getFirstNonPHIOrDbg(true)->getIterator();
   if (I->isTerminator() && BB != &BB->getParent()->getEntryBlock() &&
       !NeedCanonicalLoop && TryToSimplifyUncondBranchFromEmptyBlock(BB, DTU))
     return true;
@@ -6286,8 +6298,8 @@ bool SimplifyCFGOpt::simplifyCondBranch(BranchInst *BI, IRBuilder<> &Builder) {
         return requestResimplify();
 
     // This block must be empty, except for the setcond inst, if it exists.
-    // Ignore dbg intrinsics.
-    auto I = BB->instructionsWithoutDebug().begin();
+    // Ignore dbg and pseudo intrinsics.
+    auto I = BB->instructionsWithoutDebug(true).begin();
     if (&*I == BI) {
       if (FoldValueComparisonIntoPredecessors(BI, Builder))
         return requestResimplify();

@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/IR/AffineValueMap.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -64,7 +65,7 @@ remainsLegalAfterInline(Value value, Region *src, Region *dest,
   // op won't be top-level anymore after inlining.
   Attribute operandCst;
   return matchPattern(value.getDefiningOp(), m_Constant(&operandCst)) ||
-         value.getDefiningOp<DimOp>();
+         value.getDefiningOp<memref::DimOp>();
 }
 
 /// Checks if all values known to be legal affine dimensions or symbols in `src`
@@ -295,7 +296,7 @@ bool mlir::isValidDim(Value value, Region *region) {
     return applyOp.isValidDim(region);
   // The dim op is okay if its operand memref/tensor is defined at the top
   // level.
-  if (auto dimOp = dyn_cast<DimOp>(op))
+  if (auto dimOp = dyn_cast<memref::DimOp>(op))
     return isTopLevelValue(dimOp.memrefOrTensor());
   return false;
 }
@@ -317,9 +318,8 @@ static bool isMemRefSizeValidSymbol(AnyMemRefDefOp memrefDefOp, unsigned index,
 }
 
 /// Returns true if the result of the dim op is a valid symbol for `region`.
-static bool isDimOpValidSymbol(DimOp dimOp, Region *region) {
-  // The dim op is okay if its operand memref/tensor is defined at the top
-  // level.
+static bool isDimOpValidSymbol(memref::DimOp dimOp, Region *region) {
+  // The dim op is okay if its operand memref is defined at the top level.
   if (isTopLevelValue(dimOp.memrefOrTensor()))
     return true;
 
@@ -328,14 +328,14 @@ static bool isDimOpValidSymbol(DimOp dimOp, Region *region) {
   if (dimOp.memrefOrTensor().isa<BlockArgument>())
     return false;
 
-  // The dim op is also okay if its operand memref/tensor is a view/subview
-  // whose corresponding size is a valid symbol.
+  // The dim op is also okay if its operand memref is a view/subview whose
+  // corresponding size is a valid symbol.
   Optional<int64_t> index = dimOp.getConstantIndex();
   assert(index.hasValue() &&
          "expect only `dim` operations with a constant index");
   int64_t i = index.getValue();
   return TypeSwitch<Operation *, bool>(dimOp.memrefOrTensor().getDefiningOp())
-      .Case<ViewOp, SubViewOp, AllocOp>(
+      .Case<memref::ViewOp, memref::SubViewOp, memref::AllocOp>(
           [&](auto op) { return isMemRefSizeValidSymbol(op, i, region); })
       .Default([](Operation *) { return false; });
 }
@@ -404,7 +404,7 @@ bool mlir::isValidSymbol(Value value, Region *region) {
     return applyOp.isValidSymbol(region);
 
   // Dim op results could be valid symbols at any level.
-  if (auto dimOp = dyn_cast<DimOp>(defOp))
+  if (auto dimOp = dyn_cast<memref::DimOp>(defOp))
     return isDimOpValidSymbol(dimOp, region);
 
   // Check for values dominating `region`'s parent op.
@@ -506,7 +506,7 @@ static void print(OpAsmPrinter &p, AffineApplyOp op) {
   p << AffineApplyOp::getOperationName() << " " << op.mapAttr();
   printDimAndSymbolList(op.operand_begin(), op.operand_end(),
                         op.getAffineMap().getNumDims(), p);
-  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{"map"});
+  p.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"map"});
 }
 
 static LogicalResult verify(AffineApplyOp op) {
@@ -915,12 +915,12 @@ void AffineApplyOp::getCanonicalizationPatterns(
 //===----------------------------------------------------------------------===//
 
 /// This is a common class used for patterns of the form
-/// "someop(memrefcast) -> someop".  It folds the source of any memref_cast
+/// "someop(memrefcast) -> someop".  It folds the source of any memref.cast
 /// into the root operation directly.
 static LogicalResult foldMemRefCast(Operation *op) {
   bool folded = false;
   for (OpOperand &operand : op->getOpOperands()) {
-    auto cast = operand.get().getDefiningOp<MemRefCastOp>();
+    auto cast = operand.get().getDefiningOp<memref::CastOp>();
     if (cast && !cast.getOperand().getType().isa<UnrankedMemRefType>()) {
       operand.set(cast.getOperand());
       folded = true;
@@ -1516,7 +1516,7 @@ static void print(OpAsmPrinter &p, AffineForOp op) {
 
   p.printRegion(op.region(),
                 /*printEntryBlockArgs=*/false, printBlockTerminators);
-  p.printOptionalAttrDict(op.getAttrs(),
+  p.printOptionalAttrDict(op->getAttrs(),
                           /*elidedAttrs=*/{op.getLowerBoundAttrName(),
                                            op.getUpperBoundAttrName(),
                                            op.getStepAttrName()});
@@ -1969,7 +1969,7 @@ static void print(OpAsmPrinter &p, AffineIfOp op) {
   }
 
   // Print the attribute list.
-  p.printOptionalAttrDict(op.getAttrs(),
+  p.printOptionalAttrDict(op->getAttrs(),
                           /*elidedAttrs=*/op.getConditionAttrName());
 }
 
@@ -2100,7 +2100,8 @@ static void print(OpAsmPrinter &p, AffineLoadOp op) {
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()))
     p.printAffineMapOfSSAIds(mapAttr, op.getMapOperands());
   p << ']';
-  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{op.getMapAttrName()});
+  p.printOptionalAttrDict(op->getAttrs(),
+                          /*elidedAttrs=*/{op.getMapAttrName()});
   p << " : " << op.getMemRefType();
 }
 
@@ -2216,7 +2217,8 @@ static void print(OpAsmPrinter &p, AffineStoreOp op) {
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()))
     p.printAffineMapOfSSAIds(mapAttr, op.getMapOperands());
   p << ']';
-  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{op.getMapAttrName()});
+  p.printOptionalAttrDict(op->getAttrs(),
+                          /*elidedAttrs=*/{op.getMapAttrName()});
   p << " : " << op.getMemRefType();
 }
 
@@ -2252,7 +2254,8 @@ LogicalResult AffineStoreOp::fold(ArrayRef<Attribute> cstOperands,
 // AffineMinMaxOpBase
 //===----------------------------------------------------------------------===//
 
-template <typename T> static LogicalResult verifyAffineMinMaxOp(T op) {
+template <typename T>
+static LogicalResult verifyAffineMinMaxOp(T op) {
   // Verify that operand count matches affine map dimension and symbol count.
   if (op.getNumOperands() != op.map().getNumDims() + op.map().getNumSymbols())
     return op.emitOpError(
@@ -2260,7 +2263,8 @@ template <typename T> static LogicalResult verifyAffineMinMaxOp(T op) {
   return success();
 }
 
-template <typename T> static void printAffineMinMaxOp(OpAsmPrinter &p, T op) {
+template <typename T>
+static void printAffineMinMaxOp(OpAsmPrinter &p, T op) {
   p << op.getOperationName() << ' ' << op->getAttr(T::getMapAttrName());
   auto operands = op.getOperands();
   unsigned numDims = op.map().getNumDims();
@@ -2268,7 +2272,7 @@ template <typename T> static void printAffineMinMaxOp(OpAsmPrinter &p, T op) {
 
   if (operands.size() != numDims)
     p << '[' << operands.drop_front(numDims) << ']';
-  p.printOptionalAttrDict(op.getAttrs(),
+  p.printOptionalAttrDict(op->getAttrs(),
                           /*elidedAttrs=*/{T::getMapAttrName()});
 }
 
@@ -2422,7 +2426,7 @@ static void print(OpAsmPrinter &p, AffinePrefetchOp op) {
     << "locality<" << op.localityHint() << ">, "
     << (op.isDataCache() ? "data" : "instr");
   p.printOptionalAttrDict(
-      op.getAttrs(),
+      op->getAttrs(),
       /*elidedAttrs=*/{op.getMapAttrName(), op.getLocalityHintAttrName(),
                        op.getIsDataCacheAttrName(), op.getIsWriteAttrName()});
   p << " : " << op.getMemRefType();
@@ -2738,7 +2742,7 @@ static void print(OpAsmPrinter &p, AffineParallelOp op) {
   p.printRegion(op.region(), /*printEntryBlockArgs=*/false,
                 /*printBlockTerminators=*/op.getNumResults());
   p.printOptionalAttrDict(
-      op.getAttrs(),
+      op->getAttrs(),
       /*elidedAttrs=*/{AffineParallelOp::getReductionsAttrName(),
                        AffineParallelOp::getLowerBoundsMapAttrName(),
                        AffineParallelOp::getUpperBoundsMapAttrName(),
@@ -2938,7 +2942,8 @@ static void print(OpAsmPrinter &p, AffineVectorLoadOp op) {
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()))
     p.printAffineMapOfSSAIds(mapAttr, op.getMapOperands());
   p << ']';
-  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{op.getMapAttrName()});
+  p.printOptionalAttrDict(op->getAttrs(),
+                          /*elidedAttrs=*/{op.getMapAttrName()});
   p << " : " << op.getMemRefType() << ", " << op.getType();
 }
 
@@ -3026,7 +3031,8 @@ static void print(OpAsmPrinter &p, AffineVectorStoreOp op) {
           op->getAttrOfType<AffineMapAttr>(op.getMapAttrName()))
     p.printAffineMapOfSSAIds(mapAttr, op.getMapOperands());
   p << ']';
-  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{op.getMapAttrName()});
+  p.printOptionalAttrDict(op->getAttrs(),
+                          /*elidedAttrs=*/{op.getMapAttrName()});
   p << " : " << op.getMemRefType() << ", " << op.getValueToStore().getType();
 }
 

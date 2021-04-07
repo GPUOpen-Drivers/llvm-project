@@ -1842,10 +1842,11 @@ static Instruction *foldSelectGEP(GetElementPtrInst &GEP,
   // Note: using IRBuilder to create the constants for efficiency.
   SmallVector<Value *, 4> IndexC(GEP.indices());
   bool IsInBounds = GEP.isInBounds();
-  Value *NewTrueC = IsInBounds ? Builder.CreateInBoundsGEP(TrueC, IndexC)
-                               : Builder.CreateGEP(TrueC, IndexC);
-  Value *NewFalseC = IsInBounds ? Builder.CreateInBoundsGEP(FalseC, IndexC)
-                                : Builder.CreateGEP(FalseC, IndexC);
+  Type *Ty = GEP.getSourceElementType();
+  Value *NewTrueC = IsInBounds ? Builder.CreateInBoundsGEP(Ty, TrueC, IndexC)
+                               : Builder.CreateGEP(Ty, TrueC, IndexC);
+  Value *NewFalseC = IsInBounds ? Builder.CreateInBoundsGEP(Ty, FalseC, IndexC)
+                                : Builder.CreateGEP(Ty, FalseC, IndexC);
   return SelectInst::Create(Cond, NewTrueC, NewFalseC, "", nullptr, Sel);
 }
 
@@ -2172,24 +2173,15 @@ Instruction *InstCombinerImpl::visitGetElementPtrInst(GetElementPtrInst &GEP) {
           Matched = true;
       }
 
-      if (Matched) {
-        // Canonicalize (gep i8* X, -(ptrtoint Y))
-        // to (inttoptr (sub (ptrtoint X), (ptrtoint Y)))
-        // The GEP pattern is emitted by the SCEV expander for certain kinds of
-        // pointer arithmetic.
-        if (match(V, m_Neg(m_PtrToInt(m_Value())))) {
-          Operator *Index = cast<Operator>(V);
-          Value *PtrToInt = Builder.CreatePtrToInt(PtrOp, Index->getType());
-          Value *NewSub = Builder.CreateSub(PtrToInt, Index->getOperand(1));
-          return CastInst::Create(Instruction::IntToPtr, NewSub, GEPType);
-        }
-        // Canonicalize (gep i8* X, (ptrtoint Y)-(ptrtoint X))
-        // to (bitcast Y)
-        Value *Y;
-        if (match(V, m_Sub(m_PtrToInt(m_Value(Y)),
-                           m_PtrToInt(m_Specific(GEP.getOperand(0))))))
-          return CastInst::CreatePointerBitCastOrAddrSpaceCast(Y, GEPType);
-      }
+      // Canonicalize (gep i8* X, (ptrtoint Y)-(ptrtoint X)) to (bitcast Y), but
+      // only if both point to the same underlying object (otherwise provenance
+      // is not necessarily retained).
+      Value *Y;
+      Value *X = GEP.getOperand(0);
+      if (Matched &&
+          match(V, m_Sub(m_PtrToInt(m_Value(Y)), m_PtrToInt(m_Specific(X)))) &&
+          getUnderlyingObject(X) == getUnderlyingObject(Y))
+        return CastInst::CreatePointerBitCastOrAddrSpaceCast(Y, GEPType);
     }
   }
 
@@ -3577,37 +3569,44 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
   // here, but that computation has been sunk.
   SmallVector<DbgVariableIntrinsic *, 2> DbgUsers;
   findDbgUsers(DbgUsers, I);
-
-  // Update the arguments of a dbg.declare instruction, so that it
-  // does not point into a sunk instruction.
-  auto updateDbgDeclare = [&I](DbgVariableIntrinsic *DII) {
-    if (!isa<DbgDeclareInst>(DII))
-      return false;
-
-    if (isa<CastInst>(I))
-      DII->setOperand(
-          0, MetadataAsValue::get(I->getContext(),
-                                  ValueAsMetadata::get(I->getOperand(0))));
-    return true;
-  };
+  // Process the sinking DbgUsers in reverse order, as we only want to clone the
+  // last appearing debug intrinsic for each given variable.
+  SmallVector<DbgVariableIntrinsic *, 2> DbgUsersToSink;
+  for (DbgVariableIntrinsic *DVI : DbgUsers)
+    if (DVI->getParent() == SrcBlock)
+      DbgUsersToSink.push_back(DVI);
+  llvm::sort(DbgUsersToSink,
+             [](auto *A, auto *B) { return B->comesBefore(A); });
 
   SmallVector<DbgVariableIntrinsic *, 2> DIIClones;
-  for (auto User : DbgUsers) {
+  SmallSet<DebugVariable, 4> SunkVariables;
+  for (auto User : DbgUsersToSink) {
     // A dbg.declare instruction should not be cloned, since there can only be
     // one per variable fragment. It should be left in the original place
     // because the sunk instruction is not an alloca (otherwise we could not be
     // here).
-    if (User->getParent() != SrcBlock || updateDbgDeclare(User))
+    if (isa<DbgDeclareInst>(User))
+      continue;
+
+    DebugVariable DbgUserVariable =
+        DebugVariable(User->getVariable(), User->getExpression(),
+                      User->getDebugLoc()->getInlinedAt());
+
+    if (!SunkVariables.insert(DbgUserVariable).second)
       continue;
 
     DIIClones.emplace_back(cast<DbgVariableIntrinsic>(User->clone()));
+    if (isa<DbgDeclareInst>(User) && isa<CastInst>(I))
+      DIIClones.back()->replaceVariableLocationOp(I, I->getOperand(0));
     LLVM_DEBUG(dbgs() << "CLONE: " << *DIIClones.back() << '\n');
   }
 
   // Perform salvaging without the clones, then sink the clones.
   if (!DIIClones.empty()) {
     salvageDebugInfoForDbgValues(*I, DbgUsers);
-    for (auto &DIIClone : DIIClones) {
+    // The clones are in reverse order of original appearance, reverse again to
+    // maintain the original order.
+    for (auto &DIIClone : llvm::reverse(DIIClones)) {
       DIIClone->insertBefore(&*InsertPos);
       LLVM_DEBUG(dbgs() << "SINK: " << *DIIClone << '\n');
     }

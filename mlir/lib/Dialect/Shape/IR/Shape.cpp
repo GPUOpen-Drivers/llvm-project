@@ -250,7 +250,7 @@ static void print(OpAsmPrinter &p, AssumingOp op) {
   p.printRegion(op.doRegion(),
                 /*printEntryBlockArgs=*/false,
                 /*printBlockTerminators=*/yieldsResults);
-  p.printOptionalAttrDict(op.getAttrs());
+  p.printOptionalAttrDict(op->getAttrs());
 }
 
 namespace {
@@ -354,11 +354,14 @@ static LogicalResult verify(AssumingAllOp op) {
 //===----------------------------------------------------------------------===//
 
 OpFoldResult BroadcastOp::fold(ArrayRef<Attribute> operands) {
-  if (!operands[1])
-    return nullptr;
+  if (operands.size() == 1)
+    return shapes().front();
 
   // TODO: Support folding with more than 2 input shapes
   if (shapes().size() > 2)
+    return nullptr;
+
+  if (!operands[1])
     return nullptr;
 
   auto rhsShape = llvm::to_vector<6>(
@@ -384,11 +387,38 @@ OpFoldResult BroadcastOp::fold(ArrayRef<Attribute> operands) {
 }
 
 static LogicalResult verify(BroadcastOp op) {
-  // Ensure that AssumingAllOp contains at least one operand
-  if (op.getNumOperands() < 2)
-    return op.emitOpError("required at least 2 input shapes");
-
   return verifyShapeOrExtentTensorOp(op);
+}
+
+namespace {
+template <typename OpTy>
+struct RemoveDuplicateOperandsPattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const override {
+    // Find unique operands.
+    SmallVector<Value, 2> unique;
+    for (Value v : op.getOperands()) {
+      if (!llvm::is_contained(unique, v))
+        unique.push_back(v);
+    }
+
+    // Reduce op to equivalent with unique operands.
+    if (unique.size() < op.getNumOperands()) {
+      rewriter.replaceOpWithNewOp<OpTy>(op, op->getResultTypes(), unique,
+                                        op->getAttrs());
+      return success();
+    }
+
+    return failure();
+  }
+};
+} // namespace
+
+void BroadcastOp::getCanonicalizationPatterns(
+    OwningRewritePatternList &patterns, MLIRContext *context) {
+  patterns.insert<RemoveDuplicateOperandsPattern<BroadcastOp>>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -415,7 +445,7 @@ OpFoldResult ConcatOp::fold(ArrayRef<Attribute> operands) {
 
 static void print(OpAsmPrinter &p, ConstShapeOp &op) {
   p << "shape.const_shape ";
-  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{"shape"});
+  p.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"shape"});
   p << "[";
   interleaveComma(op.shape().getValues<int64_t>(), p,
                   [&](int64_t i) { p << i; });
@@ -629,15 +659,15 @@ OpFoldResult DivOp::fold(ArrayRef<Attribute> operands) {
 //===----------------------------------------------------------------------===//
 
 OpFoldResult ShapeEqOp::fold(ArrayRef<Attribute> operands) {
-  if (lhs() == rhs())
-    return BoolAttr::get(getContext(), true);
-  auto lhs = operands[0].dyn_cast_or_null<DenseIntElementsAttr>();
-  if (lhs == nullptr)
+  bool allSame = true;
+  if (!operands.empty() && !operands[0])
     return {};
-  auto rhs = operands[1].dyn_cast_or_null<DenseIntElementsAttr>();
-  if (rhs == nullptr)
-    return {};
-  return BoolAttr::get(getContext(), lhs == rhs);
+  for (Attribute operand : operands.drop_front(1)) {
+    if (!operand)
+      return {};
+    allSame = allSame && operand == operands[0];
+  }
+  return BoolAttr::get(getContext(), allSame);
 }
 
 //===----------------------------------------------------------------------===//
@@ -723,7 +753,7 @@ void print(OpAsmPrinter &p, FunctionLibraryOp op) {
   p << op.getOperationName() << ' ';
   p.printSymbolName(op.getName());
   p.printOptionalAttrDictWithKeyword(
-      op.getAttrs(), {SymbolTable::getSymbolAttrName(), "mapping"});
+      op->getAttrs(), {SymbolTable::getSymbolAttrName(), "mapping"});
   p.printRegion(op.getOperation()->getRegion(0), /*printEntryBlockArgs=*/false,
                 /*printBlockTerminators=*/false);
   p << " mapping ";
@@ -772,11 +802,18 @@ void GetExtentOp::build(OpBuilder &builder, OperationState &result, Value shape,
 // IsBroadcastableOp
 //===----------------------------------------------------------------------===//
 
-static LogicalResult verify(IsBroadcastableOp op) {
-  // Ensure that AssumingAllOp contains at least one operand
-  if (op.getNumOperands() < 2)
-    return op.emitOpError("required at least 2 input shapes");
-  return success();
+void IsBroadcastableOp::getCanonicalizationPatterns(
+    OwningRewritePatternList &patterns, MLIRContext *context) {
+  patterns.insert<RemoveDuplicateOperandsPattern<IsBroadcastableOp>>(context);
+}
+
+OpFoldResult IsBroadcastableOp::fold(ArrayRef<Attribute> operands) {
+  // Can always broadcast fewer than two shapes.
+  if (operands.size() < 2) {
+    return BoolAttr::get(getContext(), true);
+  }
+
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1100,7 +1137,7 @@ static void print(OpAsmPrinter &p, ReduceOp op) {
     << ") : " << op.shape().getType();
   p.printOptionalArrowTypeList(op.getResultTypes());
   p.printRegion(op.region());
-  p.printOptionalAttrDict(op.getAttrs());
+  p.printOptionalAttrDict(op->getAttrs());
 }
 
 #define GET_OP_CLASSES

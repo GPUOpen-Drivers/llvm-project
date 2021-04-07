@@ -60,17 +60,9 @@ struct BuiltinOpAsmDialectInterface : public OpAsmDialectInterface {
 } // end anonymous namespace.
 
 void BuiltinDialect::initialize() {
-  addTypes<ComplexType, BFloat16Type, Float16Type, Float32Type, Float64Type,
-           Float80Type, Float128Type, FunctionType, IndexType, IntegerType,
-           MemRefType, UnrankedMemRefType, NoneType, OpaqueType,
-           RankedTensorType, TupleType, UnrankedTensorType, VectorType>();
-  addAttributes<AffineMapAttr, ArrayAttr, DenseIntOrFPElementsAttr,
-                DenseStringElementsAttr, DictionaryAttr, FloatAttr,
-                SymbolRefAttr, IntegerAttr, IntegerSetAttr, OpaqueAttr,
-                OpaqueElementsAttr, SparseElementsAttr, StringAttr, TypeAttr,
-                UnitAttr>();
-  addAttributes<CallSiteLoc, FileLineColLoc, FusedLoc, NameLoc, OpaqueLoc,
-                UnknownLoc>();
+  registerTypes();
+  registerAttributes();
+  registerLocationAttributes();
   addOperations<
 #define GET_OP_LIST
 #include "mlir/IR/BuiltinOps.cpp.inc"
@@ -90,7 +82,7 @@ FuncOp FuncOp::create(Location location, StringRef name, FunctionType type,
   return cast<FuncOp>(Operation::create(state));
 }
 FuncOp FuncOp::create(Location location, StringRef name, FunctionType type,
-                      iterator_range<dialect_attr_iterator> attrs) {
+                      Operation::dialect_attr_range attrs) {
   SmallVector<NamedAttribute, 8> attrRef(attrs);
   return create(location, name, type, llvm::makeArrayRef(attrRef));
 }
@@ -162,9 +154,9 @@ static LogicalResult verify(FuncOp op) {
 void FuncOp::cloneInto(FuncOp dest, BlockAndValueMapping &mapper) {
   // Add the attributes of this function to dest.
   llvm::MapVector<Identifier, Attribute> newAttrs;
-  for (auto &attr : dest.getAttrs())
+  for (const auto &attr : dest->getAttrs())
     newAttrs.insert(attr);
-  for (auto &attr : getAttrs())
+  for (const auto &attr : (*this)->getAttrs())
     newAttrs.insert(attr);
   dest->setAttrs(DictionaryAttr::get(getContext(), newAttrs.takeVector()));
 
@@ -233,7 +225,7 @@ ModuleOp ModuleOp::create(Location loc, Optional<StringRef> name) {
 static LogicalResult verify(ModuleOp op) {
   // Check that none of the attributes are non-dialect attributes, except for
   // the symbol related attributes.
-  for (auto attr : op.getAttrs()) {
+  for (auto attr : op->getAttrs()) {
     if (!attr.first.strref().contains('.') &&
         !llvm::is_contained(
             ArrayRef<StringRef>{mlir::SymbolTable::getSymbolAttrName(),

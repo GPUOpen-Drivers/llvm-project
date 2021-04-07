@@ -114,6 +114,25 @@ public:
   ExportSection *exportSection;
 };
 
+class LCFunctionStarts : public LoadCommand {
+public:
+  explicit LCFunctionStarts(FunctionStartsSection *functionStarts)
+      : functionStarts(functionStarts) {}
+
+  uint32_t getSize() const override { return sizeof(linkedit_data_command); }
+
+  void writeTo(uint8_t *buf) const override {
+    auto *c = reinterpret_cast<linkedit_data_command *>(buf);
+    c->cmd = LC_FUNCTION_STARTS;
+    c->cmdsize = getSize();
+    c->dataoff = functionStarts->fileOff;
+    c->datasize = functionStarts->getFileSize();
+  }
+
+private:
+  FunctionStartsSection *functionStarts;
+};
+
 class LCDysymtab : public LoadCommand {
 public:
   LCDysymtab(SymtabSection *symtabSection,
@@ -170,7 +189,7 @@ public:
         seg->lastSection()->addr + seg->lastSection()->getSize() - c->vmaddr;
     c->nsects = seg->numNonHiddenSections();
 
-    for (OutputSection *osec : seg->getSections()) {
+    for (const OutputSection *osec : seg->getSections()) {
       if (!isZeroFill(osec->flags)) {
         assert(osec->fileOff >= seg->fileOff);
         c->filesize = std::max(
@@ -334,7 +353,8 @@ private:
 
 class LCBuildVersion : public LoadCommand {
 public:
-  LCBuildVersion(const PlatformInfo &platform) : platform(platform) {}
+  LCBuildVersion(PlatformKind platform, const PlatformInfo &platformInfo)
+      : platform(platform), platformInfo(platformInfo) {}
 
   const int ntools = 1;
 
@@ -346,13 +366,13 @@ public:
     auto *c = reinterpret_cast<build_version_command *>(buf);
     c->cmd = LC_BUILD_VERSION;
     c->cmdsize = getSize();
-    c->platform = static_cast<uint32_t>(platform.kind);
-    c->minos = ((platform.minimum.getMajor() << 020) |
-                (platform.minimum.getMinor().getValueOr(0) << 010) |
-                platform.minimum.getSubminor().getValueOr(0));
-    c->sdk = ((platform.sdk.getMajor() << 020) |
-              (platform.sdk.getMinor().getValueOr(0) << 010) |
-              platform.sdk.getSubminor().getValueOr(0));
+    c->platform = static_cast<uint32_t>(platform);
+    c->minos = ((platformInfo.minimum.getMajor() << 020) |
+                (platformInfo.minimum.getMinor().getValueOr(0) << 010) |
+                platformInfo.minimum.getSubminor().getValueOr(0));
+    c->sdk = ((platformInfo.sdk.getMajor() << 020) |
+              (platformInfo.sdk.getMinor().getValueOr(0) << 010) |
+              platformInfo.sdk.getSubminor().getValueOr(0));
     c->ntools = ntools;
     auto *t = reinterpret_cast<build_tool_version *>(&c[1]);
     t->tool = TOOL_LD;
@@ -360,7 +380,8 @@ public:
                  LLVM_VERSION_PATCH;
   }
 
-  const PlatformInfo &platform;
+  PlatformKind platform;
+  const PlatformInfo &platformInfo;
 };
 
 // Stores a unique identifier for the output file based on an MD5 hash of its
@@ -423,7 +444,7 @@ public:
 
 static void prepareSymbolRelocation(lld::macho::Symbol *sym,
                                     const InputSection *isec, const Reloc &r) {
-  const TargetInfo::RelocAttrs &relocAttrs = target->getRelocAttrs(r.type);
+  const RelocAttrs &relocAttrs = target->getRelocAttrs(r.type);
 
   if (relocAttrs.hasAttr(RelocAttrBits::BRANCH)) {
     prepareBranchTarget(sym);
@@ -449,13 +470,21 @@ void Writer::scanRelocations() {
       continue;
     }
 
-    for (Reloc &r : isec->relocs) {
-      if (target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND))
+    for (auto it = isec->relocs.begin(); it != isec->relocs.end(); ++it) {
+      Reloc &r = *it;
+      if (target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
+        // Skip over the following UNSIGNED relocation -- it's just there as the
+        // minuend, and doesn't have the usual UNSIGNED semantics. We don't want
+        // to emit rebase opcodes for it.
+        it = std::next(it);
+        assert(isa<Defined>(it->referent.dyn_cast<lld::macho::Symbol *>()));
         continue;
+      }
       if (auto *sym = r.referent.dyn_cast<lld::macho::Symbol *>()) {
         if (auto *undefined = dyn_cast<Undefined>(sym))
           treatUndefinedSymbol(*undefined);
-        else if (target->validateSymbolRelocation(sym, isec, r))
+        // treatUndefinedSymbol() can replace sym with a DylibSymbol; re-check.
+        if (!isa<Undefined>(sym) && validateSymbolRelocation(sym, isec, r))
           prepareSymbolRelocation(sym, isec, r);
       } else {
         assert(r.referent.is<InputSection *>());
@@ -472,6 +501,8 @@ void Writer::scanSymbols() {
       if (defined->overridesWeakDef)
         in.weakBinding->addNonWeakDefinition(defined);
     } else if (const auto *dysym = dyn_cast<DylibSymbol>(sym)) {
+      if (dysym->isDynamicLookup())
+        continue;
       dysym->getFile()->refState =
           std::max(dysym->getFile()->refState, dysym->refState);
     }
@@ -490,6 +521,7 @@ void Writer::createLoadCommands() {
   in.header->addLoadCommand(make<LCSymtab>(symtabSection, stringTableSection));
   in.header->addLoadCommand(
       make<LCDysymtab>(symtabSection, indirectSymtabSection));
+  in.header->addLoadCommand(make<LCFunctionStarts>(in.functionStarts));
   for (StringRef path : config->runtimePaths)
     in.header->addLoadCommand(make<LCRPath>(path));
 
@@ -512,13 +544,14 @@ void Writer::createLoadCommands() {
   uuidCommand = make<LCUuid>();
   in.header->addLoadCommand(uuidCommand);
 
-  in.header->addLoadCommand(make<LCBuildVersion>(config->platform));
+  in.header->addLoadCommand(
+      make<LCBuildVersion>(config->target.Platform, config->platformInfo));
 
   int64_t dylibOrdinal = 1;
   for (InputFile *file : inputFiles) {
     if (auto *dylibFile = dyn_cast<DylibFile>(file)) {
       if (dylibFile->isBundleLoader) {
-        dylibFile->ordinal = MachO::BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE;
+        dylibFile->ordinal = BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE;
         // Shortcut since bundle-loader does not re-export the symbols.
 
         dylibFile->reexport = false;
@@ -582,7 +615,7 @@ static DenseMap<const InputSection *, size_t> buildInputSectionPriorities() {
   };
 
   // TODO: Make sure this handles weak symbols correctly.
-  for (InputFile *file : inputFiles)
+  for (const InputFile *file : inputFiles)
     if (isa<ObjFile>(file))
       for (lld::macho::Symbol *sym : file->symbols)
         if (auto *d = dyn_cast<Defined>(sym))
@@ -695,14 +728,23 @@ static void sortSegmentsAndSections() {
   }
 }
 
+static NamePair maybeRenameSection(NamePair key) {
+  auto newNames = config->sectionRenameMap.find(key);
+  if (newNames != config->sectionRenameMap.end())
+    return newNames->second;
+  auto newName = config->segmentRenameMap.find(key.first);
+  if (newName != config->segmentRenameMap.end())
+    return std::make_pair(newName->second, key.second);
+  return key;
+}
+
 void Writer::createOutputSections() {
   // First, create hidden sections
   stringTableSection = make<StringTableSection>();
   unwindInfoSection = make<UnwindInfoSection>(); // TODO(gkm): only when no -r
   symtabSection = make<SymtabSection>(*stringTableSection);
   indirectSymtabSection = make<IndirectSymtabSection>();
-  if (config->outputType == MH_EXECUTE &&
-      (config->arch == AK_arm64 || config->arch == AK_arm64e))
+  if (config->adhocCodesign)
     codeSignatureSection = make<CodeSignatureSection>();
 
   switch (config->outputType) {
@@ -717,13 +759,12 @@ void Writer::createOutputSections() {
   }
 
   // Then merge input sections into output sections.
-  MapVector<std::pair<StringRef, StringRef>, MergedOutputSection *>
-      mergedOutputSections;
+  MapVector<NamePair, MergedOutputSection *> mergedOutputSections;
   for (InputSection *isec : inputSections) {
-    MergedOutputSection *&osec =
-        mergedOutputSections[{isec->segname, isec->name}];
+    NamePair names = maybeRenameSection({isec->segname, isec->name});
+    MergedOutputSection *&osec = mergedOutputSections[names];
     if (osec == nullptr)
-      osec = make<MergedOutputSection>(isec->name);
+      osec = make<MergedOutputSection>(names.second);
     osec->mergeInput(isec);
   }
 
@@ -786,8 +827,8 @@ void Writer::openFile() {
 
 void Writer::writeSections() {
   uint8_t *buf = buffer->getBufferStart();
-  for (OutputSegment *seg : outputSegments)
-    for (OutputSection *osec : seg->getSections())
+  for (const OutputSegment *seg : outputSegments)
+    for (const OutputSection *osec : seg->getSections())
       osec->writeTo(buf + osec->fileOff);
 }
 
@@ -836,6 +877,7 @@ void Writer::run() {
   in.weakBinding->finalizeContents();
   in.lazyBinding->finalizeContents();
   in.exports->finalizeContents();
+  in.functionStarts->finalizeContents();
   symtabSection->finalizeContents();
   indirectSymtabSection->finalizeContents();
 
@@ -864,6 +906,7 @@ void macho::createSyntheticSections() {
   in.weakBinding = make<WeakBindingSection>();
   in.lazyBinding = make<LazyBindingSection>();
   in.exports = make<ExportSection>();
+  in.functionStarts = make<FunctionStartsSection>();
   in.got = make<GotSection>();
   in.tlvPointers = make<TlvPointerSection>();
   in.lazyPointers = make<LazyPointerSection>();

@@ -311,7 +311,7 @@ LinkGraphPassFunction JITLinkContext::getMarkLivePass(const Triple &TT) const {
   return LinkGraphPassFunction();
 }
 
-Error JITLinkContext::modifyPassConfig(const Triple &TT,
+Error JITLinkContext::modifyPassConfig(LinkGraph &G,
                                        PassConfiguration &Config) {
   return Error::success();
 }
@@ -327,9 +327,9 @@ createLinkGraphFromObject(MemoryBufferRef ObjectBuffer) {
   auto Magic = identify_magic(ObjectBuffer.getBuffer());
   switch (Magic) {
   case file_magic::macho_object:
-    return createLinkGraphFromMachOObject(std::move(ObjectBuffer));
+    return createLinkGraphFromMachOObject(ObjectBuffer);
   case file_magic::elf_relocatable:
-    return createLinkGraphFromELFObject(std::move(ObjectBuffer));
+    return createLinkGraphFromELFObject(ObjectBuffer);
   default:
     return make_error<JITLinkError>("Unsupported file format");
   };

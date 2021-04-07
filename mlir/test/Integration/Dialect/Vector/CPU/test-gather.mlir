@@ -5,7 +5,8 @@
 
 func @gather8(%base: memref<?xf32>, %indices: vector<8xi32>,
               %mask: vector<8xi1>, %pass_thru: vector<8xf32>) -> vector<8xf32> {
-  %g = vector.gather %base[%indices], %mask, %pass_thru
+  %c0 = constant 0: index
+  %g = vector.gather %base[%c0][%indices], %mask, %pass_thru
     : memref<?xf32>, vector<8xi32>, vector<8xi1>, vector<8xf32> into vector<8xf32>
   return %g : vector<8xf32>
 }
@@ -15,11 +16,11 @@ func @entry() {
   %c0 = constant 0: index
   %c1 = constant 1: index
   %c10 = constant 10: index
-  %A = alloc(%c10) : memref<?xf32>
+  %A = memref.alloc(%c10) : memref<?xf32>
   scf.for %i = %c0 to %c10 step %c1 {
     %i32 = index_cast %i : index to i32
     %fi = sitofp %i32 : i32 to f32
-    store %fi, %A[%i] : memref<?xf32>
+    memref.store %fi, %A[%i] : memref<?xf32>
   }
 
   // Set up idx vector.

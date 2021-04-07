@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llvm-as -o %t.bc %s
 ; RUN: llvm-lto -exported-symbol=foo -exported-symbol=bar -j2 -o %t.o %t.bc
 ; RUN: llvm-nm %t.o.0 | FileCheck --check-prefix=CHECK0 %s
@@ -13,7 +11,7 @@ target triple = "x86_64-unknown-linux-gnu"
 ; CHECK0-NOT: bar
 ; CHECK0: T foo
 ; CHECK0-NOT: bar
-define void @foo() {
+define void @foo() mustprogress {
   call void @bar()
   ret void
 }
@@ -21,7 +19,7 @@ define void @foo() {
 ; CHECK1-NOT: foo
 ; CHECK1: T bar
 ; CHECK1-NOT: foo
-define void @bar() {
+define void @bar() mustprogress {
   call void @foo()
   ret void
 }

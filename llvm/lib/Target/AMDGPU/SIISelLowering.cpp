@@ -390,6 +390,7 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
   }
 
   setOperationAction(ISD::BITREVERSE, MVT::i32, Legal);
+  setOperationAction(ISD::BITREVERSE, MVT::i64, Legal);
 
   // FIXME: This should be narrowed to i32, but that only happens if i64 is
   // illegal.
@@ -11592,16 +11593,26 @@ static int getAlignedAGPRClassID(unsigned UnalignedClassID) {
     return AMDGPU::VReg_96_Align2RegClassID;
   case AMDGPU::VReg_128RegClassID:
     return AMDGPU::VReg_128_Align2RegClassID;
+  case AMDGPU::VReg_160RegClassID:
+    return AMDGPU::VReg_160_Align2RegClassID;
+  case AMDGPU::VReg_192RegClassID:
+    return AMDGPU::VReg_192_Align2RegClassID;
   case AMDGPU::VReg_256RegClassID:
     return AMDGPU::VReg_256_Align2RegClassID;
   case AMDGPU::VReg_512RegClassID:
     return AMDGPU::VReg_512_Align2RegClassID;
+  case AMDGPU::VReg_1024RegClassID:
+    return AMDGPU::VReg_1024_Align2RegClassID;
   case AMDGPU::AReg_64RegClassID:
     return AMDGPU::AReg_64_Align2RegClassID;
   case AMDGPU::AReg_96RegClassID:
     return AMDGPU::AReg_96_Align2RegClassID;
   case AMDGPU::AReg_128RegClassID:
     return AMDGPU::AReg_128_Align2RegClassID;
+  case AMDGPU::AReg_160RegClassID:
+    return AMDGPU::AReg_160_Align2RegClassID;
+  case AMDGPU::AReg_192RegClassID:
+    return AMDGPU::AReg_192_Align2RegClassID;
   case AMDGPU::AReg_256RegClassID:
     return AMDGPU::AReg_256_Align2RegClassID;
   case AMDGPU::AReg_512RegClassID:
@@ -11674,8 +11685,7 @@ void SITargetLowering::finalizeLowering(MachineFunction &MF) const {
   // "amdgpu-reserve-vgpr-for-sgpr-spill" option is used
   // FIXME: We won't need this hack if we split SGPR allocation from VGPR
   if (VGPRReserveforSGPRSpill && TRI->spillSGPRToVGPR() &&
-      !Info->VGPRReservedForSGPRSpill && !Info->isEntryFunction() &&
-      MF.getFrameInfo().hasStackObjects())
+      !Info->VGPRReservedForSGPRSpill && !Info->isEntryFunction())
     Info->reserveVGPRforSGPRSpills(MF);
 }
 
@@ -11877,22 +11887,6 @@ bool SITargetLowering::isSDNodeSourceOfDivergence(
   case ISD::INTRINSIC_W_CHAIN:
     return AMDGPU::isIntrinsicSourceOfDivergence(
         cast<ConstantSDNode>(N->getOperand(1))->getZExtValue());
-  case ISD::ATOMIC_CMP_SWAP:
-  case ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS:
-  case ISD::ATOMIC_SWAP:
-  case ISD::ATOMIC_LOAD_ADD:
-  case ISD::ATOMIC_LOAD_SUB:
-  case ISD::ATOMIC_LOAD_AND:
-  case ISD::ATOMIC_LOAD_CLR:
-  case ISD::ATOMIC_LOAD_OR:
-  case ISD::ATOMIC_LOAD_XOR:
-  case ISD::ATOMIC_LOAD_NAND:
-  case ISD::ATOMIC_LOAD_MIN:
-  case ISD::ATOMIC_LOAD_MAX:
-  case ISD::ATOMIC_LOAD_UMIN:
-  case ISD::ATOMIC_LOAD_UMAX:
-  case ISD::ATOMIC_LOAD_FADD:
-  case ISD::ATOMIC_LOAD_FSUB:
   case AMDGPUISD::ATOMIC_CMP_SWAP:
   case AMDGPUISD::ATOMIC_INC:
   case AMDGPUISD::ATOMIC_DEC:
@@ -11915,9 +11909,15 @@ bool SITargetLowering::isSDNodeSourceOfDivergence(
   case AMDGPUISD::BUFFER_ATOMIC_FADD:
   case AMDGPUISD::BUFFER_ATOMIC_FMIN:
   case AMDGPUISD::BUFFER_ATOMIC_FMAX:
+    // Target-specific read-modify-write atomics are sources of divergence.
     return true;
+  default:
+    if (auto *A = dyn_cast<AtomicSDNode>(N)) {
+      // Generic read-modify-write atomics are sources of divergence.
+      return A->readMem() && A->writeMem();
+    }
+    return false;
   }
-  return false;
 }
 
 bool SITargetLowering::denormalsEnabledForType(const SelectionDAG &DAG,
@@ -11984,9 +11984,15 @@ SITargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *RMW) const {
               .getValueAsString() != "true")
         return AtomicExpansionKind::CmpXChg;
 
-      if (Subtarget->hasGFX90AInsts())
+      if (Subtarget->hasGFX90AInsts()) {
+        auto SSID = RMW->getSyncScopeID();
+        if (SSID == SyncScope::System ||
+            SSID == RMW->getContext().getOrInsertSyncScopeID("one-as"))
+          return AtomicExpansionKind::CmpXChg;
+
         return (Ty->isFloatTy() && AS == AMDGPUAS::FLAT_ADDRESS) ?
           AtomicExpansionKind::CmpXChg : AtomicExpansionKind::None;
+      }
 
       if (!Subtarget->hasGFX90AInsts() && AS != AMDGPUAS::GLOBAL_ADDRESS)
         return AtomicExpansionKind::CmpXChg;

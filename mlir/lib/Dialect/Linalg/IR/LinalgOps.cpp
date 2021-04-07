@@ -15,6 +15,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Linalg/EDSC/Intrinsics.h"
 #include "mlir/Dialect/Linalg/IR/LinalgTypes.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AffineExprVisitor.h"
 #include "mlir/IR/Matchers.h"
@@ -109,12 +110,12 @@ static void dispatchIndexOpFoldResult(OpFoldResult ofr,
 /// ```
 ///    someop(memrefcast) -> someop
 /// ```
-/// It folds the source of the memref_cast into the root operation directly.
+/// It folds the source of the memref.cast into the root operation directly.
 static LogicalResult foldMemRefCast(Operation *op) {
   bool folded = false;
   for (OpOperand &operand : op->getOpOperands()) {
-    auto castOp = operand.get().getDefiningOp<MemRefCastOp>();
-    if (castOp && canFoldIntoConsumerOp(castOp)) {
+    auto castOp = operand.get().getDefiningOp<memref::CastOp>();
+    if (castOp && memref::CastOp::canFoldIntoConsumerOp(castOp)) {
       operand.set(castOp.getOperand());
       folded = true;
     }
@@ -154,6 +155,45 @@ namespace {
 class RegionBuilderHelper {
 public:
   RegionBuilderHelper(Block &block) : block(block) {}
+
+  // Generates operations to cast the given operand to a specified type.
+  // If the cast cannot be performed, a warning will be issued and the
+  // operand returned as-is (which will presumably yield a verification
+  // issue downstream).
+  Value cast(Type toType, Value operand) {
+    OpBuilder builder = getBuilder(operand);
+    auto loc = operand.getLoc();
+
+    if (operand.getType() == toType)
+      return operand;
+    if (auto toIntType = toType.dyn_cast<IntegerType>()) {
+      // If operand is floating point, cast directly to the int type.
+      if (operand.getType().isa<FloatType>())
+        return builder.create<FPToSIOp>(loc, toType, operand);
+      if (auto fromIntType = operand.getType().dyn_cast<IntegerType>()) {
+        // Either sign extend or truncate.
+        if (toIntType.getWidth() > fromIntType.getWidth())
+          return builder.create<SignExtendIOp>(loc, toType, operand);
+        else if (toIntType.getWidth() < fromIntType.getWidth())
+          return builder.create<TruncateIOp>(loc, toType, operand);
+      }
+    } else if (auto toFloatType = toType.dyn_cast<FloatType>()) {
+      // If operand is integer, cast directly to the float type.
+      // Note that it is unclear how to cast from BF16<->FP16.
+      if (operand.getType().isa<IntegerType>())
+        return builder.create<SIToFPOp>(loc, toFloatType, operand);
+      if (auto fromFloatType = operand.getType().dyn_cast<FloatType>()) {
+        if (toFloatType.getWidth() > fromFloatType.getWidth())
+          return builder.create<FPExtOp>(loc, toFloatType, operand);
+        else if (toFloatType.getWidth() < fromFloatType.getWidth())
+          return builder.create<FPTruncOp>(loc, toFloatType, operand);
+      }
+    }
+
+    emitWarning(operand.getLoc()) << "could not cast operand of type "
+                                  << operand.getType() << " to " << toType;
+    return operand;
+  }
 
   Value applyfn__add(Value lhs, Value rhs) {
     OpBuilder builder = getBuilder(lhs);
@@ -457,7 +497,7 @@ static void printGenericOp(OpAsmPrinter &p, GenericOpType op) {
   llvm::StringSet<> genericAttrNamesSet;
   genericAttrNamesSet.insert(genericAttrNames.begin(), genericAttrNames.end());
   SmallVector<NamedAttribute, 8> genericAttrs;
-  for (auto attr : op.getAttrs())
+  for (auto attr : op->getAttrs())
     if (genericAttrNamesSet.count(attr.first.strref()) > 0)
       genericAttrs.push_back(attr);
   if (!genericAttrs.empty()) {
@@ -472,13 +512,13 @@ static void printGenericOp(OpAsmPrinter &p, GenericOpType op) {
   genericAttrNamesSet.insert(genericAttrNames.back());
 
   bool hasExtraAttrs = false;
-  for (NamedAttribute n : op.getAttrs()) {
+  for (NamedAttribute n : op->getAttrs()) {
     if ((hasExtraAttrs = !genericAttrNamesSet.contains(n.first.strref())))
       break;
   }
   if (hasExtraAttrs) {
     p << " attrs = ";
-    p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/genericAttrNames);
+    p.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/genericAttrNames);
   }
 
   // Print region.
@@ -737,10 +777,10 @@ struct ReplaceStaticShapeDims : OpRewritePattern<InitTensorOp> {
 /// - A constant value if the size is static along the dimension.
 /// - The dynamic value that defines the size of the result of
 ///   `linalg.init_tensor` op.
-struct ReplaceDimOfInitTensorOp : public OpRewritePattern<DimOp> {
-  using OpRewritePattern<DimOp>::OpRewritePattern;
+struct ReplaceDimOfInitTensorOp : public OpRewritePattern<memref::DimOp> {
+  using OpRewritePattern<memref::DimOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(DimOp dimOp,
+  LogicalResult matchAndRewrite(memref::DimOp dimOp,
                                 PatternRewriter &rewriter) const override {
     auto initTensorOp = dimOp.memrefOrTensor().getDefiningOp<InitTensorOp>();
     if (!initTensorOp)
@@ -947,7 +987,7 @@ PadTensorOp PadTensorOp::createPadHighOp(Type type, Value source, Value pad,
   assert(rankedTensorType.hasStaticShape());
   int rank = rankedTensorType.getRank();
   for (int i = 0; i < rank; ++i) {
-    auto dimOp = builder.createOrFold<DimOp>(loc, source, i);
+    auto dimOp = builder.createOrFold<memref::DimOp>(loc, source, i);
     auto resultDimSize = builder.createOrFold<ConstantIndexOp>(
         loc, rankedTensorType.getDimSize(i));
     auto highValue = builder.createOrFold<SubIOp>(loc, resultDimSize, dimOp);
@@ -1253,7 +1293,7 @@ getCollapsedOutputDimFromInputShape(OpBuilder &builder, Location loc,
   AffineExpr expr;
   SmallVector<Value, 2> dynamicDims;
   for (auto dim : llvm::seq(startPos, endPos + 1)) {
-    dynamicDims.push_back(builder.create<DimOp>(loc, src, dim));
+    dynamicDims.push_back(builder.create<memref::DimOp>(loc, src, dim));
     AffineExpr currExpr = builder.getAffineSymbolExpr(dim - startPos);
     expr = (expr ? expr * currExpr : currExpr);
   }
@@ -1322,7 +1362,7 @@ static Value getExpandedOutputDimFromInputShape(
            "dimensions");
     linearizedStaticDim *= d.value();
   }
-  Value sourceDim = builder.create<DimOp>(loc, src, sourceDimPos);
+  Value sourceDim = builder.create<memref::DimOp>(loc, src, sourceDimPos);
   return applyMapToValues(
       builder, loc,
       AffineMap::get(
@@ -1598,9 +1638,9 @@ struct FoldReshapeWithConstant : OpRewritePattern<TensorReshapeOp> {
 };
 
 /// Canonicalize dim ops that use the output shape with dim of the input.
-struct ReplaceDimOfReshapeOpResult : OpRewritePattern<DimOp> {
-  using OpRewritePattern<DimOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(DimOp dimOp,
+struct ReplaceDimOfReshapeOpResult : OpRewritePattern<memref::DimOp> {
+  using OpRewritePattern<memref::DimOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(memref::DimOp dimOp,
                                 PatternRewriter &rewriter) const override {
     Value dimValue = dimOp.memrefOrTensor();
     Optional<int64_t> dimIndex = dimOp.getConstantIndex();
@@ -1635,7 +1675,7 @@ static void print(OpAsmPrinter &p, linalg::YieldOp op) {
   p << op.getOperationName();
   if (op.getNumOperands() > 0)
     p << ' ' << op.getOperands();
-  p.printOptionalAttrDict(op.getAttrs());
+  p.printOptionalAttrDict(op->getAttrs());
   if (op.getNumOperands() > 0)
     p << " : " << op.getOperandTypes();
 }
@@ -1754,8 +1794,8 @@ static void print(OpAsmPrinter &p, TiledLoopOp op) {
 
   p.printRegion(op.region(), /*printEntryBlockArgs=*/false);
   p.printOptionalAttrDict(
-      op.getAttrs(), /*elidedAttrs=*/{TiledLoopOp::getOperandSegmentSizeAttr(),
-                                      getIteratorTypesAttrName()});
+      op->getAttrs(), /*elidedAttrs=*/{TiledLoopOp::getOperandSegmentSizeAttr(),
+                                       getIteratorTypesAttrName()});
 }
 
 static ParseResult parseTiledLoopOp(OpAsmParser &parser,
@@ -2294,8 +2334,11 @@ static void printNamedStructuredOpResults(OpAsmPrinter &p,
 template <typename NamedStructuredOpType>
 static void printNamedStructuredOp(OpAsmPrinter &p, NamedStructuredOpType op) {
   p << op.getOperationName();
-  p.printOptionalAttrDict(op.getAttrs(),
-                          /*elidedAttrs=*/{"operand_segment_sizes"});
+  p.printOptionalAttrDict(
+      op->getAttrs(),
+      /*elidedAttrs=*/{"operand_segment_sizes",
+                       // See generated code in mlir-linalg-yaml-gen.cpp
+                       "linalg.memoized_indexing_maps"});
 
   // Printing is shared with generic ops, except for the region and
   // attributes.
@@ -2385,30 +2428,43 @@ struct FoldTensorCastOp : public RewritePattern {
     // Clone op.
     Operation *newOp =
         linalgOp.clone(rewriter, op->getLoc(), newResultTypes, newOperands);
-    rewriter.replaceOp(op, newOp->getResults());
+    SmallVector<Value, 4> replacements;
+    replacements.reserve(newOp->getNumResults());
+    for (auto result : llvm::zip(op->getResults(), newOp->getResults())) {
+      Value oldResult = std::get<0>(result);
+      Value newResult = std::get<1>(result);
+      if (newResult.getType() != oldResult.getType()) {
+        replacements.push_back(rewriter.create<tensor::CastOp>(
+            op->getLoc(), oldResult.getType(), newResult));
+      } else {
+        replacements.push_back(newResult);
+      }
+    }
+    rewriter.replaceOp(op, replacements);
 
     return success();
   }
 };
 
-/// Replaces std.dim operations that use the result of a LinalgOp (on tensors)
-/// with std.dim operations that use one of the arguments. For example,
+/// Replaces memref.dim operations that use the result of a LinalgOp (on
+/// tensors) with memref.dim operations that use one of the arguments. For
+/// example,
 ///
 /// %0 = linalg.matmul ins(%arg0, %arg1, ...)
-/// %1 = dim %0, %c0
+/// %1 = memref.dim %0, %c0
 ///
 /// with
 ///
-/// %1 = dim %arg0, %c0
+/// %1 = memref.dim %arg0, %c0
 ///
 /// where possible. With this the result of the `linalg.matmul` is not used in
 /// dim operations. If the value produced is replaced with another value (say by
 /// tiling `linalg.matmul`) will make the `linalg.matmul` truly dead instead of
 /// used in a dim op that would prevent the DCE of this op.
-struct ReplaceDimOfLinalgOpResult : public OpRewritePattern<DimOp> {
-  using OpRewritePattern<DimOp>::OpRewritePattern;
+struct ReplaceDimOfLinalgOpResult : public OpRewritePattern<memref::DimOp> {
+  using OpRewritePattern<memref::DimOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(DimOp dimOp,
+  LogicalResult matchAndRewrite(memref::DimOp dimOp,
                                 PatternRewriter &rewriter) const override {
     Value dimValue = dimOp.memrefOrTensor();
     Optional<int64_t> dimIndex = dimOp.getConstantIndex();
@@ -2425,7 +2481,7 @@ struct ReplaceDimOfLinalgOpResult : public OpRewritePattern<DimOp> {
     if (!operandDimValue) {
       // Its always possible to replace using the corresponding `outs`
       // parameter.
-      operandDimValue = rewriter.create<DimOp>(
+      operandDimValue = rewriter.create<memref::DimOp>(
           dimOp.getLoc(), linalgOp.getOutput(resultIndex), *dimIndex);
     }
     rewriter.replaceOp(dimOp, *operandDimValue);
@@ -2541,6 +2597,15 @@ struct RemoveIdentityLinalgOps : public RewritePattern {
 
   LogicalResult matchAndRewrite(Operation *op,
                                 PatternRewriter &rewriter) const override {
+    if (auto copyOp = dyn_cast<CopyOp>(op)) {
+      assert(copyOp.hasBufferSemantics());
+      if (copyOp.input() == copyOp.output() &&
+          copyOp.inputPermutation() == copyOp.outputPermutation()) {
+        rewriter.eraseOp(op);
+        return success();
+      }
+    }
+
     if (!isa<GenericOp, IndexedGenericOp>(op))
       return failure();
     LinalgOp genericOp = cast<LinalgOp>(op);

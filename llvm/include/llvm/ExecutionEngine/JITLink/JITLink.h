@@ -799,7 +799,7 @@ public:
 
   /// Returns the name of this graph (usually the name of the original
   /// underlying MemoryBuffer).
-  const std::string &getName() { return Name; }
+  const std::string &getName() const { return Name; }
 
   /// Returns the target triple for this Graph.
   const Triple &getTargetTriple() const { return TT; }
@@ -1377,7 +1377,7 @@ public:
 
   /// Called by JITLink to modify the pass pipeline prior to linking.
   /// The default version performs no modification.
-  virtual Error modifyPassConfig(const Triple &TT, PassConfiguration &Config);
+  virtual Error modifyPassConfig(LinkGraph &G, PassConfiguration &Config);
 
 private:
   const JITLinkDylib *JD = nullptr;

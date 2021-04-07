@@ -29,7 +29,6 @@ class GPUModuleOp;
 } // end namespace gpu
 
 namespace LLVM {
-class LLVMArmNeonDialect;
 class LLVMArmSVEDialect;
 class LLVMAVX512Dialect;
 class LLVMDialect;
@@ -38,6 +37,10 @@ class LLVMDialect;
 namespace NVVM {
 class NVVMDialect;
 } // end namespace NVVM
+
+namespace memref {
+class MemRefDialect;
+} // end namespace memref
 
 namespace omp {
 class OpenMPDialect;
@@ -58,6 +61,14 @@ class SCFDialect;
 namespace spirv {
 class SPIRVDialect;
 } // end namespace spirv
+
+namespace tensor {
+class TensorDialect;
+} // end namespace tensor
+
+namespace tosa {
+class TosaDialect;
+} // end namespace tosa
 
 namespace vector {
 class VectorDialect;

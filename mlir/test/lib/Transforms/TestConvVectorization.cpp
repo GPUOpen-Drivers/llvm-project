@@ -37,6 +37,7 @@ public:
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<VectorDialect>();
     registry.insert<linalg::LinalgDialect>();
+    registry.insert<memref::MemRefDialect>();
     registry.insert<scf::SCFDialect>();
     registry.insert<AffineDialect>();
     registry.insert<StandardOpsDialect>();
@@ -119,7 +120,7 @@ void TestConvVectorization::runOnOperation() {
 
   // Ensure we drop the marker in the end.
   module.walk([](linalg::LinalgOp op) {
-    op.removeAttr(linalg::LinalgTransforms::kLinalgTransformMarker);
+    op->removeAttr(linalg::LinalgTransforms::kLinalgTransformMarker);
   });
 }
 

@@ -43,11 +43,11 @@ def PDL_Dialect : Dialect {
     ```mlir
     // pdl.pattern contains metadata similarly to a `RewritePattern`.
     pdl.pattern : benefit(1) {
-      // External input operand values are specified via `pdl.input` operations.
+      // External input operand values are specified via `pdl.operand` operations.
       // Result types are constrainted via `pdl.type` operations.
 
       %resultType = pdl.type
-      %inputOperand = pdl.input
+      %inputOperand = pdl.operand
       %root, %results = pdl.operation "foo.op"(%inputOperand) -> %resultType
       pdl.rewrite %root {
         pdl.replace %root with (%inputOperand)
@@ -64,6 +64,9 @@ def PDL_Dialect : Dialect {
 
   let name = "pdl";
   let cppNamespace = "::mlir::pdl";
+  let extraClassDeclaration = [{
+    void registerTypes();
+  }];
 }
 
 #endif // MLIR_DIALECT_PDL_IR_PDLDIALECT

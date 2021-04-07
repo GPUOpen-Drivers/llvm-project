@@ -36,8 +36,8 @@ func @memrefs(memref<2x4xi8, >) // expected-error {{expected list element}}
 func @memrefs(memref<2x4xi8, #map7>) // expected-error {{undefined symbol alias id 'map7'}}
 
 // -----
-// Test non affine map in memref type.
-func @memrefs(memref<2x4xi8, i8>) // expected-error {{expected affine map in memref type}}
+// Test unsupported memory space.
+func @memrefs(memref<2x4xi8, i8>) // expected-error {{unsupported memory space Attribute}}
 
 // -----
 // Test non-existent map in map composition of memref type.
@@ -821,7 +821,7 @@ func @f(f32) {
 func @f(%m : memref<?x?xf32>) {
   affine.for %i0 = 0 to 42 {
     // expected-note@+1 {{previously referenced here}}
-    %x = load %m[%i0, %i1] : memref<?x?xf32>
+    %x = memref.load %m[%i0, %i1] : memref<?x?xf32>
   }
   // expected-error@+1 {{region entry argument '%i1' is already in use}}
   affine.for %i1 = 0 to 42 {

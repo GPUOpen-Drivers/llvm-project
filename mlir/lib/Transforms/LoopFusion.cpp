@@ -16,6 +16,7 @@
 #include "mlir/Analysis/LoopAnalysis.h"
 #include "mlir/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
@@ -784,6 +785,15 @@ bool MemRefDependenceGraph::init(FuncOp f) {
       // could be used by loop nest nodes.
       Node node(nextNodeId++, &op);
       nodes.insert({node.id, node});
+    } else if (isa<CallOpInterface>(op)) {
+      // Create graph node for top-level Call Op that takes any argument of
+      // memref type. Call Op that returns one or more memref type results
+      // is already taken care of, by the previous conditions.
+      if (llvm::any_of(op.getOperandTypes(),
+                       [&](Type t) { return t.isa<MemRefType>(); })) {
+        Node node(nextNodeId++, &op);
+        nodes.insert({node.id, node});
+      }
     } else if (auto effectInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
       // Create graph node for top-level op, which could have a memory write
       // side effect.
@@ -938,7 +948,7 @@ static Value createPrivateMemRef(AffineForOp forOp, Operation *srcStoreOpInst,
   if (bufSize <= localBufSizeThreshold && fastMemorySpace.hasValue()) {
     newMemSpace = fastMemorySpace.getValue();
   } else {
-    newMemSpace = oldMemRefType.getMemorySpace();
+    newMemSpace = oldMemRefType.getMemorySpaceAsInt();
   }
   auto newMemRefType = MemRefType::get(newShape, oldMemRefType.getElementType(),
                                        {}, newMemSpace);
@@ -949,7 +959,7 @@ static Value createPrivateMemRef(AffineForOp forOp, Operation *srcStoreOpInst,
   // consumer loop nests to reduce their live range. Currently they are added
   // at the beginning of the function, because loop nests can be reordered
   // during the fusion pass.
-  Value newMemRef = top.create<AllocOp>(forOp.getLoc(), newMemRefType);
+  Value newMemRef = top.create<memref::AllocOp>(forOp.getLoc(), newMemRefType);
 
   // Build an AffineMap to remap access functions based on lower bound offsets.
   SmallVector<AffineExpr, 4> remapExprs;
@@ -1928,7 +1938,7 @@ public:
         continue;
       // Use list expected to match the dep graph info.
       auto *op = memref.getDefiningOp();
-      if (isa_and_nonnull<AllocOp>(op))
+      if (isa_and_nonnull<memref::AllocOp>(op))
         op->erase();
     }
   }

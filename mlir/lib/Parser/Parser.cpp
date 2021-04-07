@@ -343,6 +343,14 @@ OperationParser::~OperationParser() {
     fwd.first.dropAllUses();
     fwd.first.getDefiningOp()->destroy();
   }
+  for (const auto &scope : forwardRef) {
+    for (const auto &fwd : scope) {
+      // Delete all blocks that were created as forward references but never
+      // included into a region.
+      fwd.first->dropAllUses();
+      delete fwd.first;
+    }
+  }
 }
 
 /// After parsing is finished, this function must be called to see if there are
@@ -2088,8 +2096,8 @@ LogicalResult mlir::parseSourceFile(const llvm::SourceMgr &sourceMgr,
                                     LocationAttr *sourceFileLoc) {
   const auto *sourceBuf = sourceMgr.getMemoryBuffer(sourceMgr.getMainFileID());
 
-  Location parserLoc = FileLineColLoc::get(sourceBuf->getBufferIdentifier(),
-                                           /*line=*/0, /*column=*/0, context);
+  Location parserLoc = FileLineColLoc::get(
+      context, sourceBuf->getBufferIdentifier(), /*line=*/0, /*column=*/0);
   if (sourceFileLoc)
     *sourceFileLoc = parserLoc;
 

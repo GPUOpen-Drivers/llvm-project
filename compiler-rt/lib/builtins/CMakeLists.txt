@@ -5,6 +5,7 @@
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   cmake_minimum_required(VERSION 3.13.4)
 
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
   project(CompilerRTBuiltins C ASM)
   set(COMPILER_RT_STANDALONE_BUILD TRUE)
   set(COMPILER_RT_BUILTINS_STANDALONE_BUILD TRUE)
@@ -488,7 +489,7 @@ if(MINGW)
     arm/aeabi_uldivmod.S
     arm/chkstk.S
     mingw_fixfloat.c
-    ${GENERIC_SOURCES}
+    ${arm_SOURCES}
   )
 elseif(NOT WIN32)
   # TODO the EABI sources should only be added to EABI targets
@@ -515,6 +516,12 @@ set(aarch64_SOURCES
 set(OA_HELPERS_DIR "${CMAKE_CURRENT_BINARY_DIR}/outline_atomic_helpers.dir")
 file(MAKE_DIRECTORY "${OA_HELPERS_DIR}")
 
+if(CMAKE_HOST_UNIX)
+  set(COMPILER_RT_LINK_OR_COPY create_symlink)
+else()
+  set(COMPILER_RT_LINK_OR_COPY copy)
+endif()
+
 foreach(pat cas swp ldadd ldclr ldeor ldset)
   foreach(size 1 2 4 8 16)
     foreach(model 1 2 3 4)
@@ -522,7 +529,7 @@ foreach(pat cas swp ldadd ldclr ldeor ldset)
         set(helper_asm "${OA_HELPERS_DIR}/outline_atomic_${pat}${size}_${model}.S")
         add_custom_command(
           OUTPUT ${helper_asm}
-          COMMAND ${CMAKE_COMMAND} -E create_symlink "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/lse.S" "${helper_asm}"
+          COMMAND ${CMAKE_COMMAND} -E ${COMPILER_RT_LINK_OR_COPY} "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/lse.S" "${helper_asm}"
         )
         set_source_files_properties("${helper_asm}"
           PROPERTIES

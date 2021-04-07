@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: opt -S -adce < %s | FileCheck %s
 
 ; While it is normally okay to DCE out calls to @readonly_function and
@@ -7,8 +5,8 @@
 ; bundles since the presence of unknown operand bundles implies
 ; arbitrary memory effects.
 
-declare void @readonly_function() readonly nounwind
-declare void @readnone_function() readnone nounwind
+declare void @readonly_function() readonly nounwind willreturn
+declare void @readnone_function() readnone nounwind willreturn
 
 define void @test0() {
 ; CHECK-LABEL: @test0(

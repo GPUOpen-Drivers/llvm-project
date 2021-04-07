@@ -24,6 +24,7 @@ class ObjFile;
 class InputSection;
 class MachHeaderSection;
 class Symbol;
+class Defined;
 class Undefined;
 
 /*
@@ -34,8 +35,8 @@ class Undefined;
  */
 class SymbolTable {
 public:
-  Symbol *addDefined(StringRef name, InputFile *, InputSection *,
-                     uint32_t value, bool isWeakDef, bool isPrivateExtern);
+  Defined *addDefined(StringRef name, InputFile *, InputSection *,
+                      uint32_t value, bool isWeakDef, bool isPrivateExtern);
 
   Symbol *addUndefined(StringRef name, InputFile *, bool isWeakRef);
 
@@ -43,11 +44,13 @@ public:
                     bool isPrivateExtern);
 
   Symbol *addDylib(StringRef name, DylibFile *file, bool isWeakDef, bool isTlv);
+  Symbol *addDynamicLookup(StringRef name);
 
   Symbol *addLazy(StringRef name, ArchiveFile *file,
                   const llvm::object::Archive::Symbol &sym);
 
-  Symbol *addDSOHandle(const MachHeaderSection *);
+  Defined *addSynthetic(StringRef name, InputSection *, uint32_t value,
+                        bool isPrivateExtern, bool isLinkerInternal);
 
   ArrayRef<Symbol *> getSymbols() const { return symVector; }
   Symbol *find(StringRef name);

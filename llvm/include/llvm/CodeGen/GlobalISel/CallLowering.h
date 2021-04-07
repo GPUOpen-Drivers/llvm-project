@@ -149,7 +149,8 @@ public:
     /// should be initialized to an appropriate description of the
     /// address created.
     virtual Register getStackAddress(uint64_t Size, int64_t Offset,
-                                     MachinePointerInfo &MPO) = 0;
+                                     MachinePointerInfo &MPO,
+                                     ISD::ArgFlagsTy Flags) = 0;
 
     /// The specified value has been assigned to a physical register,
     /// handle the appropriate COPY (either to or from) and mark any
@@ -209,6 +210,14 @@ public:
     IncomingValueHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
                          CCAssignFn *AssignFn)
         : ValueHandler(true, MIRBuilder, MRI, AssignFn) {}
+
+    /// Insert G_ASSERT_ZEXT/G_ASSERT_SEXT or other hint instruction based on \p
+    /// VA, returning the new register if a hint was inserted.
+    Register buildExtensionHint(CCValAssign &VA, Register SrcReg, LLT NarrowTy);
+
+    /// Provides a default implementation for argument handling.
+    void assignValueToReg(Register ValVReg, Register PhysReg,
+                          CCValAssign &VA) override;
   };
 
   struct OutgoingValueHandler : public ValueHandler {
@@ -244,15 +253,12 @@ protected:
   void setArgFlags(ArgInfo &Arg, unsigned OpIdx, const DataLayout &DL,
                    const FuncInfoTy &FuncInfo) const;
 
-  /// Generate instructions for packing \p SrcRegs into one big register
-  /// corresponding to the aggregate type \p PackedTy.
-  ///
-  /// \param SrcRegs should contain one virtual register for each base type in
-  ///                \p PackedTy, as returned by computeValueLLTs.
-  ///
-  /// \return The packed register.
-  Register packRegs(ArrayRef<Register> SrcRegs, Type *PackedTy,
-                    MachineIRBuilder &MIRBuilder) const;
+  /// Break \p OrigArgInfo into one or more pieces the calling convention can
+  /// process, returned in \p SplitArgs. For example, this should break structs
+  /// down into individual fields.
+  void splitToValueTypes(const ArgInfo &OrigArgInfo,
+                         SmallVectorImpl<ArgInfo> &SplitArgs,
+                         const DataLayout &DL, CallingConv::ID CallConv) const;
 
   /// Generate instructions for unpacking \p SrcReg into the \p DstRegs
   /// corresponding to the aggregate type \p PackedTy.

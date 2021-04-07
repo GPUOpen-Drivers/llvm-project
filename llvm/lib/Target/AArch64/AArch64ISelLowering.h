@@ -51,6 +51,10 @@ enum NodeType : unsigned {
   WrapperLarge, // 4-instruction MOVZ/MOVK sequence for 64-bit addresses.
   CALL,         // Function call.
 
+  // Pseudo for a OBJC call that gets emitted together with a special `mov
+  // x29, x29` marker instruction.
+  CALL_RVMARKER,
+
   // Produces the full sequence of instructions for getting the thread pointer
   // offset of a variable into X0, using the TLSDesc model.
   TLSDESC_CALLSEQ,
@@ -80,6 +84,8 @@ enum NodeType : unsigned {
   FMA_PRED,
   FMAXNM_PRED,
   FMINNM_PRED,
+  FMAX_PRED,
+  FMIN_PRED,
   FMUL_PRED,
   FSUB_PRED,
   MUL_PRED,
@@ -429,10 +435,6 @@ enum NodeType : unsigned {
   LDP,
   STP,
   STNP,
-
-  // Pseudo for a OBJC call that gets emitted together with a special `mov
-  // x29, x29` marker instruction.
-  CALL_RVMARKER
 };
 
 } // end namespace AArch64ISD

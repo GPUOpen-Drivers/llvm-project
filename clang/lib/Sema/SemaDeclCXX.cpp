@@ -7632,7 +7632,7 @@ public:
 
 private:
   Subobject getCompleteObject() {
-    return Subobject{Subobject::CompleteObject, nullptr, FD->getLocation()};
+    return Subobject{Subobject::CompleteObject, RD, FD->getLocation()};
   }
 
   Subobject getBase(CXXBaseSpecifier *Base) {
@@ -7685,10 +7685,14 @@ private:
 
     if (Args[0]->getType()->isOverloadableType())
       S.LookupOverloadedBinOp(CandidateSet, OO, Fns, Args);
-    else {
+    else if (OO == OO_EqualEqual ||
+             !Args[0]->getType()->isFunctionPointerType()) {
       // FIXME: We determine whether this is a valid expression by checking to
       // see if there's a viable builtin operator candidate for it. That isn't
       // really what the rules ask us to do, but should give the right results.
+      //
+      // Note that the builtin operator for relational comparisons on function
+      // pointers is the only known case which cannot be used.
       S.AddBuiltinOperatorCandidates(OO, FD->getLocation(), Args, CandidateSet);
     }
 
@@ -15209,13 +15213,12 @@ void Sema::FinalizeVarWithDestructor(VarDecl *VD, const RecordType *Record) {
 /// to form a proper call to this constructor.
 ///
 /// \returns true if an error occurred, false otherwise.
-bool
-Sema::CompleteConstructorCall(CXXConstructorDecl *Constructor,
-                              MultiExprArg ArgsPtr,
-                              SourceLocation Loc,
-                              SmallVectorImpl<Expr*> &ConvertedArgs,
-                              bool AllowExplicit,
-                              bool IsListInitialization) {
+bool Sema::CompleteConstructorCall(CXXConstructorDecl *Constructor,
+                                   QualType DeclInitType, MultiExprArg ArgsPtr,
+                                   SourceLocation Loc,
+                                   SmallVectorImpl<Expr *> &ConvertedArgs,
+                                   bool AllowExplicit,
+                                   bool IsListInitialization) {
   // FIXME: This duplicates a lot of code from Sema::ConvertArgumentsForCall.
   unsigned NumArgs = ArgsPtr.size();
   Expr **Args = ArgsPtr.data();
@@ -15242,7 +15245,7 @@ Sema::CompleteConstructorCall(CXXConstructorDecl *Constructor,
 
   DiagnoseSentinelCalls(Constructor, Loc, AllArgs);
 
-  CheckConstructorCall(Constructor,
+  CheckConstructorCall(Constructor, DeclInitType,
                        llvm::makeArrayRef(AllArgs.data(), AllArgs.size()),
                        Proto, Loc);
 

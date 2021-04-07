@@ -456,6 +456,8 @@ template <typename Config>
 void *MapAllocator<Config>::allocate(Options Options, uptr Size, uptr Alignment,
                                      uptr *BlockEndPtr,
                                      FillContentsMode FillContents) {
+  if (Options.get(OptionBit::AddLargeAllocationSlack))
+    Size += 1UL << SCUDO_MIN_ALIGNMENT_LOG;
   Alignment = Max(Alignment, 1UL << SCUDO_MIN_ALIGNMENT_LOG);
   const uptr PageSize = getPageSizeCached();
   uptr RoundedSize =
@@ -472,14 +474,15 @@ void *MapAllocator<Config>::allocate(Options Options, uptr Size, uptr Alignment,
       const uptr BlockEnd = H->CommitBase + H->CommitSize;
       if (BlockEndPtr)
         *BlockEndPtr = BlockEnd;
-      uptr PtrInt = reinterpret_cast<uptr>(H) + LargeBlock::getHeaderSize();
+      uptr HInt = reinterpret_cast<uptr>(H);
       if (allocatorSupportsMemoryTagging<Config>())
-        PtrInt = untagPointer(PtrInt);
+        HInt = untagPointer(HInt);
+      const uptr PtrInt = HInt + LargeBlock::getHeaderSize();
       void *Ptr = reinterpret_cast<void *>(PtrInt);
       if (FillContents && !Zeroed)
         memset(Ptr, FillContents == ZeroFill ? 0 : PatternFillByte,
                BlockEnd - PtrInt);
-      const uptr BlockSize = BlockEnd - reinterpret_cast<uptr>(H);
+      const uptr BlockSize = BlockEnd - HInt;
       {
         ScopedLock L(Mutex);
         InUseBlocks.push_back(H);

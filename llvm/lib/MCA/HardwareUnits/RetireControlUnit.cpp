@@ -21,8 +21,8 @@ namespace mca {
 
 RetireControlUnit::RetireControlUnit(const MCSchedModel &SM)
     : NextAvailableSlotIdx(0), CurrentInstructionSlotIdx(0),
-      NumROBEntries(SM.MicroOpBufferSize),
-      AvailableEntries(SM.MicroOpBufferSize), MaxRetirePerCycle(0) {
+      AvailableEntries(SM.isOutOfOrder() ? SM.MicroOpBufferSize : 0),
+      MaxRetirePerCycle(0) {
   // Check if the scheduling model provides extra information about the machine
   // processor. If so, then use that information to set the reorder buffer size
   // and the maximum number of instructions retired per cycle.
@@ -33,12 +33,17 @@ RetireControlUnit::RetireControlUnit(const MCSchedModel &SM)
     MaxRetirePerCycle = EPI.MaxRetirePerCycle;
   }
   NumROBEntries = AvailableEntries;
+  if (!SM.isOutOfOrder() && !NumROBEntries)
+    return;
   assert(NumROBEntries && "Invalid reorder buffer size!");
   Queue.resize(2 * NumROBEntries);
 }
 
 // Reserves a number of slots, and returns a new token.
 unsigned RetireControlUnit::dispatch(const InstRef &IR) {
+  if (!NumROBEntries)
+    return UnhandledTokenID;
+
   const Instruction &Inst = *IR.getInstruction();
   unsigned Entries = normalizeQuantity(Inst.getNumMicroOps());
   assert((AvailableEntries >= Entries) && "Reorder Buffer unavailable!");
@@ -47,6 +52,7 @@ unsigned RetireControlUnit::dispatch(const InstRef &IR) {
   Queue[NextAvailableSlotIdx] = {IR, Entries, false};
   NextAvailableSlotIdx += std::max(1U, Entries);
   NextAvailableSlotIdx %= Queue.size();
+  assert(TokenID < UnhandledTokenID && "Invalid token ID");
 
   AvailableEntries -= Entries;
   return TokenID;

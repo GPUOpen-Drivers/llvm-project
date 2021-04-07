@@ -842,8 +842,8 @@ Value *LibCallSimplifier::optimizeStrStr(CallInst *CI, IRBuilderBase &B) {
                                  StrLen, B, DL, TLI);
     if (!StrNCmp)
       return nullptr;
-    for (auto UI = CI->user_begin(), UE = CI->user_end(); UI != UE;) {
-      ICmpInst *Old = cast<ICmpInst>(*UI++);
+    for (User *U : llvm::make_early_inc_range(CI->users())) {
+      ICmpInst *Old = cast<ICmpInst>(U);
       Value *Cmp =
           B.CreateICmp(Old->getPredicate(), StrNCmp,
                        ConstantInt::getNullValue(StrNCmp->getType()), "cmp");
@@ -1704,20 +1704,12 @@ Value *LibCallSimplifier::optimizePow(CallInst *Pow, IRBuilderBase &B) {
   StringRef Name = Callee->getName();
   Type *Ty = Pow->getType();
   Module *M = Pow->getModule();
-  Value *Shrunk = nullptr;
   bool AllowApprox = Pow->hasApproxFunc();
   bool Ignored;
 
   // Propagate the math semantics from the call to any created instructions.
   IRBuilderBase::FastMathFlagGuard Guard(B);
   B.setFastMathFlags(Pow->getFastMathFlags());
-
-  // Shrink pow() to powf() if the arguments are single precision,
-  // unless the result is expected to be double precision.
-  if (UnsafeFPShrink && Name == TLI->getName(LibFunc_pow) &&
-      hasFloatVersion(Name))
-    Shrunk = optimizeBinaryDoubleFP(Pow, B, true);
-
   // Evaluate special cases related to the base.
 
   // pow(1.0, x) -> 1.0
@@ -1818,7 +1810,15 @@ Value *LibCallSimplifier::optimizePow(CallInst *Pow, IRBuilderBase &B) {
       return createPowWithIntegerExponent(Base, ExpoI, M, B);
   }
 
-  return Shrunk;
+  // Shrink pow() to powf() if the arguments are single precision,
+  // unless the result is expected to be double precision.
+  if (UnsafeFPShrink && Name == TLI->getName(LibFunc_pow) &&
+      hasFloatVersion(Name)) {
+    if (Value *Shrunk = optimizeBinaryDoubleFP(Pow, B, true))
+      return Shrunk;
+  }
+
+  return nullptr;
 }
 
 Value *LibCallSimplifier::optimizeExp2(CallInst *CI, IRBuilderBase &B) {
