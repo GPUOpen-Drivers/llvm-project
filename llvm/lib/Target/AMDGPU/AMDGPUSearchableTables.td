@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 
@@ -255,7 +253,6 @@ def : SourceOfDivergence<int_amdgcn_struct_buffer_atomic_fmax>;
 def : SourceOfDivergence<int_amdgcn_struct_buffer_atomic_cmpswap>;
 def : SourceOfDivergence<int_amdgcn_buffer_atomic_csub>;
 def : SourceOfDivergence<int_amdgcn_ps_live>;
-def : SourceOfDivergence<int_amdgcn_wqm_helper>;
 def : SourceOfDivergence<int_amdgcn_live_mask>;
 def : SourceOfDivergence<int_amdgcn_ds_swizzle>;
 def : SourceOfDivergence<int_amdgcn_ds_ordered_add>;

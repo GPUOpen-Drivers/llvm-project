@@ -1341,6 +1341,14 @@ bool LLParser::parseFnAttributeValuePairs(AttrBuilder &B,
       B.addAllocSizeAttr(ElemSizeArg, NumElemsArg);
       continue;
     }
+    case lltok::kw_vscale_range: {
+      unsigned MinValue, MaxValue;
+      // inAttrGrp doesn't matter; we only support vscale_range(a[, b])
+      if (parseVScaleRangeArguments(MinValue, MaxValue))
+        return true;
+      B.addVScaleRangeAttr(MinValue, MaxValue);
+      continue;
+    }
     case lltok::kw_alwaysinline: B.addAttribute(Attribute::AlwaysInline); break;
     case lltok::kw_argmemonly: B.addAttribute(Attribute::ArgMemOnly); break;
     case lltok::kw_builtin: B.addAttribute(Attribute::Builtin); break;
@@ -1728,6 +1736,13 @@ bool LLParser::parseOptionalParamAttrs(AttrBuilder &B) {
       B.addPreallocatedAttr(Ty);
       continue;
     }
+    case lltok::kw_inalloca: {
+      Type *Ty;
+      if (parseInalloca(Ty))
+        return true;
+      B.addInAllocaAttr(Ty);
+      continue;
+    }
     case lltok::kw_dereferenceable: {
       uint64_t Bytes;
       if (parseOptionalDerefAttrBytes(lltok::kw_dereferenceable, Bytes))
@@ -1749,7 +1764,6 @@ bool LLParser::parseOptionalParamAttrs(AttrBuilder &B) {
       B.addByRefAttr(Ty);
       continue;
     }
-    case lltok::kw_inalloca:        B.addAttribute(Attribute::InAlloca); break;
     case lltok::kw_inreg:           B.addAttribute(Attribute::InReg); break;
     case lltok::kw_nest:            B.addAttribute(Attribute::Nest); break;
     case lltok::kw_noundef:
@@ -1806,6 +1820,7 @@ bool LLParser::parseOptionalParamAttrs(AttrBuilder &B) {
     case lltok::kw_shadowcallstack:
     case lltok::kw_strictfp:
     case lltok::kw_uwtable:
+    case lltok::kw_vscale_range:
       HaveError |=
           error(Lex.getLoc(), "invalid use of function-only attribute");
       break;
@@ -1915,6 +1930,7 @@ bool LLParser::parseOptionalReturnAttrs(AttrBuilder &B) {
     case lltok::kw_shadowcallstack:
     case lltok::kw_strictfp:
     case lltok::kw_uwtable:
+    case lltok::kw_vscale_range:
       HaveError |=
           error(Lex.getLoc(), "invalid use of function-only attribute");
       break;
@@ -2355,6 +2371,29 @@ bool LLParser::parseAllocSizeArguments(unsigned &BaseSizeArg,
   return false;
 }
 
+bool LLParser::parseVScaleRangeArguments(unsigned &MinValue,
+                                         unsigned &MaxValue) {
+  Lex.Lex();
+
+  auto StartParen = Lex.getLoc();
+  if (!EatIfPresent(lltok::lparen))
+    return error(StartParen, "expected '('");
+
+  if (parseUInt32(MinValue))
+    return true;
+
+  if (EatIfPresent(lltok::comma)) {
+    if (parseUInt32(MaxValue))
+      return true;
+  } else
+    MaxValue = MinValue;
+
+  auto EndParen = Lex.getLoc();
+  if (!EatIfPresent(lltok::rparen))
+    return error(EndParen, "expected ')'");
+  return false;
+}
+
 /// parseScopeAndOrdering
 ///   if isAtomic: ::= SyncScope? AtomicOrdering
 ///   else: ::=
@@ -2659,6 +2698,12 @@ bool LLParser::parseRequiredTypeAttr(Type *&Result, lltok::Kind AttrName) {
 ///   ::= preallocated(<ty>)
 bool LLParser::parsePreallocated(Type *&Result) {
   return parseRequiredTypeAttr(Result, lltok::kw_preallocated);
+}
+
+/// parseInalloca
+///   ::= inalloca(<ty>)
+bool LLParser::parseInalloca(Type *&Result) {
+  return parseRequiredTypeAttr(Result, lltok::kw_inalloca);
 }
 
 /// parseByRef
@@ -4671,11 +4716,6 @@ bool LLParser::parseDISubrange(MDNode *&Result, bool IsDistinct) {
   Metadata *LowerBound = nullptr;
   Metadata *UpperBound = nullptr;
   Metadata *Stride = nullptr;
-  if (count.isMDSignedField())
-    Count = ConstantAsMetadata::get(ConstantInt::getSigned(
-        Type::getInt64Ty(Context), count.getMDSignedValue()));
-  else if (count.isMDField())
-    Count = count.getMDFieldValue();
 
   auto convToMetadata = [&](MDSignedOrMDField Bound) -> Metadata * {
     if (Bound.isMDSignedField())
@@ -4686,6 +4726,7 @@ bool LLParser::parseDISubrange(MDNode *&Result, bool IsDistinct) {
     return nullptr;
   };
 
+  Count = convToMetadata(count);
   LowerBound = convToMetadata(lowerBound);
   UpperBound = convToMetadata(upperBound);
   Stride = convToMetadata(stride);

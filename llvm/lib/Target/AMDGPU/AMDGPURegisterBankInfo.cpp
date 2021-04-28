@@ -1704,24 +1704,12 @@ static bool isZero(Register Reg, MachineRegisterInfo &MRI) {
   return mi_match(Reg, MRI, m_ICst(C)) && C == 0;
 }
 
-static unsigned extractGLC(unsigned CachePolicy) {
-  return CachePolicy & 1;
-}
-
-static unsigned extractSLC(unsigned CachePolicy) {
-  return (CachePolicy >> 1) & 1;
-}
-
-static unsigned extractDLC(unsigned CachePolicy) {
-  return (CachePolicy >> 2) & 1;
+static unsigned extractCPol(unsigned CachePolicy) {
+  return CachePolicy & AMDGPU::CPol::ALL;
 }
 
 static unsigned extractSWZ(unsigned CachePolicy) {
   return (CachePolicy >> 3) & 1;
-}
-
-static unsigned extractSCCB(unsigned CachePolicy) {
-  return (CachePolicy >> 4) & 1;
 }
 
 
@@ -1789,12 +1777,9 @@ AMDGPURegisterBankInfo::selectStoreIntrinsic(MachineIRBuilder &B,
   MIB.addUse(RSrc)
      .addUse(SOffset)
      .addImm(ImmOffset)
-     .addImm(extractGLC(CachePolicy))
-     .addImm(extractSLC(CachePolicy))
+     .addImm(extractCPol(CachePolicy))
      .addImm(0) // tfe: FIXME: Remove from inst
-     .addImm(extractDLC(CachePolicy))
      .addImm(extractSWZ(CachePolicy))
-     .addImm(extractSCCB(CachePolicy))
      .cloneMemRefs(MI);
 
   // FIXME: We need a way to report failure from applyMappingImpl.
@@ -4226,7 +4211,6 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
       OpdsMapping[3] = AMDGPU::getValueMapping(AMDGPU::SGPRRegBankID, WaveSize);
       break;
     }
-    case Intrinsic::amdgcn_wqm_helper:
     case Intrinsic::amdgcn_live_mask: {
       OpdsMapping[0] = AMDGPU::getValueMapping(AMDGPU::VCCRegBankID, 1);
       break;
@@ -4279,26 +4263,6 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
       OpdsMapping[1] = AMDGPU::getValueMapping(AMDGPU::SGPRRegBankID, Size);
       break;
     }
-    case Intrinsic::amdgcn_ds_gws_init:
-    case Intrinsic::amdgcn_ds_gws_barrier:
-    case Intrinsic::amdgcn_ds_gws_sema_br: {
-      OpdsMapping[1] = AMDGPU::getValueMapping(AMDGPU::VGPRRegBankID, 32);
-
-      // This must be an SGPR, but accept a VGPR.
-      unsigned Bank = getRegBankID(MI.getOperand(2).getReg(), MRI,
-                                   AMDGPU::SGPRRegBankID);
-      OpdsMapping[2] = AMDGPU::getValueMapping(Bank, 32);
-      break;
-    }
-    case Intrinsic::amdgcn_ds_gws_sema_v:
-    case Intrinsic::amdgcn_ds_gws_sema_p:
-    case Intrinsic::amdgcn_ds_gws_sema_release_all: {
-      // This must be an SGPR, but accept a VGPR.
-      unsigned Bank = getRegBankID(MI.getOperand(1).getReg(), MRI,
-                                   AMDGPU::SGPRRegBankID);
-      OpdsMapping[1] = AMDGPU::getValueMapping(Bank, 32);
-      break;
-    }
     case Intrinsic::amdgcn_waterfall_begin: {
       unsigned SizeDst = getSizeInBits(MI.getOperand(0).getReg(), MRI, *TRI);
       unsigned SizeSrc1 = getSizeInBits(MI.getOperand(2).getReg(), MRI, *TRI);
@@ -4333,6 +4297,26 @@ AMDGPURegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
       OpdsMapping[0] = AMDGPU::getValueMapping(AMDGPU::SGPRRegBankID, SizeDst);
       OpdsMapping[2] = AMDGPU::getValueMapping(AMDGPU::SGPRRegBankID, SizeSrc1);
       OpdsMapping[3] = AMDGPU::getValueMapping(AMDGPU::SGPRRegBankID, SizeSrc2);
+      break;
+    }
+    case Intrinsic::amdgcn_ds_gws_init:
+    case Intrinsic::amdgcn_ds_gws_barrier:
+    case Intrinsic::amdgcn_ds_gws_sema_br: {
+      OpdsMapping[1] = AMDGPU::getValueMapping(AMDGPU::VGPRRegBankID, 32);
+
+      // This must be an SGPR, but accept a VGPR.
+      unsigned Bank = getRegBankID(MI.getOperand(2).getReg(), MRI,
+                                   AMDGPU::SGPRRegBankID);
+      OpdsMapping[2] = AMDGPU::getValueMapping(Bank, 32);
+      break;
+    }
+    case Intrinsic::amdgcn_ds_gws_sema_v:
+    case Intrinsic::amdgcn_ds_gws_sema_p:
+    case Intrinsic::amdgcn_ds_gws_sema_release_all: {
+      // This must be an SGPR, but accept a VGPR.
+      unsigned Bank = getRegBankID(MI.getOperand(1).getReg(), MRI,
+                                   AMDGPU::SGPRRegBankID);
+      OpdsMapping[1] = AMDGPU::getValueMapping(Bank, 32);
       break;
     }
     default:

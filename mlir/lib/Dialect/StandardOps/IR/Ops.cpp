@@ -308,25 +308,13 @@ OpFoldResult AndOp::fold(ArrayRef<Attribute> operands) {
 // AssertOp
 //===----------------------------------------------------------------------===//
 
-namespace {
-struct EraseRedundantAssertions : public OpRewritePattern<AssertOp> {
-  using OpRewritePattern<AssertOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(AssertOp op,
-                                PatternRewriter &rewriter) const override {
-    // Erase assertion if argument is constant true.
-    if (matchPattern(op.arg(), m_One())) {
-      rewriter.eraseOp(op);
-      return success();
-    }
-    return failure();
+LogicalResult AssertOp::canonicalize(AssertOp op, PatternRewriter &rewriter) {
+  // Erase assertion if argument is constant true.
+  if (matchPattern(op.arg(), m_One())) {
+    rewriter.eraseOp(op);
+    return success();
   }
-};
-} // namespace
-
-void AssertOp::getCanonicalizationPatterns(OwningRewritePatternList &patterns,
-                                           MLIRContext *context) {
-  patterns.insert<EraseRedundantAssertions>(context);
+  return failure();
 }
 
 //===----------------------------------------------------------------------===//
@@ -453,8 +441,9 @@ static LogicalResult verify(AtomicYieldOp op) {
 /// Given a successor, try to collapse it to a new destination if it only
 /// contains a passthrough unconditional branch. If the successor is
 /// collapsable, `successor` and `successorOperands` are updated to reference
-/// the new destination and values. `argStorage` is an optional storage to use
-/// if operands to the collapsed successor need to be remapped.
+/// the new destination and values. `argStorage` is used as storage if operands
+/// to the collapsed successor need to be remapped. It must outlive uses of
+/// successorOperands.
 static LogicalResult collapseBranch(Block *&successor,
                                     ValueRange &successorOperands,
                                     SmallVectorImpl<Value> &argStorage) {
@@ -498,26 +487,21 @@ static LogicalResult collapseBranch(Block *&successor,
   return success();
 }
 
-namespace {
 /// Simplify a branch to a block that has a single predecessor. This effectively
 /// merges the two blocks.
-struct SimplifyBrToBlockWithSinglePred : public OpRewritePattern<BranchOp> {
-  using OpRewritePattern<BranchOp>::OpRewritePattern;
+static LogicalResult
+simplifyBrToBlockWithSinglePred(BranchOp op, PatternRewriter &rewriter) {
+  // Check that the successor block has a single predecessor.
+  Block *succ = op.getDest();
+  Block *opParent = op->getBlock();
+  if (succ == opParent || !llvm::hasSingleElement(succ->getPredecessors()))
+    return failure();
 
-  LogicalResult matchAndRewrite(BranchOp op,
-                                PatternRewriter &rewriter) const override {
-    // Check that the successor block has a single predecessor.
-    Block *succ = op.getDest();
-    Block *opParent = op->getBlock();
-    if (succ == opParent || !llvm::hasSingleElement(succ->getPredecessors()))
-      return failure();
-
-    // Merge the successor into the current block and erase the branch.
-    rewriter.mergeBlocks(succ, opParent, op.getOperands());
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
+  // Merge the successor into the current block and erase the branch.
+  rewriter.mergeBlocks(succ, opParent, op.getOperands());
+  rewriter.eraseOp(op);
+  return success();
+}
 
 ///   br ^bb1
 /// ^bb1
@@ -525,39 +509,33 @@ struct SimplifyBrToBlockWithSinglePred : public OpRewritePattern<BranchOp> {
 ///
 ///  -> br ^bbN(...)
 ///
-struct SimplifyPassThroughBr : public OpRewritePattern<BranchOp> {
-  using OpRewritePattern<BranchOp>::OpRewritePattern;
+static LogicalResult simplifyPassThroughBr(BranchOp op,
+                                           PatternRewriter &rewriter) {
+  Block *dest = op.getDest();
+  ValueRange destOperands = op.getOperands();
+  SmallVector<Value, 4> destOperandStorage;
 
-  LogicalResult matchAndRewrite(BranchOp op,
-                                PatternRewriter &rewriter) const override {
-    Block *dest = op.getDest();
-    ValueRange destOperands = op.getOperands();
-    SmallVector<Value, 4> destOperandStorage;
+  // Try to collapse the successor if it points somewhere other than this
+  // block.
+  if (dest == op->getBlock() ||
+      failed(collapseBranch(dest, destOperands, destOperandStorage)))
+    return failure();
 
-    // Try to collapse the successor if it points somewhere other than this
-    // block.
-    if (dest == op->getBlock() ||
-        failed(collapseBranch(dest, destOperands, destOperandStorage)))
-      return failure();
+  // Create a new branch with the collapsed successor.
+  rewriter.replaceOpWithNewOp<BranchOp>(op, dest, destOperands);
+  return success();
+}
 
-    // Create a new branch with the collapsed successor.
-    rewriter.replaceOpWithNewOp<BranchOp>(op, dest, destOperands);
-    return success();
-  }
-};
-} // end anonymous namespace.
+LogicalResult BranchOp::canonicalize(BranchOp op, PatternRewriter &rewriter) {
+  return success(succeeded(simplifyBrToBlockWithSinglePred(op, rewriter)) ||
+                 succeeded(simplifyPassThroughBr(op, rewriter)));
+}
 
 Block *BranchOp::getDest() { return getSuccessor(); }
 
 void BranchOp::setDest(Block *block) { return setSuccessor(block); }
 
 void BranchOp::eraseOperand(unsigned index) { (*this)->eraseOperand(index); }
-
-void BranchOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
-                                           MLIRContext *context) {
-  results.insert<SimplifyBrToBlockWithSinglePred, SimplifyPassThroughBr>(
-      context);
-}
 
 Optional<MutableOperandRange>
 BranchOp::getMutableSuccessorOperands(unsigned index) {
@@ -609,31 +587,20 @@ FunctionType CallOp::getCalleeType() {
 //===----------------------------------------------------------------------===//
 // CallIndirectOp
 //===----------------------------------------------------------------------===//
-namespace {
+
 /// Fold indirect calls that have a constant function as the callee operand.
-struct SimplifyIndirectCallWithKnownCallee
-    : public OpRewritePattern<CallIndirectOp> {
-  using OpRewritePattern<CallIndirectOp>::OpRewritePattern;
+LogicalResult CallIndirectOp::canonicalize(CallIndirectOp indirectCall,
+                                           PatternRewriter &rewriter) {
+  // Check that the callee is a constant callee.
+  SymbolRefAttr calledFn;
+  if (!matchPattern(indirectCall.getCallee(), m_Constant(&calledFn)))
+    return failure();
 
-  LogicalResult matchAndRewrite(CallIndirectOp indirectCall,
-                                PatternRewriter &rewriter) const override {
-    // Check that the callee is a constant callee.
-    SymbolRefAttr calledFn;
-    if (!matchPattern(indirectCall.getCallee(), m_Constant(&calledFn)))
-      return failure();
-
-    // Replace with a direct call.
-    rewriter.replaceOpWithNewOp<CallOp>(indirectCall, calledFn,
-                                        indirectCall.getResultTypes(),
-                                        indirectCall.getArgOperands());
-    return success();
-  }
-};
-} // end anonymous namespace.
-
-void CallIndirectOp::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
-  results.insert<SimplifyIndirectCallWithKnownCallee>(context);
+  // Replace with a direct call.
+  rewriter.replaceOpWithNewOp<CallOp>(indirectCall, calledFn,
+                                      indirectCall.getResultTypes(),
+                                      indirectCall.getArgOperands());
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -965,11 +932,11 @@ struct SimplifyCondBranchFromCondBranchOnSameCondition
 };
 } // end anonymous namespace
 
-void CondBranchOp::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
-  results.insert<SimplifyConstCondBranchPred, SimplifyPassThroughCondBranch,
-                 SimplifyCondBranchIdenticalSuccessors,
-                 SimplifyCondBranchFromCondBranchOnSameCondition>(context);
+void CondBranchOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                               MLIRContext *context) {
+  results.add<SimplifyConstCondBranchPred, SimplifyPassThroughCondBranch,
+              SimplifyCondBranchIdenticalSuccessors,
+              SimplifyCondBranchFromCondBranchOnSameCondition>(context);
 }
 
 Optional<MutableOperandRange>
@@ -1360,15 +1327,38 @@ static LogicalResult verify(ReturnOp op) {
 //===----------------------------------------------------------------------===//
 
 OpFoldResult SelectOp::fold(ArrayRef<Attribute> operands) {
+  auto trueVal = getTrueValue();
+  auto falseVal = getFalseValue();
+  if (trueVal == falseVal)
+    return trueVal;
+
   auto condition = getCondition();
 
   // select true, %0, %1 => %0
   if (matchPattern(condition, m_One()))
-    return getTrueValue();
+    return trueVal;
 
   // select false, %0, %1 => %1
   if (matchPattern(condition, m_Zero()))
-    return getFalseValue();
+    return falseVal;
+
+  if (auto cmp = dyn_cast_or_null<CmpIOp>(condition.getDefiningOp())) {
+    auto pred = cmp.predicate();
+    if (pred == mlir::CmpIPredicate::eq || pred == mlir::CmpIPredicate::ne) {
+      auto cmpLhs = cmp.lhs();
+      auto cmpRhs = cmp.rhs();
+
+      // %0 = cmpi eq, %arg0, %arg1
+      // %1 = select %0, %arg0, %arg1 => %arg1
+
+      // %0 = cmpi ne, %arg0, %arg1
+      // %1 = select %0, %arg0, %arg1 => %arg0
+
+      if ((cmpLhs == trueVal && cmpRhs == falseVal) ||
+          (cmpRhs == trueVal && cmpLhs == falseVal))
+        return pred == mlir::CmpIPredicate::ne ? trueVal : falseVal;
+    }
+  }
   return nullptr;
 }
 
@@ -1994,11 +1984,11 @@ struct SubTensorCanonicalizer {
   }
 };
 
-void SubTensorOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void SubTensorOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                               MLIRContext *context) {
-  results.insert<OpWithOffsetSizesAndStridesConstantArgumentFolder<
-                     SubTensorOp, SubTensorCanonicalizer>,
-                 SubTensorOpCastFolder>(context);
+  results.add<OpWithOffsetSizesAndStridesConstantArgumentFolder<
+                  SubTensorOp, SubTensorCanonicalizer>,
+              SubTensorOpCastFolder>(context);
 }
 
 //
@@ -2165,10 +2155,494 @@ struct SubTensorInsertOpCastFolder final
 };
 } // namespace
 
-void SubTensorInsertOp::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
-  results.insert<SubTensorInsertOpConstantArgumentFolder,
-                 SubTensorInsertOpCastFolder>(context);
+void SubTensorInsertOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                    MLIRContext *context) {
+  results.add<SubTensorInsertOpConstantArgumentFolder,
+              SubTensorInsertOpCastFolder>(context);
+}
+
+//===----------------------------------------------------------------------===//
+// SwitchOp
+//===----------------------------------------------------------------------===//
+
+void SwitchOp::build(OpBuilder &builder, OperationState &result, Value value,
+                     Block *defaultDestination, ValueRange defaultOperands,
+                     DenseIntElementsAttr caseValues,
+                     BlockRange caseDestinations,
+                     ArrayRef<ValueRange> caseOperands) {
+  SmallVector<Value> flattenedCaseOperands;
+  SmallVector<int32_t> caseOperandOffsets;
+  int32_t offset = 0;
+  for (ValueRange operands : caseOperands) {
+    flattenedCaseOperands.append(operands.begin(), operands.end());
+    caseOperandOffsets.push_back(offset);
+    offset += operands.size();
+  }
+  DenseIntElementsAttr caseOperandOffsetsAttr;
+  if (!caseOperandOffsets.empty())
+    caseOperandOffsetsAttr = builder.getI32VectorAttr(caseOperandOffsets);
+
+  build(builder, result, value, defaultOperands, flattenedCaseOperands,
+        caseValues, caseOperandOffsetsAttr, defaultDestination,
+        caseDestinations);
+}
+
+void SwitchOp::build(OpBuilder &builder, OperationState &result, Value value,
+                     Block *defaultDestination, ValueRange defaultOperands,
+                     ArrayRef<APInt> caseValues, BlockRange caseDestinations,
+                     ArrayRef<ValueRange> caseOperands) {
+  DenseIntElementsAttr caseValuesAttr;
+  if (!caseValues.empty()) {
+    ShapedType caseValueType = VectorType::get(
+        static_cast<int64_t>(caseValues.size()), value.getType());
+    caseValuesAttr = DenseIntElementsAttr::get(caseValueType, caseValues);
+  }
+  build(builder, result, value, defaultDestination, defaultOperands,
+        caseValuesAttr, caseDestinations, caseOperands);
+}
+
+/// <cases> ::= `default` `:` bb-id (`(` ssa-use-and-type-list `)`)?
+///             ( `,` integer `:` bb-id (`(` ssa-use-and-type-list `)`)? )*
+static ParseResult
+parseSwitchOpCases(OpAsmParser &parser, Type &flagType,
+                   Block *&defaultDestination,
+                   SmallVectorImpl<OpAsmParser::OperandType> &defaultOperands,
+                   SmallVectorImpl<Type> &defaultOperandTypes,
+                   DenseIntElementsAttr &caseValues,
+                   SmallVectorImpl<Block *> &caseDestinations,
+                   SmallVectorImpl<OpAsmParser::OperandType> &caseOperands,
+                   SmallVectorImpl<Type> &caseOperandTypes,
+                   DenseIntElementsAttr &caseOperandOffsets) {
+
+  if (failed(parser.parseKeyword("default")) || failed(parser.parseColon()) ||
+      failed(parser.parseSuccessor(defaultDestination)))
+    return failure();
+  if (succeeded(parser.parseOptionalLParen())) {
+    if (failed(parser.parseRegionArgumentList(defaultOperands)) ||
+        failed(parser.parseColonTypeList(defaultOperandTypes)) ||
+        failed(parser.parseRParen()))
+      return failure();
+  }
+
+  SmallVector<APInt> values;
+  SmallVector<int32_t> offsets;
+  unsigned bitWidth = flagType.getIntOrFloatBitWidth();
+  int64_t offset = 0;
+  while (succeeded(parser.parseOptionalComma())) {
+    int64_t value = 0;
+    if (failed(parser.parseInteger(value)))
+      return failure();
+    values.push_back(APInt(bitWidth, value));
+
+    Block *destination;
+    SmallVector<OpAsmParser::OperandType> operands;
+    if (failed(parser.parseColon()) ||
+        failed(parser.parseSuccessor(destination)))
+      return failure();
+    if (succeeded(parser.parseOptionalLParen())) {
+      if (failed(parser.parseRegionArgumentList(operands)) ||
+          failed(parser.parseColonTypeList(caseOperandTypes)) ||
+          failed(parser.parseRParen()))
+        return failure();
+    }
+    caseDestinations.push_back(destination);
+    caseOperands.append(operands.begin(), operands.end());
+    offsets.push_back(offset);
+    offset += operands.size();
+  }
+
+  if (values.empty())
+    return success();
+
+  Builder &builder = parser.getBuilder();
+  ShapedType caseValueType =
+      VectorType::get(static_cast<int64_t>(values.size()), flagType);
+  caseValues = DenseIntElementsAttr::get(caseValueType, values);
+  caseOperandOffsets = builder.getI32VectorAttr(offsets);
+
+  return success();
+}
+
+static void printSwitchOpCases(
+    OpAsmPrinter &p, SwitchOp op, Type flagType, Block *defaultDestination,
+    OperandRange defaultOperands, TypeRange defaultOperandTypes,
+    DenseIntElementsAttr caseValues, SuccessorRange caseDestinations,
+    OperandRange caseOperands, TypeRange caseOperandTypes,
+    ElementsAttr caseOperandOffsets) {
+  p << "  default: ";
+  p.printSuccessorAndUseList(defaultDestination, defaultOperands);
+
+  if (!caseValues)
+    return;
+
+  for (int64_t i = 0, size = caseValues.size(); i < size; ++i) {
+    p << ',';
+    p.printNewline();
+    p << "  ";
+    p << caseValues.getValue<APInt>(i).getLimitedValue();
+    p << ": ";
+    p.printSuccessorAndUseList(caseDestinations[i], op.getCaseOperands(i));
+  }
+  p.printNewline();
+}
+
+static LogicalResult verify(SwitchOp op) {
+  auto caseValues = op.case_values();
+  auto caseDestinations = op.caseDestinations();
+
+  if (!caseValues && caseDestinations.empty())
+    return success();
+
+  Type flagType = op.flag().getType();
+  Type caseValueType = caseValues->getType().getElementType();
+  if (caseValueType != flagType)
+    return op.emitOpError()
+           << "'flag' type (" << flagType << ") should match case value type ("
+           << caseValueType << ")";
+
+  if (caseValues &&
+      caseValues->size() != static_cast<int64_t>(caseDestinations.size()))
+    return op.emitOpError() << "number of case values (" << caseValues->size()
+                            << ") should match number of "
+                               "case destinations ("
+                            << caseDestinations.size() << ")";
+  return success();
+}
+
+OperandRange SwitchOp::getCaseOperands(unsigned index) {
+  return getCaseOperandsMutable(index);
+}
+
+MutableOperandRange SwitchOp::getCaseOperandsMutable(unsigned index) {
+  MutableOperandRange caseOperands = caseOperandsMutable();
+  if (!case_operand_offsets()) {
+    assert(caseOperands.size() == 0 &&
+           "non-empty case operands must have offsets");
+    return caseOperands;
+  }
+
+  ElementsAttr offsets = case_operand_offsets().getValue();
+  assert(index < offsets.size() && "invalid case operand offset index");
+
+  int64_t begin = offsets.getValue(index).cast<IntegerAttr>().getInt();
+  int64_t end = index + 1 == offsets.size()
+                    ? caseOperands.size()
+                    : offsets.getValue(index + 1).cast<IntegerAttr>().getInt();
+  return caseOperandsMutable().slice(begin, end - begin);
+}
+
+Optional<MutableOperandRange>
+SwitchOp::getMutableSuccessorOperands(unsigned index) {
+  assert(index < getNumSuccessors() && "invalid successor index");
+  return index == 0 ? defaultOperandsMutable()
+                    : getCaseOperandsMutable(index - 1);
+}
+
+Block *SwitchOp::getSuccessorForOperands(ArrayRef<Attribute> operands) {
+  Optional<DenseIntElementsAttr> caseValues = case_values();
+
+  if (!caseValues)
+    return defaultDestination();
+
+  SuccessorRange caseDests = caseDestinations();
+  if (auto value = operands.front().dyn_cast_or_null<IntegerAttr>()) {
+    for (int64_t i = 0, size = case_values()->size(); i < size; ++i)
+      if (value == caseValues->getValue<IntegerAttr>(i))
+        return caseDests[i];
+    return defaultDestination();
+  }
+  return nullptr;
+}
+
+/// switch %flag : i32, [
+///   default:  ^bb1
+/// ]
+///  -> br ^bb1
+static LogicalResult simplifySwitchWithOnlyDefault(SwitchOp op,
+                                                   PatternRewriter &rewriter) {
+  if (!op.caseDestinations().empty())
+    return failure();
+
+  rewriter.replaceOpWithNewOp<BranchOp>(op, op.defaultDestination(),
+                                        op.defaultOperands());
+  return success();
+}
+
+/// switch %flag : i32, [
+///   default: ^bb1,
+///   42: ^bb1,
+///   43: ^bb2
+/// ]
+/// ->
+/// switch %flag : i32, [
+///   default: ^bb1,
+///   43: ^bb2
+/// ]
+static LogicalResult
+dropSwitchCasesThatMatchDefault(SwitchOp op, PatternRewriter &rewriter) {
+  SmallVector<Block *> newCaseDestinations;
+  SmallVector<ValueRange> newCaseOperands;
+  SmallVector<APInt> newCaseValues;
+  bool requiresChange = false;
+  auto caseValues = op.case_values();
+  auto caseDests = op.caseDestinations();
+
+  for (int64_t i = 0, size = caseValues->size(); i < size; ++i) {
+    if (caseDests[i] == op.defaultDestination() &&
+        op.getCaseOperands(i) == op.defaultOperands()) {
+      requiresChange = true;
+      continue;
+    }
+    newCaseDestinations.push_back(caseDests[i]);
+    newCaseOperands.push_back(op.getCaseOperands(i));
+    newCaseValues.push_back(caseValues->getValue<APInt>(i));
+  }
+
+  if (!requiresChange)
+    return failure();
+
+  rewriter.replaceOpWithNewOp<SwitchOp>(op, op.flag(), op.defaultDestination(),
+                                        op.defaultOperands(), newCaseValues,
+                                        newCaseDestinations, newCaseOperands);
+  return success();
+}
+
+/// Helper for folding a switch with a constant value.
+/// switch %c_42 : i32, [
+///   default: ^bb1 ,
+///   42: ^bb2,
+///   43: ^bb3
+/// ]
+/// -> br ^bb2
+static void foldSwitch(SwitchOp op, PatternRewriter &rewriter,
+                       APInt caseValue) {
+  auto caseValues = op.case_values();
+  for (int64_t i = 0, size = caseValues->size(); i < size; ++i) {
+    if (caseValues->getValue<APInt>(i) == caseValue) {
+      rewriter.replaceOpWithNewOp<BranchOp>(op, op.caseDestinations()[i],
+                                            op.getCaseOperands(i));
+      return;
+    }
+  }
+  rewriter.replaceOpWithNewOp<BranchOp>(op, op.defaultDestination(),
+                                        op.defaultOperands());
+}
+
+/// switch %c_42 : i32, [
+///   default: ^bb1,
+///   42: ^bb2,
+///   43: ^bb3
+/// ]
+/// -> br ^bb2
+static LogicalResult simplifyConstSwitchValue(SwitchOp op,
+                                              PatternRewriter &rewriter) {
+  APInt caseValue;
+  if (!matchPattern(op.flag(), m_ConstantInt(&caseValue)))
+    return failure();
+
+  foldSwitch(op, rewriter, caseValue);
+  return success();
+}
+
+/// switch %c_42 : i32, [
+///   default: ^bb1,
+///   42: ^bb2,
+/// ]
+/// ^bb2:
+///   br ^bb3
+/// ->
+/// switch %c_42 : i32, [
+///   default: ^bb1,
+///   42: ^bb3,
+/// ]
+static LogicalResult simplifyPassThroughSwitch(SwitchOp op,
+                                               PatternRewriter &rewriter) {
+
+  SmallVector<Block *> newCaseDests;
+  SmallVector<ValueRange> newCaseOperands;
+  SmallVector<SmallVector<Value>> argStorage;
+  auto caseValues = op.case_values();
+  auto caseDests = op.caseDestinations();
+  bool requiresChange = false;
+  for (int64_t i = 0, size = caseValues->size(); i < size; ++i) {
+    Block *caseDest = caseDests[i];
+    ValueRange caseOperands = op.getCaseOperands(i);
+    argStorage.emplace_back();
+    if (succeeded(collapseBranch(caseDest, caseOperands, argStorage.back())))
+      requiresChange = true;
+
+    newCaseDests.push_back(caseDest);
+    newCaseOperands.push_back(caseOperands);
+  }
+
+  Block *defaultDest = op.defaultDestination();
+  ValueRange defaultOperands = op.defaultOperands();
+  argStorage.emplace_back();
+
+  if (succeeded(
+          collapseBranch(defaultDest, defaultOperands, argStorage.back())))
+    requiresChange = true;
+
+  if (!requiresChange)
+    return failure();
+
+  rewriter.replaceOpWithNewOp<SwitchOp>(op, op.flag(), defaultDest,
+                                        defaultOperands, caseValues.getValue(),
+                                        newCaseDests, newCaseOperands);
+  return success();
+}
+
+/// switch %flag : i32, [
+///   default: ^bb1,
+///   42: ^bb2,
+/// ]
+/// ^bb2:
+///   switch %flag : i32, [
+///     default: ^bb3,
+///     42: ^bb4
+///   ]
+/// ->
+/// switch %flag : i32, [
+///   default: ^bb1,
+///   42: ^bb2,
+/// ]
+/// ^bb2:
+///   br ^bb4
+///
+///  and
+///
+/// switch %flag : i32, [
+///   default: ^bb1,
+///   42: ^bb2,
+/// ]
+/// ^bb2:
+///   switch %flag : i32, [
+///     default: ^bb3,
+///     43: ^bb4
+///   ]
+/// ->
+/// switch %flag : i32, [
+///   default: ^bb1,
+///   42: ^bb2,
+/// ]
+/// ^bb2:
+///   br ^bb3
+static LogicalResult
+simplifySwitchFromSwitchOnSameCondition(SwitchOp op,
+                                        PatternRewriter &rewriter) {
+  // Check that we have a single distinct predecessor.
+  Block *currentBlock = op->getBlock();
+  Block *predecessor = currentBlock->getSinglePredecessor();
+  if (!predecessor)
+    return failure();
+
+  // Check that the predecessor terminates with a switch branch to this block
+  // and that it branches on the same condition and that this branch isn't the
+  // default destination.
+  auto predSwitch = dyn_cast<SwitchOp>(predecessor->getTerminator());
+  if (!predSwitch || op.flag() != predSwitch.flag() ||
+      predSwitch.defaultDestination() == currentBlock)
+    return failure();
+
+  // Fold this switch to an unconditional branch.
+  APInt caseValue;
+  bool isDefault = true;
+  SuccessorRange predDests = predSwitch.caseDestinations();
+  Optional<DenseIntElementsAttr> predCaseValues = predSwitch.case_values();
+  for (int64_t i = 0, size = predCaseValues->size(); i < size; ++i) {
+    if (currentBlock == predDests[i]) {
+      caseValue = predCaseValues->getValue<APInt>(i);
+      isDefault = false;
+      break;
+    }
+  }
+  if (isDefault)
+    rewriter.replaceOpWithNewOp<BranchOp>(op, op.defaultDestination(),
+                                          op.defaultOperands());
+  else
+    foldSwitch(op, rewriter, caseValue);
+  return success();
+}
+
+/// switch %flag : i32, [
+///   default: ^bb1,
+///   42: ^bb2
+/// ]
+/// ^bb1:
+///   switch %flag : i32, [
+///     default: ^bb3,
+///     42: ^bb4,
+///     43: ^bb5
+///   ]
+/// ->
+/// switch %flag : i32, [
+///   default: ^bb1,
+///   42: ^bb2,
+/// ]
+/// ^bb1:
+///   switch %flag : i32, [
+///     default: ^bb3,
+///     43: ^bb5
+///   ]
+static LogicalResult
+simplifySwitchFromDefaultSwitchOnSameCondition(SwitchOp op,
+                                               PatternRewriter &rewriter) {
+  // Check that we have a single distinct predecessor.
+  Block *currentBlock = op->getBlock();
+  Block *predecessor = currentBlock->getSinglePredecessor();
+  if (!predecessor)
+    return failure();
+
+  // Check that the predecessor terminates with a switch branch to this block
+  // and that it branches on the same condition and that this branch is the
+  // default destination.
+  auto predSwitch = dyn_cast<SwitchOp>(predecessor->getTerminator());
+  if (!predSwitch || op.flag() != predSwitch.flag() ||
+      predSwitch.defaultDestination() != currentBlock)
+    return failure();
+
+  // Delete case values that are not possible here.
+  DenseSet<APInt> caseValuesToRemove;
+  auto predDests = predSwitch.caseDestinations();
+  auto predCaseValues = predSwitch.case_values();
+  for (int64_t i = 0, size = predCaseValues->size(); i < size; ++i)
+    if (currentBlock != predDests[i])
+      caseValuesToRemove.insert(predCaseValues->getValue<APInt>(i));
+
+  SmallVector<Block *> newCaseDestinations;
+  SmallVector<ValueRange> newCaseOperands;
+  SmallVector<APInt> newCaseValues;
+  bool requiresChange = false;
+
+  auto caseValues = op.case_values();
+  auto caseDests = op.caseDestinations();
+  for (int64_t i = 0, size = caseValues->size(); i < size; ++i) {
+    if (caseValuesToRemove.contains(caseValues->getValue<APInt>(i))) {
+      requiresChange = true;
+      continue;
+    }
+    newCaseDestinations.push_back(caseDests[i]);
+    newCaseOperands.push_back(op.getCaseOperands(i));
+    newCaseValues.push_back(caseValues->getValue<APInt>(i));
+  }
+
+  if (!requiresChange)
+    return failure();
+
+  rewriter.replaceOpWithNewOp<SwitchOp>(op, op.flag(), op.defaultDestination(),
+                                        op.defaultOperands(), newCaseValues,
+                                        newCaseDestinations, newCaseOperands);
+  return success();
+}
+
+void SwitchOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                           MLIRContext *context) {
+  results.add(&simplifySwitchWithOnlyDefault)
+      .add(&dropSwitchCasesThatMatchDefault)
+      .add(&simplifyConstSwitchValue)
+      .add(&simplifyPassThroughSwitch)
+      .add(&simplifySwitchFromSwitchOnSameCondition)
+      .add(&simplifySwitchFromDefaultSwitchOnSameCondition);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2190,6 +2664,16 @@ static LogicalResult verify(TruncateIOp op) {
            << srcType << " must be wider than result type " << dstType;
 
   return success();
+}
+
+OpFoldResult TruncateIOp::fold(ArrayRef<Attribute> operands) {
+  // trunci(zexti(a)) -> a
+  // trunci(sexti(a)) -> a
+  if (matchPattern(getOperand(), m_Op<ZeroExtendIOp>()) ||
+      matchPattern(getOperand(), m_Op<SignExtendIOp>()))
+    return getOperand().getDefiningOp()->getOperand(0);
+
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//

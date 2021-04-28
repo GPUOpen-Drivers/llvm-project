@@ -991,13 +991,19 @@ IntLoadOpPattern::matchAndRewrite(memref::LoadOp loadOp,
                            loadOperands.indices(), loc, rewriter);
 
   int srcBits = memrefType.getElementType().getIntOrFloatBitWidth();
-  auto dstType = typeConverter.convertType(memrefType)
-                     .cast<spirv::PointerType>()
-                     .getPointeeType()
-                     .cast<spirv::StructType>()
-                     .getElementType(0)
-                     .cast<spirv::ArrayType>()
-                     .getElementType();
+  bool isBool = srcBits == 1;
+  if (isBool)
+    srcBits = typeConverter.getOptions().boolNumBits;
+  Type pointeeType = typeConverter.convertType(memrefType)
+                         .cast<spirv::PointerType>()
+                         .getPointeeType();
+  Type structElemType = pointeeType.cast<spirv::StructType>().getElementType(0);
+  Type dstType;
+  if (auto arrayType = structElemType.dyn_cast<spirv::ArrayType>())
+    dstType = arrayType.getElementType();
+  else
+    dstType = structElemType.cast<spirv::RuntimeArrayType>().getElementType();
+
   int dstBits = dstType.getIntOrFloatBitWidth();
   assert(dstBits % srcBits == 0);
 
@@ -1017,7 +1023,7 @@ IntLoadOpPattern::matchAndRewrite(memref::LoadOp loadOp,
                                                    srcBits, dstBits, rewriter);
   Value spvLoadOp = rewriter.create<spirv::LoadOp>(
       loc, dstType, adjustedPtr,
-      loadOp->getAttrOfType<IntegerAttr>(
+      loadOp->getAttrOfType<spirv::MemoryAccessAttr>(
           spirv::attributeName<spirv::MemoryAccess>()),
       loadOp->getAttrOfType<IntegerAttr>("alignment"));
 
@@ -1044,6 +1050,18 @@ IntLoadOpPattern::matchAndRewrite(memref::LoadOp loadOp,
                                                       shiftValue);
   result = rewriter.create<spirv::ShiftRightArithmeticOp>(loc, dstType, result,
                                                           shiftValue);
+
+  if (isBool) {
+    dstType = typeConverter.convertType(loadOp.getType());
+    mask = spirv::ConstantOp::getOne(result.getType(), loc, rewriter);
+    Value isOne = rewriter.create<spirv::IEqualOp>(loc, result, mask);
+    Value zero = spirv::ConstantOp::getZero(dstType, loc, rewriter);
+    Value one = spirv::ConstantOp::getOne(dstType, loc, rewriter);
+    result = rewriter.create<spirv::SelectOp>(loc, dstType, isOne, one, zero);
+  } else if (result.getType().getIntOrFloatBitWidth() !=
+             static_cast<unsigned>(dstBits)) {
+    result = rewriter.create<spirv::SConvertOp>(loc, dstType, result);
+  }
   rewriter.replaceOp(loadOp, result);
 
   assert(accessChainOp.use_empty());
@@ -1117,13 +1135,20 @@ IntStoreOpPattern::matchAndRewrite(memref::StoreOp storeOp,
       spirv::getElementPtr(typeConverter, memrefType, storeOperands.memref(),
                            storeOperands.indices(), loc, rewriter);
   int srcBits = memrefType.getElementType().getIntOrFloatBitWidth();
-  auto dstType = typeConverter.convertType(memrefType)
-                     .cast<spirv::PointerType>()
-                     .getPointeeType()
-                     .cast<spirv::StructType>()
-                     .getElementType(0)
-                     .cast<spirv::ArrayType>()
-                     .getElementType();
+
+  bool isBool = srcBits == 1;
+  if (isBool)
+    srcBits = typeConverter.getOptions().boolNumBits;
+  Type pointeeType = typeConverter.convertType(memrefType)
+                         .cast<spirv::PointerType>()
+                         .getPointeeType();
+  Type structElemType = pointeeType.cast<spirv::StructType>().getElementType(0);
+  Type dstType;
+  if (auto arrayType = structElemType.dyn_cast<spirv::ArrayType>())
+    dstType = arrayType.getElementType();
+  else
+    dstType = structElemType.cast<spirv::RuntimeArrayType>().getElementType();
+
   int dstBits = dstType.getIntOrFloatBitWidth();
   assert(dstBits % srcBits == 0);
 
@@ -1156,8 +1181,14 @@ IntStoreOpPattern::matchAndRewrite(memref::StoreOp storeOp,
       rewriter.create<spirv::ShiftLeftLogicalOp>(loc, dstType, mask, offset);
   clearBitsMask = rewriter.create<spirv::NotOp>(loc, dstType, clearBitsMask);
 
-  Value storeVal =
-      shiftValue(loc, storeOperands.value(), offset, mask, dstBits, rewriter);
+  Value storeVal = storeOperands.value();
+  if (isBool) {
+    Value zero = spirv::ConstantOp::getZero(dstType, loc, rewriter);
+    Value one = spirv::ConstantOp::getOne(dstType, loc, rewriter);
+    storeVal =
+        rewriter.create<spirv::SelectOp>(loc, dstType, storeVal, one, zero);
+  }
+  storeVal = shiftValue(loc, storeVal, offset, mask, dstBits, rewriter);
   Value adjustedPtr = adjustAccessChainForBitwidth(typeConverter, accessChainOp,
                                                    srcBits, dstBits, rewriter);
   Optional<spirv::Scope> scope = getAtomicOpScope(memrefType);
@@ -1224,16 +1255,18 @@ XOrOpPattern::matchAndRewrite(XOrOp xorOp, ArrayRef<Value> operands,
 //===----------------------------------------------------------------------===//
 
 namespace mlir {
-void populateStandardToSPIRVPatterns(MLIRContext *context,
-                                     SPIRVTypeConverter &typeConverter,
-                                     OwningRewritePatternList &patterns) {
-  patterns.insert<
+void populateStandardToSPIRVPatterns(SPIRVTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns) {
+  MLIRContext *context = patterns.getContext();
+
+  patterns.add<
       // Math dialect operations.
       // TODO: Move to separate pass.
       UnaryAndBinaryOpPattern<math::CosOp, spirv::GLSLCosOp>,
       UnaryAndBinaryOpPattern<math::ExpOp, spirv::GLSLExpOp>,
       UnaryAndBinaryOpPattern<math::LogOp, spirv::GLSLLogOp>,
       UnaryAndBinaryOpPattern<math::RsqrtOp, spirv::GLSLInverseSqrtOp>,
+      UnaryAndBinaryOpPattern<math::PowFOp, spirv::GLSLPowOp>,
       UnaryAndBinaryOpPattern<math::SinOp, spirv::GLSLSinOp>,
       UnaryAndBinaryOpPattern<math::SqrtOp, spirv::GLSLSqrtOp>,
       UnaryAndBinaryOpPattern<math::TanhOp, spirv::GLSLTanhOp>,
@@ -1289,16 +1322,15 @@ void populateStandardToSPIRVPatterns(MLIRContext *context,
 
   // Give CmpFOpNanKernelPattern a higher benefit so it can prevail when Kernel
   // capability is available.
-  patterns.insert<CmpFOpNanKernelPattern>(typeConverter, context,
-                                          /*benefit=*/2);
+  patterns.add<CmpFOpNanKernelPattern>(typeConverter, context,
+                                       /*benefit=*/2);
 }
 
-void populateTensorToSPIRVPatterns(MLIRContext *context,
-                                   SPIRVTypeConverter &typeConverter,
+void populateTensorToSPIRVPatterns(SPIRVTypeConverter &typeConverter,
                                    int64_t byteCountThreshold,
-                                   OwningRewritePatternList &patterns) {
-  patterns.insert<TensorExtractPattern>(typeConverter, context,
-                                        byteCountThreshold);
+                                   RewritePatternSet &patterns) {
+  patterns.add<TensorExtractPattern>(typeConverter, patterns.getContext(),
+                                     byteCountThreshold);
 }
 
 } // namespace mlir

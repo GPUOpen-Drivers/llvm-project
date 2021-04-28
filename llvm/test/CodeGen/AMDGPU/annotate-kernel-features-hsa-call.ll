@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: opt -S -mtriple=amdgcn-unknown-amdhsa -amdgpu-annotate-kernel-features %s | FileCheck -check-prefix=HSA %s
 
 declare i32 @llvm.amdgcn.workgroup.id.x() #0

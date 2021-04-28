@@ -65,6 +65,49 @@ static bool hasBcmp(const Triple &TT) {
   return TT.isOSFreeBSD() || TT.isOSSolaris();
 }
 
+static bool isCallingConvCCompatible(CallingConv::ID CC, StringRef TT,
+                                     FunctionType *FuncTy) {
+  switch (CC) {
+  default:
+    return false;
+  case llvm::CallingConv::C:
+    return true;
+  case llvm::CallingConv::ARM_APCS:
+  case llvm::CallingConv::ARM_AAPCS:
+  case llvm::CallingConv::ARM_AAPCS_VFP: {
+
+    // The iOS ABI diverges from the standard in some cases, so for now don't
+    // try to simplify those calls.
+    if (Triple(TT).isiOS())
+      return false;
+
+    if (!FuncTy->getReturnType()->isPointerTy() &&
+        !FuncTy->getReturnType()->isIntegerTy() &&
+        !FuncTy->getReturnType()->isVoidTy())
+      return false;
+
+    for (auto *Param : FuncTy->params()) {
+      if (!Param->isPointerTy() && !Param->isIntegerTy())
+        return false;
+    }
+    return true;
+  }
+  }
+  return false;
+}
+
+bool TargetLibraryInfoImpl::isCallingConvCCompatible(CallBase *CI) {
+  return ::isCallingConvCCompatible(CI->getCallingConv(),
+                                    CI->getModule()->getTargetTriple(),
+                                    CI->getFunctionType());
+}
+
+bool TargetLibraryInfoImpl::isCallingConvCCompatible(Function *F) {
+  return ::isCallingConvCCompatible(F->getCallingConv(),
+                                    F->getParent()->getTargetTriple(),
+                                    F->getFunctionType());
+}
+
 /// Initialize the set of available library functions based on the specified
 /// target triple. This should be carefully written so that a missing target
 /// triple gets a sane set of defaults.
@@ -547,6 +590,17 @@ static void initialize(TargetLibraryInfoImpl &TLI, const Triple &T,
   if (T.isNVPTX()) {
     TLI.disableAllFunctions();
     TLI.setAvailable(LibFunc_nvvm_reflect);
+    TLI.setAvailable(llvm::LibFunc_malloc);
+    TLI.setAvailable(llvm::LibFunc_free);
+
+    // TODO: We could enable the following two according to [0] but we haven't
+    //       done an evaluation wrt. the performance implications.
+    // [0]
+    // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#dynamic-global-memory-allocation-and-operations
+    //
+    //    TLI.setAvailable(llvm::LibFunc_memcpy);
+    //    TLI.setAvailable(llvm::LibFunc_memset);
+
   } else {
     TLI.setUnavailable(LibFunc_nvvm_reflect);
   }

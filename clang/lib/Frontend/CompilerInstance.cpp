@@ -104,8 +104,10 @@ bool CompilerInstance::createTarget() {
   if (!hasTarget())
     return false;
 
-  // Create TargetInfo for the other side of CUDA/OpenMP/SYCL compilation.
-  if ((getLangOpts().CUDA || getLangOpts().OpenMPIsDevice ||
+  // Check whether AuxTarget exists, if not, then create TargetInfo for the
+  // other side of CUDA/OpenMP/SYCL compilation.
+  if (!getAuxTarget() &&
+      (getLangOpts().CUDA || getLangOpts().OpenMPIsDevice ||
        getLangOpts().SYCLIsDevice) &&
       !getFrontendOpts().AuxTriple.empty()) {
     auto TO = std::make_shared<TargetOptions>();
@@ -277,7 +279,7 @@ static void SetUpDiagnosticLog(DiagnosticOptions *DiagOpts,
     // Create the output stream.
     auto FileOS = std::make_unique<llvm::raw_fd_ostream>(
         DiagOpts->DiagnosticLogFile, EC,
-        llvm::sys::fs::OF_Append | llvm::sys::fs::OF_Text);
+        llvm::sys::fs::OF_Append | llvm::sys::fs::OF_TextWithCRLF);
     if (EC) {
       Diags.Report(diag::warn_fe_cc_log_diagnostics_failure)
           << DiagOpts->DiagnosticLogFile << EC.message();
@@ -814,15 +816,18 @@ CompilerInstance::createOutputFileImpl(StringRef OutputPath, bool Binary,
     TempPath += OutputExtension;
     TempPath += ".tmp";
     int fd;
-    std::error_code EC =
-        llvm::sys::fs::createUniqueFile(TempPath, fd, TempPath);
+    std::error_code EC = llvm::sys::fs::createUniqueFile(
+        TempPath, fd, TempPath,
+        Binary ? llvm::sys::fs::OF_None : llvm::sys::fs::OF_Text);
 
     if (CreateMissingDirectories &&
         EC == llvm::errc::no_such_file_or_directory) {
       StringRef Parent = llvm::sys::path::parent_path(OutputPath);
       EC = llvm::sys::fs::create_directories(Parent);
       if (!EC) {
-        EC = llvm::sys::fs::createUniqueFile(TempPath, fd, TempPath);
+        EC = llvm::sys::fs::createUniqueFile(TempPath, fd, TempPath,
+                                             Binary ? llvm::sys::fs::OF_None
+                                                    : llvm::sys::fs::OF_Text);
       }
     }
 
@@ -840,7 +845,7 @@ CompilerInstance::createOutputFileImpl(StringRef OutputPath, bool Binary,
     std::error_code EC;
     OS.reset(new llvm::raw_fd_ostream(
         *OSFile, EC,
-        (Binary ? llvm::sys::fs::OF_None : llvm::sys::fs::OF_Text)));
+        (Binary ? llvm::sys::fs::OF_None : llvm::sys::fs::OF_TextWithCRLF)));
     if (EC)
       return llvm::errorCodeToError(EC);
   }
@@ -998,7 +1003,7 @@ bool CompilerInstance::ExecuteAction(FrontendAction &Act) {
   if (!StatsFile.empty()) {
     std::error_code EC;
     auto StatS = std::make_unique<llvm::raw_fd_ostream>(
-        StatsFile, EC, llvm::sys::fs::OF_Text);
+        StatsFile, EC, llvm::sys::fs::OF_TextWithCRLF);
     if (EC) {
       getDiagnostics().Report(diag::warn_fe_unable_to_open_stats_file)
           << StatsFile << EC.message();

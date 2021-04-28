@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "OpFormatGen.h"
+#include "OpGenHelpers.h"
 #include "mlir/TableGen/CodeGenHelpers.h"
 #include "mlir/TableGen/Format.h"
 #include "mlir/TableGen/GenInfo.h"
@@ -22,8 +23,7 @@
 #include "mlir/TableGen/SideEffects.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Regex.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/TableGen/Error.h"
 #include "llvm/TableGen/Record.h"
@@ -34,17 +34,6 @@
 using namespace llvm;
 using namespace mlir;
 using namespace mlir::tblgen;
-
-cl::OptionCategory opDefGenCat("Options for -gen-op-defs and -gen-op-decls");
-
-static cl::opt<std::string> opIncFilter(
-    "op-include-regex",
-    cl::desc("Regex of name of op's to include (no filter if empty)"),
-    cl::cat(opDefGenCat));
-static cl::opt<std::string> opExcFilter(
-    "op-exclude-regex",
-    cl::desc("Regex of name of op's to exclude (no filter if empty)"),
-    cl::cat(opDefGenCat));
 
 static const char *const tblgenNamePrefix = "tblgen_";
 static const char *const generatedArgName = "odsArg";
@@ -90,13 +79,14 @@ const char *adapterSegmentSizeAttrInitCode = R"(
   auto sizeAttr = odsAttrs.get("{0}").cast<::mlir::DenseIntElementsAttr>();
 )";
 const char *opSegmentSizeAttrInitCode = R"(
-  auto sizeAttr = (*this)->getAttrOfType<::mlir::DenseIntElementsAttr>("{0}");
+  auto sizeAttr = (*this)->getAttr("{0}").cast<::mlir::DenseIntElementsAttr>();
 )";
 const char *attrSizedSegmentValueRangeCalcCode = R"(
+  auto sizeAttrValues = sizeAttr.getValues<uint32_t>();
   unsigned start = 0;
   for (unsigned i = 0; i < index; ++i)
-    start += (*(sizeAttr.begin() + i)).getZExtValue();
-  unsigned size = (*(sizeAttr.begin() + index)).getZExtValue();
+    start += *(sizeAttrValues.begin() + i);
+  unsigned size = *(sizeAttrValues.begin() + index);
   return {start, size};
 )";
 
@@ -1673,15 +1663,40 @@ void OpEmitter::genCodeForAddingArgAndRegionForBuilder(OpMethodBody &body,
 }
 
 void OpEmitter::genCanonicalizerDecls() {
-  if (!def.getValueAsBit("hasCanonicalizer"))
+  bool hasCanonicalizeMethod = def.getValueAsBit("hasCanonicalizeMethod");
+  if (hasCanonicalizeMethod) {
+    // static LogicResult FooOp::
+    // canonicalize(FooOp op, PatternRewriter &rewriter);
+    SmallVector<OpMethodParameter, 2> paramList;
+    paramList.emplace_back(op.getCppClassName(), "op");
+    paramList.emplace_back("::mlir::PatternRewriter &", "rewriter");
+    opClass.addMethodAndPrune("::mlir::LogicalResult", "canonicalize",
+                              OpMethod::MP_StaticDeclaration,
+                              std::move(paramList));
+  }
+
+  // We get a prototype for 'getCanonicalizationPatterns' if requested directly
+  // or if using a 'canonicalize' method.
+  bool hasCanonicalizer = def.getValueAsBit("hasCanonicalizer");
+  if (!hasCanonicalizeMethod && !hasCanonicalizer)
     return;
 
+  // We get a body for 'getCanonicalizationPatterns' when using a 'canonicalize'
+  // method, but not implementing 'getCanonicalizationPatterns' manually.
+  bool hasBody = hasCanonicalizeMethod && !hasCanonicalizer;
+
+  // Add a signature for getCanonicalizationPatterns if implemented by the
+  // dialect or if synthesized to call 'canonicalize'.
   SmallVector<OpMethodParameter, 2> paramList;
-  paramList.emplace_back("::mlir::OwningRewritePatternList &", "results");
+  paramList.emplace_back("::mlir::RewritePatternSet &", "results");
   paramList.emplace_back("::mlir::MLIRContext *", "context");
-  opClass.addMethodAndPrune("void", "getCanonicalizationPatterns",
-                            OpMethod::MP_StaticDeclaration,
-                            std::move(paramList));
+  auto kind = hasBody ? OpMethod::MP_Static : OpMethod::MP_StaticDeclaration;
+  auto *method = opClass.addMethodAndPrune(
+      "void", "getCanonicalizationPatterns", kind, std::move(paramList));
+
+  // If synthesizing the method, fill it it.
+  if (hasBody)
+    method->body() << "  results.add(canonicalize);\n";
 }
 
 void OpEmitter::genFolderDecls() {
@@ -2446,44 +2461,10 @@ static void emitOpList(const std::vector<Record *> &defs, raw_ostream &os) {
       [&os]() { os << ",\n"; });
 }
 
-static std::string getOperationName(const Record &def) {
-  auto prefix = def.getValueAsDef("opDialect")->getValueAsString("name");
-  auto opName = def.getValueAsString("opName");
-  if (prefix.empty())
-    return std::string(opName);
-  return std::string(llvm::formatv("{0}.{1}", prefix, opName));
-}
-
-static std::vector<Record *>
-getAllDerivedDefinitions(const RecordKeeper &recordKeeper,
-                         StringRef className) {
-  Record *classDef = recordKeeper.getClass(className);
-  if (!classDef)
-    PrintFatalError("ERROR: Couldn't find the `" + className + "' class!\n");
-
-  llvm::Regex includeRegex(opIncFilter), excludeRegex(opExcFilter);
-  std::vector<Record *> defs;
-  for (const auto &def : recordKeeper.getDefs()) {
-    if (!def.second->isSubClassOf(classDef))
-      continue;
-    // Include if no include filter or include filter matches.
-    if (!opIncFilter.empty() &&
-        !includeRegex.match(getOperationName(*def.second)))
-      continue;
-    // Unless there is an exclude filter and it matches.
-    if (!opExcFilter.empty() &&
-        excludeRegex.match(getOperationName(*def.second)))
-      continue;
-    defs.push_back(def.second.get());
-  }
-
-  return defs;
-}
-
 static bool emitOpDecls(const RecordKeeper &recordKeeper, raw_ostream &os) {
   emitSourceFileHeader("Op Declarations", os);
 
-  const auto &defs = getAllDerivedDefinitions(recordKeeper, "Op");
+  std::vector<Record *> defs = getRequestedOpDefinitions(recordKeeper);
   emitOpClasses(recordKeeper, defs, os, /*emitDecl=*/true);
 
   return false;
@@ -2492,7 +2473,7 @@ static bool emitOpDecls(const RecordKeeper &recordKeeper, raw_ostream &os) {
 static bool emitOpDefs(const RecordKeeper &recordKeeper, raw_ostream &os) {
   emitSourceFileHeader("Op Definitions", os);
 
-  const auto &defs = getAllDerivedDefinitions(recordKeeper, "Op");
+  std::vector<Record *> defs = getRequestedOpDefinitions(recordKeeper);
   emitOpList(defs, os);
   emitOpClasses(recordKeeper, defs, os, /*emitDecl=*/false);
 

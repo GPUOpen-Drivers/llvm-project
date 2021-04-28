@@ -1146,10 +1146,6 @@ void BTFDebug::processGlobals(bool ProcessingMapDef) {
         SecName = ".rodata";
       else
         SecName = Global.getInitializer()->isZeroValue() ? ".bss" : ".data";
-    } else {
-      // extern variables without explicit section,
-      // put them into ".extern" section.
-      SecName = ".extern";
     }
 
     if (ProcessingMapDef != SecName.startswith(".maps"))
@@ -1196,6 +1192,7 @@ void BTFDebug::processGlobals(bool ProcessingMapDef) {
     if (Linkage != GlobalValue::InternalLinkage &&
         Linkage != GlobalValue::ExternalLinkage &&
         Linkage != GlobalValue::WeakAnyLinkage &&
+        Linkage != GlobalValue::WeakODRLinkage &&
         Linkage != GlobalValue::ExternalWeakLinkage)
       continue;
 
@@ -1212,7 +1209,9 @@ void BTFDebug::processGlobals(bool ProcessingMapDef) {
         std::make_unique<BTFKindVar>(Global.getName(), GVTypeId, GVarInfo);
     uint32_t VarId = addType(std::move(VarEntry));
 
-    assert(!SecName.empty());
+    // An empty SecName means an extern variable without section attribute.
+    if (SecName.empty())
+      continue;
 
     // Find or create a DataSec
     if (DataSecEntries.find(std::string(SecName)) == DataSecEntries.end()) {
@@ -1224,8 +1223,8 @@ void BTFDebug::processGlobals(bool ProcessingMapDef) {
     const DataLayout &DL = Global.getParent()->getDataLayout();
     uint32_t Size = DL.getTypeAllocSize(Global.getType()->getElementType());
 
-    DataSecEntries[std::string(SecName)]->addVar(VarId, Asm->getSymbol(&Global),
-                                                 Size);
+    DataSecEntries[std::string(SecName)]->addDataSecEntry(VarId,
+        Asm->getSymbol(&Global), Size);
   }
 }
 
@@ -1303,7 +1302,19 @@ void BTFDebug::processFuncPrototypes(const Function *F) {
   uint8_t Scope = BTF::FUNC_EXTERN;
   auto FuncTypeEntry =
       std::make_unique<BTFTypeFunc>(SP->getName(), ProtoTypeId, Scope);
-  addType(std::move(FuncTypeEntry));
+  uint32_t FuncId = addType(std::move(FuncTypeEntry));
+  if (F->hasSection()) {
+    StringRef SecName = F->getSection();
+
+    if (DataSecEntries.find(std::string(SecName)) == DataSecEntries.end()) {
+      DataSecEntries[std::string(SecName)] =
+          std::make_unique<BTFKindDataSec>(Asm, std::string(SecName));
+    }
+
+    // We really don't know func size, set it to 0.
+    DataSecEntries[std::string(SecName)]->addDataSecEntry(FuncId,
+        Asm->getSymbol(F), 0);
+  }
 }
 
 void BTFDebug::endModule() {

@@ -195,6 +195,11 @@ static cl::opt<bool> EnableStructurizerWorkarounds(
     cl::desc("Enable workarounds for the StructurizeCFG pass"), cl::init(true),
     cl::Hidden);
 
+static cl::opt<bool, true> EnableLowerModuleLDS(
+    "amdgpu-enable-lower-module-lds", cl::desc("Enable lower module lds pass"),
+    cl::location(AMDGPUTargetMachine::EnableLowerModuleLDS), cl::init(true),
+    cl::Hidden);
+
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   // Register the target
   RegisterTargetMachine<R600TargetMachine> X(getTheAMDGPUTarget());
@@ -239,6 +244,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPULateCodeGenPreparePass(*PR);
   initializeAMDGPUPropagateAttributesEarlyPass(*PR);
   initializeAMDGPUPropagateAttributesLatePass(*PR);
+  initializeAMDGPULowerModuleLDSPass(*PR);
   initializeAMDGPURewriteOutArgumentsPass(*PR);
   initializeAMDGPUUnifyMetadataPass(*PR);
   initializeSIAnnotateControlFlowPass(*PR);
@@ -247,9 +253,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeSIModeRegisterPass(*PR);
   initializeSIWholeQuadModePass(*PR);
   initializeSILowerControlFlowPass(*PR);
-  initializeSIRemoveShortExecBranchesPass(*PR);
   initializeSIPreEmitPeepholePass(*PR);
-  initializeSIInsertSkipsPass(*PR);
+  initializeSILateBranchLoweringPass(*PR);
   initializeSIBufMemMergePass(*PR);
   initializeSIMemoryLegalizerPass(*PR);
   initializeSIOptimizeExecMaskingPass(*PR);
@@ -264,7 +269,6 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPUPrintfRuntimeBindingPass(*PR);
   initializeGCNRegBankReassignPass(*PR);
   initializeGCNNSAReassignPass(*PR);
-  initializeSIAddIMGInitPass(*PR);
   initializeSIInsertScratchBoundsPass(*PR);
   initializeSIFixScratchSizePass(*PR);
 }
@@ -400,6 +404,7 @@ AMDGPUTargetMachine::AMDGPUTargetMachine(const Target &T, const Triple &TT,
 bool AMDGPUTargetMachine::EnableLateStructurizeCFG = false;
 bool AMDGPUTargetMachine::EnableFunctionCalls = false;
 bool AMDGPUTargetMachine::EnableFixedFunctionABI = false;
+bool AMDGPUTargetMachine::EnableLowerModuleLDS = true;
 
 AMDGPUTargetMachine::~AMDGPUTargetMachine() = default;
 
@@ -513,6 +518,10 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB,
           PM.addPass(AMDGPUAlwaysInlinePass());
           return true;
         }
+        if (PassName == "amdgpu-lower-module-lds") {
+          PM.addPass(AMDGPULowerModuleLDSPass());
+          return true;
+        }
         return false;
       });
   PB.registerPipelineParsingCallback(
@@ -542,7 +551,6 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB,
           PM.addPass(AMDGPUPropagateAttributesEarlyPass(*this));
           return true;
         }
-
         return false;
       });
 
@@ -891,6 +899,10 @@ void AMDGPUPassConfig::addIRPasses() {
   // Replace OpenCL enqueued block function pointers with global variables.
   addPass(createAMDGPUOpenCLEnqueuedBlockLoweringPass());
 
+  // Can increase LDS used by kernel so runs before PromoteAlloca
+  if (EnableLowerModuleLDS)
+    addPass(createAMDGPULowerModuleLDSPass());
+
   if (TM.getOptLevel() > CodeGenOpt::None) {
     addPass(createInferAddressSpacesPass());
     addPass(createAMDGPUPromoteAlloca());
@@ -1106,7 +1118,6 @@ bool GCNPassConfig::addInstSelector() {
   AMDGPUPassConfig::addInstSelector();
   addPass(&SIFixSGPRCopiesID);
   addPass(createSILowerI1CopiesPass());
-  addPass(createSIAddIMGInitPass());
   return false;
 }
 
@@ -1143,10 +1154,6 @@ void GCNPassConfig::addPreGlobalInstructionSelect() {
 
 bool GCNPassConfig::addGlobalInstructionSelect() {
   addPass(new InstructionSelect(getOptLevel()));
-  // TODO: Fix instruction selection to do the right thing for image
-  // instructions with tfe or lwe in the first place, instead of running a
-  // separate pass to fix them up?
-  addPass(createSIAddIMGInitPass());
   return false;
 }
 
@@ -1197,7 +1204,7 @@ void GCNPassConfig::addOptimizedRegAlloc() {
 bool GCNPassConfig::addPreRewrite() {
   if (EnableRegReassign) {
     addPass(&GCNNSAReassignID);
-    addPass(&GCNRegBankReassignID);
+    addPass(createGCNRegBankReassignPass(AMDGPU::RM_BOTH));
   }
   return true;
 }
@@ -1226,9 +1233,9 @@ void GCNPassConfig::addPreEmitPass() {
   if (getOptLevel() > CodeGenOpt::None)
     addPass(&SIInsertHardClausesID);
 
-  addPass(&SIRemoveShortExecBranchesID);
-  addPass(&SIInsertSkipsPassID);
-  addPass(&SIPreEmitPeepholeID);
+  addPass(&SILateBranchLoweringPassID);
+  if (getOptLevel() > CodeGenOpt::None)
+    addPass(&SIPreEmitPeepholeID);
   // The hazard recognizer that runs as part of the post-ra scheduler does not
   // guarantee to be able handle all hazards correctly. This is because if there
   // are multiple scheduling regions in a basic block, the regions are scheduled

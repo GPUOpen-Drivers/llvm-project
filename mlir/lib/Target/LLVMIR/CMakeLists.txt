@@ -37,7 +37,8 @@ add_mlir_translation_library(MLIRToLLVMIRTranslationRegistration
 
   LINK_LIBS PUBLIC
   MLIRArmNeonToLLVMIRTranslation
-  MLIRAVX512ToLLVMIRTranslation
+  MLIRAMXToLLVMIRTranslation
+  MLIRX86VectorToLLVMIRTranslation
   MLIRLLVMArmSVEToLLVMIRTranslation
   MLIRLLVMToLLVMIRTranslation
   MLIRNVVMToLLVMIRTranslation

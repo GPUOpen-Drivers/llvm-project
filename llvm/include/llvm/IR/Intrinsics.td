@@ -541,10 +541,10 @@ def int_pcmarker      : DefaultAttrsIntrinsic<[], [llvm_i32_ty]>;
 
 def int_readcyclecounter : DefaultAttrsIntrinsic<[llvm_i64_ty]>;
 
-// The assume intrinsic is marked as arbitrarily writing so that proper
-// control dependencies will be maintained.
-def int_assume        : DefaultAttrsIntrinsic<[], [llvm_i1_ty], [IntrWillReturn,
-                                                     NoUndef<ArgIndex<0>>]>;
+// The assume intrinsic is marked InaccessibleMemOnly so that proper control
+// dependencies will be maintained.
+def int_assume : DefaultAttrsIntrinsic<
+    [], [llvm_i1_ty], [IntrInaccessibleMemOnly, NoUndef<ArgIndex<0>>]>;
 
 // 'llvm.experimental.noalias.scope.decl' intrinsic: Inserted at the location of
 // noalias scope declaration. Makes it possible to identify that a noalias scope
@@ -972,18 +972,19 @@ def int_eh_sjlj_setup_dispatch  : Intrinsic<[], []>;
 
 //===---------------- Generic Variable Attribute Intrinsics----------------===//
 //
-def int_var_annotation : DefaultAttrsIntrinsic<[],
-                                   [llvm_ptr_ty, llvm_ptr_ty,
-                                    llvm_ptr_ty, llvm_i32_ty, llvm_ptr_ty],
-                                   [IntrWillReturn], "llvm.var.annotation">;
-def int_ptr_annotation : DefaultAttrsIntrinsic<[LLVMAnyPointerType<llvm_anyint_ty>],
-                                   [LLVMMatchType<0>, llvm_ptr_ty, llvm_ptr_ty,
-                                    llvm_i32_ty, llvm_ptr_ty],
-                                   [IntrWillReturn], "llvm.ptr.annotation">;
-def int_annotation : DefaultAttrsIntrinsic<[llvm_anyint_ty],
-                               [LLVMMatchType<0>, llvm_ptr_ty,
-                                llvm_ptr_ty, llvm_i32_ty],
-                               [IntrWillReturn], "llvm.annotation">;
+def int_var_annotation : DefaultAttrsIntrinsic<
+    [], [llvm_ptr_ty, llvm_ptr_ty, llvm_ptr_ty, llvm_i32_ty, llvm_ptr_ty],
+    [IntrInaccessibleMemOnly], "llvm.var.annotation">;
+
+def int_ptr_annotation : DefaultAttrsIntrinsic<
+    [LLVMAnyPointerType<llvm_anyint_ty>],
+    [LLVMMatchType<0>, llvm_ptr_ty, llvm_ptr_ty, llvm_i32_ty, llvm_ptr_ty],
+    [IntrInaccessibleMemOnly], "llvm.ptr.annotation">;
+
+def int_annotation : DefaultAttrsIntrinsic<
+    [llvm_anyint_ty],
+    [LLVMMatchType<0>, llvm_ptr_ty, llvm_ptr_ty, llvm_i32_ty],
+    [IntrInaccessibleMemOnly], "llvm.annotation">;
 
 // Annotates the current program point with metadata strings which are emitted
 // as CodeView debug info records. This is expensive, as it disables inlining
@@ -1182,11 +1183,11 @@ def int_experimental_gc_statepoint : Intrinsic<[llvm_token_ty],
                                 ImmArg<ArgIndex<4>>]>;
 
 def int_experimental_gc_result   : Intrinsic<[llvm_any_ty], [llvm_token_ty],
-                                             [IntrReadMem]>;
+                                             [IntrNoMem]>;
 def int_experimental_gc_relocate : Intrinsic<[llvm_any_ty],
                                              [llvm_token_ty, llvm_i32_ty,
                                               llvm_i32_ty],
-                                             [IntrReadMem, ImmArg<ArgIndex<1>>,
+                                             [IntrNoMem, ImmArg<ArgIndex<1>>,
                                               ImmArg<ArgIndex<2>>]>;
 
 //===------------------------ Coroutine Intrinsics ---------------===//
@@ -1335,6 +1336,9 @@ def int_is_constant : DefaultAttrsIntrinsic<[llvm_i1_ty], [llvm_any_ty],
 // Intrinsic to mask out bits of a pointer.
 def int_ptrmask: DefaultAttrsIntrinsic<[llvm_anyptr_ty], [LLVMMatchType<0>, llvm_anyint_ty],
                            [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+
+def int_experimental_stepvector : DefaultAttrsIntrinsic<[llvm_anyvector_ty],
+                                                        [], [IntrNoMem]>;
 
 //===---------------- Vector Predication Intrinsics --------------===//
 
@@ -1499,22 +1503,24 @@ def int_xray_typedevent : Intrinsic<[], [llvm_i16_ty, llvm_ptr_ty, llvm_i32_ty],
 def int_memcpy_element_unordered_atomic
     : Intrinsic<[],
                 [llvm_anyptr_ty, llvm_anyptr_ty, llvm_anyint_ty, llvm_i32_ty],
-                [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<0>>,
-                 NoCapture<ArgIndex<1>>, WriteOnly<ArgIndex<0>>,
-                 ReadOnly<ArgIndex<1>>, ImmArg<ArgIndex<3>>]>;
+                [IntrArgMemOnly, IntrWillReturn, IntrNoSync,
+                 NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
+                 WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>,
+                 ImmArg<ArgIndex<3>>]>;
 
 // @llvm.memmove.element.unordered.atomic.*(dest, src, length, elementsize)
 def int_memmove_element_unordered_atomic
     : Intrinsic<[],
                 [llvm_anyptr_ty, llvm_anyptr_ty, llvm_anyint_ty, llvm_i32_ty],
-                [IntrArgMemOnly, IntrWillReturn, NoCapture<ArgIndex<0>>,
-                 NoCapture<ArgIndex<1>>, WriteOnly<ArgIndex<0>>,
-                 ReadOnly<ArgIndex<1>>, ImmArg<ArgIndex<3>>]>;
+                [IntrArgMemOnly, IntrWillReturn, IntrNoSync,
+                 NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
+                 WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>,
+                 ImmArg<ArgIndex<3>>]>;
 
 // @llvm.memset.element.unordered.atomic.*(dest, value, length, elementsize)
 def int_memset_element_unordered_atomic
     : Intrinsic<[], [llvm_anyptr_ty, llvm_i8_ty, llvm_anyint_ty, llvm_i32_ty],
-                [IntrWriteMem, IntrArgMemOnly, IntrWillReturn,
+                [IntrWriteMem, IntrArgMemOnly, IntrWillReturn, IntrNoSync,
                  NoCapture<ArgIndex<0>>, WriteOnly<ArgIndex<0>>,
                  ImmArg<ArgIndex<3>>]>;
 

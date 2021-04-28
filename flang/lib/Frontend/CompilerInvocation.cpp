@@ -21,6 +21,8 @@
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -92,6 +94,9 @@ static void setUpFrontendBasedOnAction(FrontendOptions &opts) {
 
   if (opts.programAction_ == DebugDumpParsingLog)
     opts.instrumentedParse_ = true;
+
+  if (opts.programAction_ == DebugDumpProvenance)
+    opts.needProvenanceRangeToCharBlockMappings_ = true;
 }
 
 static InputKind ParseFrontendArgs(FrontendOptions &opts,
@@ -122,6 +127,9 @@ static InputKind ParseFrontendArgs(FrontendOptions &opts,
     case clang::driver::options::OPT_fdebug_unparse:
       opts.programAction_ = DebugUnparse;
       break;
+    case clang::driver::options::OPT_fdebug_unparse_no_sema:
+      opts.programAction_ = DebugUnparseNoSema;
+      break;
     case clang::driver::options::OPT_fdebug_unparse_with_symbols:
       opts.programAction_ = DebugUnparseWithSymbols;
       break;
@@ -130,6 +138,9 @@ static InputKind ParseFrontendArgs(FrontendOptions &opts,
       break;
     case clang::driver::options::OPT_fdebug_dump_parse_tree:
       opts.programAction_ = DebugDumpParseTree;
+      break;
+    case clang::driver::options::OPT_fdebug_dump_parse_tree_no_sema:
+      opts.programAction_ = DebugDumpParseTreeNoSema;
       break;
     case clang::driver::options::OPT_fdebug_dump_provenance:
       opts.programAction_ = DebugDumpProvenance;
@@ -142,6 +153,9 @@ static InputKind ParseFrontendArgs(FrontendOptions &opts,
       break;
     case clang::driver::options::OPT_fdebug_pre_fir_tree:
       opts.programAction_ = DebugPreFIRTree;
+      break;
+    case clang::driver::options::OPT_fget_symbols_sources:
+      opts.programAction_ = GetSymbolsSources;
       break;
 
       // TODO:
@@ -282,6 +296,16 @@ static InputKind ParseFrontendArgs(FrontendOptions &opts,
   return dashX;
 }
 
+// Generate the path to look for intrinsic modules
+static std::string getIntrinsicDir() {
+  // TODO: Find a system independent API
+  llvm::SmallString<128> driverPath;
+  driverPath.assign(llvm::sys::fs::getMainExecutable(nullptr, nullptr));
+  llvm::sys::path::remove_filename(driverPath);
+  driverPath.append("/../include/flang/");
+  return std::string(driverPath);
+}
+
 /// Parses all preprocessor input arguments and populates the preprocessor
 /// options accordingly.
 ///
@@ -302,6 +326,20 @@ static void parsePreprocessorArgs(
   // Add the ordered list of -I's.
   for (const auto *currentArg : args.filtered(clang::driver::options::OPT_I))
     opts.searchDirectoriesFromDashI.emplace_back(currentArg->getValue());
+
+  // Prepend the ordered list of -intrinsic-modules-path
+  // to the default location to search.
+  for (const auto *currentArg :
+      args.filtered(clang::driver::options::OPT_fintrinsic_modules_path))
+    opts.searchDirectoriesFromIntrModPath.emplace_back(currentArg->getValue());
+
+  // -cpp/-nocpp
+  if (const auto *currentArg = args.getLastArg(
+          clang::driver::options::OPT_cpp, clang::driver::options::OPT_nocpp))
+    opts.macrosFlag_ =
+        (currentArg->getOption().matches(clang::driver::options::OPT_cpp))
+        ? PPMacrosFlag::Include
+        : PPMacrosFlag::Exclude;
 }
 
 /// Parses all semantic related arguments and populates the variables
@@ -326,6 +364,26 @@ static void parseSemaArgs(CompilerInvocation &res, llvm::opt::ArgList &args,
   // -fdebug-module-writer option
   if (args.hasArg(clang::driver::options::OPT_fdebug_module_writer)) {
     res.SetDebugModuleDir(true);
+  }
+}
+
+/// Parses all diagnostics related arguments and populates the variables
+/// options accordingly.
+static void parseDiagArgs(CompilerInvocation &res, llvm::opt::ArgList &args,
+    clang::DiagnosticsEngine &diags) {
+  // -Werror option
+  // TODO: Currently throws a Diagnostic for anything other than -W<error>,
+  // this has to change when other -W<opt>'s are supported.
+  if (args.hasArg(clang::driver::options::OPT_W_Joined)) {
+    if (args.getLastArgValue(clang::driver::options::OPT_W_Joined)
+            .equals("error")) {
+      res.SetWarnAsErr(true);
+    } else {
+      const unsigned diagID =
+          diags.getCustomDiagID(clang::DiagnosticsEngine::Error,
+              "Only `-Werror` is supported currently.");
+      diags.Report(diagID);
+    }
   }
 }
 
@@ -368,6 +426,26 @@ static void parseDialectArgs(CompilerInvocation &res, llvm::opt::ArgList &args,
     res.frontendOpts().features_.Enable(
         Fortran::common::LanguageFeature::OpenMP);
   }
+
+  // -pedantic
+  if (args.hasArg(clang::driver::options::OPT_pedantic)) {
+    res.set_EnableConformanceChecks();
+  }
+  // -std=f2018 (currently this implies -pedantic)
+  // TODO: Set proper options when more fortran standards
+  // are supported.
+  if (args.hasArg(clang::driver::options::OPT_std_EQ)) {
+    auto standard = args.getLastArgValue(clang::driver::options::OPT_std_EQ);
+    // We only allow f2018 as the given standard
+    if (standard.equals("f2018")) {
+      res.set_EnableConformanceChecks();
+    } else {
+      const unsigned diagID =
+          diags.getCustomDiagID(clang::DiagnosticsEngine::Error,
+              "Only -std=f2018 is allowed currently.");
+      diags.Report(diagID);
+    }
+  }
   return;
 }
 
@@ -404,17 +482,15 @@ bool CompilerInvocation::CreateFromArgs(CompilerInvocation &res,
   parseSemaArgs(res, args, diags);
   // Parse dialect arguments
   parseDialectArgs(res, args, diags);
+  // Parse diagnostic arguments
+  parseDiagArgs(res, args, diags);
 
   return success;
 }
 
-/// Collect the macro definitions provided by the given preprocessor
-/// options into the parser options.
-///
-/// \param [in] ppOpts The preprocessor options
-/// \param [out] opts The fortran options
-static void collectMacroDefinitions(
-    const PreprocessorOptions &ppOpts, Fortran::parser::Options &opts) {
+void CompilerInvocation::collectMacroDefinitions() {
+  auto &ppOpts = this->preprocessorOpts();
+
   for (unsigned i = 0, n = ppOpts.macros.size(); i != n; ++i) {
     llvm::StringRef macro = ppOpts.macros[i].first;
     bool isUndef = ppOpts.macros[i].second;
@@ -425,7 +501,7 @@ static void collectMacroDefinitions(
 
     // For an #undef'd macro, we only care about the name.
     if (isUndef) {
-      opts.predefinitions.emplace_back(
+      parserOpts_.predefinitions.emplace_back(
           macroName.str(), std::optional<std::string>{});
       continue;
     }
@@ -438,7 +514,7 @@ static void collectMacroDefinitions(
       llvm::StringRef::size_type End = macroBody.find_first_of("\n\r");
       macroBody = macroBody.substr(0, End);
     }
-    opts.predefinitions.emplace_back(
+    parserOpts_.predefinitions.emplace_back(
         macroName, std::optional<std::string>(macroBody.str()));
   }
 }
@@ -494,12 +570,20 @@ void CompilerInvocation::setFortranOpts() {
   fortranOptions.features = frontendOptions.features_;
   fortranOptions.encoding = frontendOptions.encoding_;
 
-  collectMacroDefinitions(preprocessorOptions, fortranOptions);
-
+  // Adding search directories specified by -I
   fortranOptions.searchDirectories.insert(
       fortranOptions.searchDirectories.end(),
       preprocessorOptions.searchDirectoriesFromDashI.begin(),
       preprocessorOptions.searchDirectoriesFromDashI.end());
+
+  // Add the ordered list of -intrinsic-modules-path
+  fortranOptions.searchDirectories.insert(
+      fortranOptions.searchDirectories.end(),
+      preprocessorOptions.searchDirectoriesFromIntrModPath.begin(),
+      preprocessorOptions.searchDirectoriesFromIntrModPath.end());
+
+  //  Add the default intrinsic module directory at the end
+  fortranOptions.searchDirectories.emplace_back(getIntrinsicDir());
 
   // Add the directory supplied through -J/-module-dir to the list of search
   // directories
@@ -508,6 +592,13 @@ void CompilerInvocation::setFortranOpts() {
 
   if (frontendOptions.instrumentedParse_)
     fortranOptions.instrumentedParse = true;
+
+  if (frontendOptions.needProvenanceRangeToCharBlockMappings_)
+    fortranOptions.needProvenanceRangeToCharBlockMappings = true;
+
+  if (enableConformanceChecks()) {
+    fortranOptions.features.WarnOnAllNonstandard();
+  }
 }
 
 void CompilerInvocation::setSemanticsOpts(
@@ -518,5 +609,7 @@ void CompilerInvocation::setSemanticsOpts(
       defaultKinds(), fortranOptions.features, allCookedSources);
 
   semanticsContext_->set_moduleDirectory(moduleDir())
-      .set_searchDirectories(fortranOptions.searchDirectories);
+      .set_searchDirectories(fortranOptions.searchDirectories)
+      .set_warnOnNonstandardUsage(enableConformanceChecks())
+      .set_warningsAreErrors(warnAsErr());
 }

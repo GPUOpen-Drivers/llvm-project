@@ -474,7 +474,7 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
       Builder.defineMacro("__FAST_RELAXED_MATH__");
   }
 
-  if (LangOpts.SYCL) {
+  if (LangOpts.SYCLIsDevice || LangOpts.SYCLIsHost) {
     // SYCL Version is set to a value when building SYCL applications
     if (LangOpts.getSYCLVersion() == LangOptions::SYCL_2017)
       Builder.defineMacro("CL_SYCL_LANGUAGE_VERSION", "121");
@@ -589,6 +589,9 @@ static void InitializeCPlusPlusFeatureTestMacros(const LangOptions &LangOpts,
     //Builder.defineMacro("__cpp_modules", "201907L");
     //Builder.defineMacro("__cpp_using_enum", "201907L");
   }
+  // C++2b features.
+  if (LangOpts.CPlusPlus2b)
+    Builder.defineMacro("__cpp_size_t_suffix", "202011L");
   if (LangOpts.Char8)
     Builder.defineMacro("__cpp_char8_t", "201811L");
   Builder.defineMacro("__cpp_impl_destroying_delete", "201806L");
@@ -773,6 +776,21 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
       Builder.defineMacro("_WCHAR_T_DEFINED");
       Builder.defineMacro("_NATIVE_WCHAR_T_DEFINED");
     }
+  }
+
+  // Macros to help identify the narrow and wide character sets
+  // FIXME: clang currently ignores -fexec-charset=. If this changes,
+  // then this may need to be updated.
+  Builder.defineMacro("__clang_literal_encoding__", "\"UTF-8\"");
+  if (TI.getTypeWidth(TI.getWCharType()) >= 32) {
+    // FIXME: 32-bit wchar_t signals UTF-32. This may change
+    // if -fwide-exec-charset= is ever supported.
+    Builder.defineMacro("__clang_wide_literal_encoding__", "\"UTF-32\"");
+  } else {
+    // FIXME: Less-than 32-bit wchar_t generally means UTF-16
+    // (e.g., Windows, 32-bit IBM). This may need to be
+    // updated if -fwide-exec-charset= is ever supported.
+    Builder.defineMacro("__clang_wide_literal_encoding__", "\"UTF-16\"");
   }
 
   if (LangOpts.Optimize)

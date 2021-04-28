@@ -144,6 +144,7 @@ using TypeMatcher = internal::Matcher<QualType>;
 using TypeLocMatcher = internal::Matcher<TypeLoc>;
 using NestedNameSpecifierMatcher = internal::Matcher<NestedNameSpecifier>;
 using NestedNameSpecifierLocMatcher = internal::Matcher<NestedNameSpecifierLoc>;
+using CXXBaseSpecifierMatcher = internal::Matcher<CXXBaseSpecifier>;
 using CXXCtorInitializerMatcher = internal::Matcher<CXXCtorInitializer>;
 using TemplateArgumentMatcher = internal::Matcher<TemplateArgument>;
 using TemplateArgumentLocMatcher = internal::Matcher<TemplateArgumentLoc>;
@@ -515,6 +516,15 @@ extern const internal::VariadicDynCastAllOfMatcher<Decl, ParmVarDecl>
 ///   matches 'public:'
 extern const internal::VariadicDynCastAllOfMatcher<Decl, AccessSpecDecl>
     accessSpecDecl;
+
+/// Matches class bases.
+///
+/// Examples matches \c public virtual B.
+/// \code
+///   class B {};
+///   class C : public virtual B {};
+/// \endcode
+extern const internal::VariadicAllOfMatcher<CXXBaseSpecifier> cxxBaseSpecifier;
 
 /// Matches constructor initializers.
 ///
@@ -2162,6 +2172,17 @@ extern const internal::VariadicDynCastAllOfMatcher<Stmt, BreakStmt> breakStmt;
 extern const internal::VariadicDynCastAllOfMatcher<Stmt, ContinueStmt>
     continueStmt;
 
+/// Matches co_return statements.
+///
+/// Given
+/// \code
+///   while (true) { co_return; }
+/// \endcode
+/// coreturnStmt()
+///   matches 'co_return'
+extern const internal::VariadicDynCastAllOfMatcher<Stmt, CoreturnStmt>
+    coreturnStmt;
+
 /// Matches return statements.
 ///
 /// Given
@@ -2378,6 +2399,30 @@ extern const internal::VariadicDynCastAllOfMatcher<Stmt, UserDefinedLiteral>
 /// \endcode
 extern const internal::VariadicDynCastAllOfMatcher<Stmt, CompoundLiteralExpr>
     compoundLiteralExpr;
+
+/// Matches co_await expressions.
+///
+/// Given
+/// \code
+///   co_await 1;
+/// \endcode
+/// coawaitExpr()
+///   matches 'co_await 1'
+extern const internal::VariadicDynCastAllOfMatcher<Stmt, CoawaitExpr>
+    coawaitExpr;
+/// Matches co_await expressions where the type of the promise is dependent
+extern const internal::VariadicDynCastAllOfMatcher<Stmt, DependentCoawaitExpr>
+    dependentCoawaitExpr;
+/// Matches co_yield expressions.
+///
+/// Given
+/// \code
+///   co_yield 1;
+/// \endcode
+/// coyieldExpr()
+///   matches 'co_yield 1'
+extern const internal::VariadicDynCastAllOfMatcher<Stmt, CoyieldExpr>
+    coyieldExpr;
 
 /// Matches nullptr literal.
 extern const internal::VariadicDynCastAllOfMatcher<Stmt, CXXNullPtrLiteralExpr>
@@ -3790,16 +3835,19 @@ AST_MATCHER_P_OVERLOAD(CallExpr, callee, internal::Matcher<Decl>, InnerMatcher,
 ///             and z (matcher = varDecl(hasType(cxxRecordDecl(hasName("X")))))
 ///             and U (matcher = typedefDecl(hasType(asString("int")))
 ///             and friend class X (matcher = friendDecl(hasType("X"))
+///             and public virtual X (matcher = cxxBaseSpecifier(hasType(
+///                                               asString("class X")))
 /// \code
 ///  class X {};
 ///  void y(X &x) { x; X z; }
 ///  typedef int U;
 ///  class Y { friend class X; };
+///  class Z : public virtual X {};
 /// \endcode
 AST_POLYMORPHIC_MATCHER_P_OVERLOAD(
     hasType,
     AST_POLYMORPHIC_SUPPORTED_TYPES(Expr, FriendDecl, TypedefNameDecl,
-                                    ValueDecl),
+                                    ValueDecl, CXXBaseSpecifier),
     internal::Matcher<QualType>, InnerMatcher, 0) {
   QualType QT = internal::getUnderlyingType(Node);
   if (!QT.isNull())
@@ -3819,10 +3867,13 @@ AST_POLYMORPHIC_MATCHER_P_OVERLOAD(
 /// Example matches x (matcher = expr(hasType(cxxRecordDecl(hasName("X")))))
 ///             and z (matcher = varDecl(hasType(cxxRecordDecl(hasName("X")))))
 ///             and friend class X (matcher = friendDecl(hasType("X"))
+///             and public virtual X (matcher = cxxBaseSpecifier(hasType(
+///                                               cxxRecordDecl(hasName("X"))))
 /// \code
 ///  class X {};
 ///  void y(X &x) { x; X z; }
 ///  class Y { friend class X; };
+///  class Z : public virtual X {};
 /// \endcode
 ///
 /// Example matches class Derived
@@ -5217,7 +5268,7 @@ AST_POLYMORPHIC_MATCHER_P(hasBody,
 ///   void f() {}
 ///   void g();
 /// \endcode
-/// hasAnyBody(functionDecl())
+/// functionDecl(hasAnyBody(compoundStmt()))
 ///   matches both 'void f();'
 ///   and 'void f() {}'
 /// with compoundStmt()

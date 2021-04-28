@@ -296,14 +296,17 @@ private:
     // sharing the same cwd). However, it is fairly unlikely to happen as
     // we generally don't use scoped_test_env from multiple threads, so
     // this is deemed acceptable.
+    // The cwd.filename() itself isn't unique across all tests in the suite,
+    // so start the numbering from a hash of the full cwd, to avoid
+    // different tests interfering with each other.
     static inline fs::path available_cwd_path() {
         fs::path const cwd = utils::getcwd();
         fs::path const tmp = fs::temp_directory_path();
-        fs::path const base = tmp / cwd.filename();
-        int i = 0;
-        fs::path p = base / ("static_env." + std::to_string(i));
+        std::string base = cwd.filename().string();
+        size_t i = std::hash<std::string>()(cwd.string());
+        fs::path p = tmp / (base + "-static_env." + std::to_string(i));
         while (utils::exists(p.string())) {
-            p = fs::path(base) / ("static_env." + std::to_string(++i));
+            p = tmp / (base + "-static_env." + std::to_string(++i));
         }
         return p;
     }
@@ -634,9 +637,7 @@ struct ExceptionChecker {
       additional_msg = opt_message + ": ";
     }
     auto transform_path = [](const fs::path& p) {
-      if (p.native().empty())
-        return std::string("\"\"");
-      return p.string();
+      return "\"" + p.string() + "\"";
     };
     std::string format = [&]() -> std::string {
       switch (num_paths) {
@@ -677,22 +678,28 @@ inline fs::path GetWindowsInaccessibleDir() {
   const fs::path dir("C:\\System Volume Information");
   std::error_code ec;
   const fs::path root("C:\\");
-  fs::directory_iterator it(root, ec);
-  if (ec)
-    return fs::path();
-  const fs::directory_iterator endIt{};
-  while (it != endIt) {
-    const fs::directory_entry &ent = *it;
-    if (ent == dir) {
-      // Basic sanity checks on the directory_entry
-      if (!ent.exists())
-        return fs::path();
-      if (!ent.is_directory())
-        return fs::path();
-      return ent;
+  for (const auto &ent : fs::directory_iterator(root, ec)) {
+    if (ent != dir)
+      continue;
+    // Basic sanity checks on the directory_entry
+    if (!ent.exists() || !ent.is_directory()) {
+      fprintf(stderr, "The expected inaccessible directory \"%s\" was found "
+                      "but doesn't behave as expected, skipping tests "
+                      "regarding it\n", dir.string().c_str());
+      return fs::path();
     }
-    ++it;
+    // Check that it indeed is inaccessible as expected
+    (void)fs::exists(ent, ec);
+    if (!ec) {
+      fprintf(stderr, "The expected inaccessible directory \"%s\" was found "
+                      "but seems to be accessible, skipping tests "
+                      "regarding it\n", dir.string().c_str());
+      return fs::path();
+    }
+    return ent;
   }
+  fprintf(stderr, "No inaccessible directory \"%s\" found, skipping tests "
+                  "regarding it\n", dir.string().c_str());
   return fs::path();
 }
 

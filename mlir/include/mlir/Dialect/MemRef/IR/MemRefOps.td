@@ -10,7 +10,9 @@
 #define MEMREF_OPS
 
 include "mlir/Dialect/MemRef/IR/MemRefBase.td"
+include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/CastInterfaces.td"
+include "mlir/Interfaces/CopyOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
 include "mlir/IR/SymbolInterfaces.td"
@@ -104,28 +106,6 @@ def AssumeAlignmentOp : MemRef_Op<"assume_alignment"> {
   let results = (outs);
 
   let assemblyFormat = "$memref `,` $alignment attr-dict `:` type($memref)";
-}
-
-//===----------------------------------------------------------------------===//
-// BaseOpWithOffsetSizesAndStrides
-//===----------------------------------------------------------------------===//
-
-// Base class for ops with static/dynamic offset, sizes and strides
-// attributes/arguments.
-class BaseOpWithOffsetSizesAndStrides<string mnemonic, list<OpTrait> traits = []> :
-    MemRef_Op<mnemonic,
-           !listconcat(traits, [NoSideEffect, AttrSizedOperandSegments])> {
-  code extraBaseClassDeclaration = [{
-    /// Returns the dynamic sizes for this subview operation if specified.
-    operand_range getDynamicSizes() { return sizes(); }
-
-    /// Return the list of Range (i.e. offset, size, stride). Each
-    /// Range entry contains either the dynamic value or a ConstantIndexOp
-    /// constructed with `b` at location `loc`.
-    SmallVector<Range, 8> getOrCreateRanges(OpBuilder &b, Location loc) {
-      return mlir::getOrCreateRanges(*this, b, loc);
-    }
-  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -235,6 +215,9 @@ def MemRef_BufferCastOp : MemRef_Op<"buffer_cast",
     // Result type is tensor<4x?xf32>
     %12 = memref.buffer_cast %10 : memref<4x?xf32, #map0, 42>
     ```
+
+    Note, that mutating the result of the buffer cast operation leads to
+    undefined behavior.
   }];
 
   let arguments = (ins AnyTensor:$tensor);
@@ -254,7 +237,8 @@ def MemRef_BufferCastOp : MemRef_Op<"buffer_cast",
 
 def MemRef_CastOp : MemRef_Op<"cast", [
       NoSideEffect, SameOperandsAndResultShape,
-      DeclareOpInterfaceMethods<CastOpInterface>
+      DeclareOpInterfaceMethods<CastOpInterface>,
+      ViewLikeOpInterface
     ]> {
   let summary = "memref cast operation";
   let description = [{
@@ -325,9 +309,51 @@ def MemRef_CastOp : MemRef_Op<"cast", [
   let extraClassDeclaration = [{
     /// Fold the given CastOp into consumer op.
     static bool canFoldIntoConsumerOp(CastOp castOp);
+
+    Value getViewSource() { return source(); }
   }];
 
   let hasFolder = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// CloneOp
+//===----------------------------------------------------------------------===//
+
+def CloneOp : MemRef_Op<"clone", [
+    CopyOpInterface,
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+  ]> {
+  let builders = [
+    OpBuilder<(ins "Value":$value), [{
+      return build($_builder, $_state, value.getType(), value);
+    }]>];
+
+  let description = [{
+    Clones the data in the input view into an implicitly defined output view.
+
+    Usage:
+
+    ```mlir
+    %arg1 = memref.clone %arg0 : memref<?xf32> to memref<?xf32>
+    ```
+
+    Note, that mutating the source or result of the clone operation leads to
+    undefined behavior.
+  }];
+
+  let arguments = (ins Arg<AnyMemRef, "", []>:$input);
+  let results = (outs Arg<AnyMemRef, "", []>:$output);
+
+  let extraClassDeclaration = [{
+    Value getSource() { return input();}
+    Value getTarget() { return output(); }
+  }];
+
+  let assemblyFormat = "$input attr-dict `:` type($input) `to` type($output)";
+
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -624,8 +650,9 @@ def MemRef_PrefetchOp : MemRef_Op<"prefetch"> {
 //===----------------------------------------------------------------------===//
 
 def MemRef_ReinterpretCastOp:
-    BaseOpWithOffsetSizesAndStrides<"reinterpret_cast", [
-      NoSideEffect, ViewLikeOpInterface, OffsetSizeAndStrideOpInterface
+    BaseOpWithOffsetSizesAndStrides<MemRef_Dialect, "reinterpret_cast", [
+      NoSideEffect, AttrSizedOperandSegments, ViewLikeOpInterface,
+      OffsetSizeAndStrideOpInterface
     ]> {
   let summary = "memref reinterpret cast operation";
   let description = [{
@@ -852,8 +879,9 @@ def MemRef_StoreOp : MemRef_Op<"store",
 //===----------------------------------------------------------------------===//
 
 def SubViewOp : BaseOpWithOffsetSizesAndStrides<
-    "subview", [DeclareOpInterfaceMethods<ViewLikeOpInterface>,
-                NoSideEffect, OffsetSizeAndStrideOpInterface] >  {
+    MemRef_Dialect, "subview", [DeclareOpInterfaceMethods<ViewLikeOpInterface>,
+                NoSideEffect, AttrSizedOperandSegments,
+		OffsetSizeAndStrideOpInterface] >  {
   let summary = "memref subview operation";
   let description = [{
     The "subview" operation converts a memref type to another memref type
@@ -1106,6 +1134,9 @@ def TensorLoadOp : MemRef_Op<"tensor_load",
     // Produces a value of tensor<4x?xf32> type.
     %12 = memref.tensor_load %10 : memref<4x?xf32, #layout, memspace0>
     ```
+
+    If tensor load is used in the bufferization steps, mutating the source
+    buffer after loading leads to undefined behavior.
   }];
 
   let arguments = (ins Arg<AnyRankedOrUnrankedMemRef,

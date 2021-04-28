@@ -555,11 +555,14 @@ set(armv7s_SOURCES ${arm_SOURCES})
 set(armv7k_SOURCES ${arm_SOURCES})
 set(arm64_SOURCES ${aarch64_SOURCES})
 set(arm64e_SOURCES ${aarch64_SOURCES})
+set(arm64_32_SOURCES ${aarch64_SOURCES})
 
 # macho_embedded archs
 set(armv6m_SOURCES ${thumb1_SOURCES})
 set(armv7m_SOURCES ${arm_SOURCES})
 set(armv7em_SOURCES ${arm_SOURCES})
+set(armv8m.main_SOURCES ${arm_SOURCES})
+set(armv8.1m.main_SOURCES ${arm_SOURCES})
 
 # hexagon arch
 set(hexagon_SOURCES
@@ -627,7 +630,12 @@ if (NOT ${CMAKE_SYSTEM_NAME} MATCHES "AIX")
 endif()
 set(powerpc64le_SOURCES ${powerpc64_SOURCES})
 
-set(riscv_SOURCES ${GENERIC_SOURCES} ${GENERIC_TF_SOURCES})
+set(riscv_SOURCES
+  riscv/save.S
+  riscv/restore.S
+  ${GENERIC_SOURCES}
+  ${GENERIC_TF_SOURCES}
+)
 set(riscv32_SOURCES
   riscv/mulsi3.S
   ${riscv_SOURCES}
@@ -695,17 +703,18 @@ else ()
   foreach (arch ${BUILTIN_SUPPORTED_ARCH})
     if (CAN_TARGET_${arch})
       # For ARM archs, exclude any VFP builtins if VFP is not supported
-      if (${arch} MATCHES "^(arm|armhf|armv7|armv7s|armv7k|armv7m|armv7em)$")
+      if (${arch} MATCHES "^(arm|armhf|armv7|armv7s|armv7k|armv7m|armv7em|armv8m.main|armv8.1m.main)$")
         string(REPLACE ";" " " _TARGET_${arch}_CFLAGS "${TARGET_${arch}_CFLAGS}")
         check_compile_definition(__ARM_FP "${CMAKE_C_FLAGS} ${_TARGET_${arch}_CFLAGS}" COMPILER_RT_HAS_${arch}_VFP)
         if(NOT COMPILER_RT_HAS_${arch}_VFP)
           list(REMOVE_ITEM ${arch}_SOURCES ${arm_Thumb1_VFPv2_DP_SOURCES} ${arm_Thumb1_VFPv2_SP_SOURCES} ${arm_Thumb1_SjLj_EH_SOURCES})
         else()
           # Exclude any double-precision builtins if VFP is single-precision-only
-          check_c_source_compiles("#if !(__ARM_FP & 0x8)
+          try_compile_only(COMPILER_RT_HAS_${arch}_VFP_DP
+                           SOURCE "#if !(__ARM_FP & 0x8)
                                    #error No double-precision support!
                                    #endif
-                                   int main() { return 0; }" COMPILER_RT_HAS_${arch}_VFP_DP)
+                                   int main() { return 0; }")
           if(NOT COMPILER_RT_HAS_${arch}_VFP_DP)
             list(REMOVE_ITEM ${arch}_SOURCES ${arm_Thumb1_VFPv2_DP_SOURCES})
           endif()

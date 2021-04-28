@@ -33,6 +33,7 @@ Clang-Tidy Checks
    `altera-kernel-name-restriction <altera-kernel-name-restriction.html>`_,
    `altera-single-work-item-barrier <altera-single-work-item-barrier.html>`_,
    `altera-struct-pack-align <altera-struct-pack-align.html>`_, "Yes"
+   `altera-unroll-loops <altera-unroll-loops.html>`_,
    `android-cloexec-accept <android-cloexec-accept.html>`_, "Yes"
    `android-cloexec-accept4 <android-cloexec-accept4.html>`_,
    `android-cloexec-creat <android-cloexec-creat.html>`_, "Yes"
@@ -61,6 +62,7 @@ Clang-Tidy Checks
    `bugprone-fold-init-type <bugprone-fold-init-type.html>`_,
    `bugprone-forward-declaration-namespace <bugprone-forward-declaration-namespace.html>`_,
    `bugprone-forwarding-reference-overload <bugprone-forwarding-reference-overload.html>`_,
+   `bugprone-implicit-widening-of-multiplication-result <bugprone-implicit-widening-of-multiplication-result.html>`_, "Yes"
    `bugprone-inaccurate-erase <bugprone-inaccurate-erase.html>`_, "Yes"
    `bugprone-incorrect-roundings <bugprone-incorrect-roundings.html>`_,
    `bugprone-infinite-loop <bugprone-infinite-loop.html>`_,
@@ -99,6 +101,7 @@ Clang-Tidy Checks
    `bugprone-too-small-loop-variable <bugprone-too-small-loop-variable.html>`_,
    `bugprone-undefined-memory-manipulation <bugprone-undefined-memory-manipulation.html>`_,
    `bugprone-undelegated-constructor <bugprone-undelegated-constructor.html>`_,
+   `bugprone-unhandled-exception-at-new <bugprone-unhandled-exception-at-new.html>`_,
    `bugprone-unhandled-self-assignment <bugprone-unhandled-self-assignment.html>`_,
    `bugprone-unused-raii <bugprone-unused-raii.html>`_, "Yes"
    `bugprone-unused-return-value <bugprone-unused-return-value.html>`_,
@@ -280,7 +283,6 @@ Clang-Tidy Checks
    `readability-container-size-empty <readability-container-size-empty.html>`_, "Yes"
    `readability-convert-member-functions-to-static <readability-convert-member-functions-to-static.html>`_,
    `readability-delete-null-pointer <readability-delete-null-pointer.html>`_, "Yes"
-   `readability-deleted-default <readability-deleted-default.html>`_,
    `readability-else-after-return <readability-else-after-return.html>`_, "Yes"
    `readability-function-cognitive-complexity <readability-function-cognitive-complexity.html>`_,
    `readability-function-size <readability-function-size.html>`_,

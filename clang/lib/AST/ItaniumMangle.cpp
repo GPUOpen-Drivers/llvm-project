@@ -640,7 +640,7 @@ bool ItaniumMangleContextImpl::isUniqueInternalLinkageDecl(
 
   // For C functions without prototypes, return false as their
   // names should not be mangled.
-  if (!FD->getType()->getAs<FunctionProtoType>())
+  if (!FD->hasPrototype())
     return false;
 
   if (isInternalLinkageDecl(ND))
@@ -3204,7 +3204,11 @@ void CXXNameMangler::mangleType(const VariableArrayType *T) {
 }
 void CXXNameMangler::mangleType(const DependentSizedArrayType *T) {
   Out << 'A';
-  mangleExpression(T->getSizeExpr());
+  // A DependentSizedArrayType might not have size expression as below
+  //
+  // template<int ...N> int arr[] = {N...};
+  if (T->getSizeExpr())
+    mangleExpression(T->getSizeExpr());
   Out << '_';
   mangleType(T->getElementType());
 }

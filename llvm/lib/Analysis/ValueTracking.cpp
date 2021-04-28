@@ -301,7 +301,7 @@ bool llvm::haveNoCommonBitsSet(const Value *LHS, const Value *RHS,
   KnownBits RHSKnown(IT->getBitWidth());
   computeKnownBits(LHS, LHSKnown, DL, 0, AC, CxtI, DT, nullptr, UseInstrInfo);
   computeKnownBits(RHS, RHSKnown, DL, 0, AC, CxtI, DT, nullptr, UseInstrInfo);
-  return (LHSKnown.Zero | RHSKnown.Zero).isAllOnesValue();
+  return KnownBits::haveNoCommonBitsSet(LHSKnown, RHSKnown);
 }
 
 bool llvm::isOnlyUsedInZeroEqualityComparison(const Instruction *CxtI) {
@@ -462,7 +462,7 @@ static void computeKnownBitsMul(const Value *Op0, const Value *Op1, bool NSW,
     }
   }
 
-  Known = KnownBits::computeForMul(Known, Known2);
+  Known = KnownBits::mul(Known, Known2);
 
   // Only make use of no-wrap flags if we failed to compute the sign bit
   // directly.  This matters if the multiplication always overflows, in
@@ -1350,7 +1350,7 @@ static void computeKnownBitsFromOperator(const Operator *I,
         ScalingFactor =
             KnownBits::makeConstant(APInt(IndexBitWidth, TypeSizeInBytes));
       }
-      IndexBits = KnownBits::computeForMul(IndexBits, ScalingFactor);
+      IndexBits = KnownBits::mul(IndexBits, ScalingFactor);
 
       // If the offsets have a different width from the pointer, according
       // to the language reference we need to sign-extend or truncate them
@@ -1977,6 +1977,12 @@ bool isKnownToBeAPowerOfTwo(const Value *V, bool OrZero, unsigned Depth,
     return isKnownToBeAPowerOfTwo(SI->getTrueValue(), OrZero, Depth, Q) &&
            isKnownToBeAPowerOfTwo(SI->getFalseValue(), OrZero, Depth, Q);
 
+  // Peek through min/max.
+  if (match(V, m_MaxOrMin(m_Value(X), m_Value(Y)))) {
+    return isKnownToBeAPowerOfTwo(X, OrZero, Depth, Q) &&
+           isKnownToBeAPowerOfTwo(Y, OrZero, Depth, Q);
+  }
+
   if (OrZero && match(V, m_And(m_Value(X), m_Value(Y)))) {
     // A power of two and'd with anything is a power of two or zero.
     if (isKnownToBeAPowerOfTwo(X, /*OrZero*/ true, Depth, Q) ||
@@ -2205,6 +2211,36 @@ static bool rangeMetadataExcludesValue(const MDNode* Ranges, const APInt& Value)
       return false;
   }
   return true;
+}
+
+/// Try to detect a recurrence that monotonically increases/decreases from a
+/// non-zero starting value. These are common as induction variables.
+static bool isNonZeroRecurrence(const PHINode *PN) {
+  BinaryOperator *BO = nullptr;
+  Value *Start = nullptr, *Step = nullptr;
+  const APInt *StartC, *StepC;
+  if (!matchSimpleRecurrence(PN, BO, Start, Step) ||
+      !match(Start, m_APInt(StartC)) || StartC->isNullValue())
+    return false;
+
+  switch (BO->getOpcode()) {
+  case Instruction::Add:
+    // Starting from non-zero and stepping away from zero can never wrap back
+    // to zero.
+    return BO->hasNoUnsignedWrap() ||
+           (BO->hasNoSignedWrap() && match(Step, m_APInt(StepC)) &&
+            StartC->isNegative() == StepC->isNegative());
+  case Instruction::Mul:
+    return (BO->hasNoUnsignedWrap() || BO->hasNoSignedWrap()) &&
+           match(Step, m_APInt(StepC)) && !StepC->isNullValue();
+  case Instruction::Shl:
+    return BO->hasNoUnsignedWrap() || BO->hasNoSignedWrap();
+  case Instruction::AShr:
+  case Instruction::LShr:
+    return BO->isExact();
+  default:
+    return false;
+  }
 }
 
 /// Return true if the given value is known to be non-zero when defined. For
@@ -2448,24 +2484,9 @@ bool isKnownNonZero(const Value *V, const APInt &DemandedElts, unsigned Depth,
   }
   // PHI
   else if (const PHINode *PN = dyn_cast<PHINode>(V)) {
-    // Try and detect a recurrence that monotonically increases from a
-    // starting value, as these are common as induction variables.
-    if (PN->getNumIncomingValues() == 2) {
-      Value *Start = PN->getIncomingValue(0);
-      Value *Induction = PN->getIncomingValue(1);
-      if (isa<ConstantInt>(Induction) && !isa<ConstantInt>(Start))
-        std::swap(Start, Induction);
-      if (ConstantInt *C = dyn_cast<ConstantInt>(Start)) {
-        if (!C->isZero() && !C->isNegative()) {
-          ConstantInt *X;
-          if (Q.IIQ.UseInstrInfo &&
-              (match(Induction, m_NSWAdd(m_Specific(PN), m_ConstantInt(X))) ||
-               match(Induction, m_NUWAdd(m_Specific(PN), m_ConstantInt(X)))) &&
-              !X->isNegative())
-            return true;
-        }
-      }
-    }
+    if (Q.IIQ.UseInstrInfo && isNonZeroRecurrence(PN))
+      return true;
+
     // Check if all incoming values are non-zero using recursion.
     Query RecQ = Q;
     unsigned NewDepth = std::max(Depth, MaxAnalysisRecursionDepth - 1);
@@ -2514,6 +2535,77 @@ bool isKnownNonZero(const Value* V, unsigned Depth, const Query& Q) {
   return isKnownNonZero(V, DemandedElts, Depth, Q);
 }
 
+/// If the pair of operators are the same invertible function of a single
+/// operand return the index of that operand.  Otherwise, return None.  An
+/// invertible function is one that is 1-to-1 and maps every input value
+/// to exactly one output value.  This is equivalent to saying that Op1
+/// and Op2 are equal exactly when the specified pair of operands are equal,
+/// (except that Op1 and Op2 may be poison more often.)
+static Optional<unsigned> getInvertibleOperand(const Operator *Op1,
+                                               const Operator *Op2) {
+  if (Op1->getOpcode() != Op2->getOpcode())
+    return None;
+
+  switch (Op1->getOpcode()) {
+  default:
+    break;
+  case Instruction::Add:
+  case Instruction::Sub:
+    if (Op1->getOperand(0) == Op2->getOperand(0))
+      return 1;
+    if (Op1->getOperand(1) == Op2->getOperand(1))
+      return 0;
+    break;
+  case Instruction::Mul: {
+    // invertible if A * B == (A * B) mod 2^N where A, and B are integers
+    // and N is the bitwdith.  The nsw case is non-obvious, but proven by
+    // alive2: https://alive2.llvm.org/ce/z/Z6D5qK
+    auto *OBO1 = cast<OverflowingBinaryOperator>(Op1);
+    auto *OBO2 = cast<OverflowingBinaryOperator>(Op2);
+    if ((!OBO1->hasNoUnsignedWrap() || !OBO2->hasNoUnsignedWrap()) &&
+        (!OBO1->hasNoSignedWrap() || !OBO2->hasNoSignedWrap()))
+      break;
+
+    // Assume operand order has been canonicalized
+    if (Op1->getOperand(1) == Op2->getOperand(1) &&
+        isa<ConstantInt>(Op1->getOperand(1)) &&
+        !cast<ConstantInt>(Op1->getOperand(1))->isZero())
+      return 0;
+    break;
+  }
+  case Instruction::Shl: {
+    // Same as multiplies, with the difference that we don't need to check
+    // for a non-zero multiply. Shifts always multiply by non-zero.
+    auto *OBO1 = cast<OverflowingBinaryOperator>(Op1);
+    auto *OBO2 = cast<OverflowingBinaryOperator>(Op2);
+    if ((!OBO1->hasNoUnsignedWrap() || !OBO2->hasNoUnsignedWrap()) &&
+        (!OBO1->hasNoSignedWrap() || !OBO2->hasNoSignedWrap()))
+      break;
+
+    if (Op1->getOperand(1) == Op2->getOperand(1))
+      return 0;
+    break;
+  }
+  case Instruction::AShr:
+  case Instruction::LShr: {
+    auto *PEO1 = cast<PossiblyExactOperator>(Op1);
+    auto *PEO2 = cast<PossiblyExactOperator>(Op2);
+    if (!PEO1->isExact() || !PEO2->isExact())
+      break;
+
+    if (Op1->getOperand(1) == Op2->getOperand(1))
+      return 0;
+    break;
+  }
+  case Instruction::SExt:
+  case Instruction::ZExt:
+    if (Op1->getOperand(0)->getType() == Op2->getOperand(0)->getType())
+      return 0;
+    break;
+  }
+  return None;
+}
+
 /// Return true if V2 == V1 + X, where X is known non-zero.
 static bool isAddOfNonZero(const Value *V1, const Value *V2, unsigned Depth,
                            const Query &Q) {
@@ -2530,6 +2622,62 @@ static bool isAddOfNonZero(const Value *V1, const Value *V2, unsigned Depth,
   return isKnownNonZero(Op, Depth + 1, Q);
 }
 
+/// Return true if V2 == V1 * C, where V1 is known non-zero, C is not 0/1 and
+/// the multiplication is nuw or nsw.
+static bool isNonEqualMul(const Value *V1, const Value *V2, unsigned Depth,
+                          const Query &Q) {
+  if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(V2)) {
+    const APInt *C;
+    return match(OBO, m_Mul(m_Specific(V1), m_APInt(C))) &&
+           (OBO->hasNoUnsignedWrap() || OBO->hasNoSignedWrap()) &&
+           !C->isNullValue() && !C->isOneValue() &&
+           isKnownNonZero(V1, Depth + 1, Q);
+  }
+  return false;
+}
+
+/// Return true if V2 == V1 << C, where V1 is known non-zero, C is not 0 and
+/// the shift is nuw or nsw.
+static bool isNonEqualShl(const Value *V1, const Value *V2, unsigned Depth,
+                          const Query &Q) {
+  if (auto *OBO = dyn_cast<OverflowingBinaryOperator>(V2)) {
+    const APInt *C;
+    return match(OBO, m_Shl(m_Specific(V1), m_APInt(C))) &&
+           (OBO->hasNoUnsignedWrap() || OBO->hasNoSignedWrap()) &&
+           !C->isNullValue() && isKnownNonZero(V1, Depth + 1, Q);
+  }
+  return false;
+}
+
+static bool isNonEqualPHIs(const PHINode *PN1, const PHINode *PN2,
+                           unsigned Depth, const Query &Q) {
+  // Check two PHIs are in same block.
+  if (PN1->getParent() != PN2->getParent())
+    return false;
+
+  SmallPtrSet<const BasicBlock *, 8> VisitedBBs;
+  bool UsedFullRecursion = false;
+  for (const BasicBlock *IncomBB : PN1->blocks()) {
+    if (!VisitedBBs.insert(IncomBB).second)
+      continue; // Don't reprocess blocks that we have dealt with already.
+    const Value *IV1 = PN1->getIncomingValueForBlock(IncomBB);
+    const Value *IV2 = PN2->getIncomingValueForBlock(IncomBB);
+    const APInt *C1, *C2;
+    if (match(IV1, m_APInt(C1)) && match(IV2, m_APInt(C2)) && *C1 != *C2)
+      continue;
+
+    // Only one pair of phi operands is allowed for full recursion.
+    if (UsedFullRecursion)
+      return false;
+
+    Query RecQ = Q;
+    RecQ.CxtI = IncomBB->getTerminator();
+    if (!isKnownNonEqual(IV1, IV2, Depth + 1, RecQ))
+      return false;
+    UsedFullRecursion = true;
+  }
+  return true;
+}
 
 /// Return true if it is known that V1 != V2.
 static bool isKnownNonEqual(const Value *V1, const Value *V2, unsigned Depth,
@@ -2549,46 +2697,27 @@ static bool isKnownNonEqual(const Value *V1, const Value *V2, unsigned Depth,
   auto *O1 = dyn_cast<Operator>(V1);
   auto *O2 = dyn_cast<Operator>(V2);
   if (O1 && O2 && O1->getOpcode() == O2->getOpcode()) {
-    switch (O1->getOpcode()) {
-    default: break;
-    case Instruction::Add:
-    case Instruction::Sub:
-      // Assume operand order has been canonicalized
-      if (O1->getOperand(0) == O2->getOperand(0))
-        return isKnownNonEqual(O1->getOperand(1), O2->getOperand(1),
-                               Depth + 1, Q);
-      if (O1->getOperand(1) == O2->getOperand(1))
-        return isKnownNonEqual(O1->getOperand(0), O2->getOperand(0),
-                               Depth + 1, Q);
-      break;
-    case Instruction::Mul: {
-      // invertible if A * B == (A * B) mod 2^N where A, and B are integers
-      // and N is the bitwdith.  The nsw case is non-obvious, but proven by
-      // alive2: https://alive2.llvm.org/ce/z/Z6D5qK
-      auto *OBO1 = cast<OverflowingBinaryOperator>(O1);
-      auto *OBO2 = cast<OverflowingBinaryOperator>(O2);
-      if ((!OBO1->hasNoUnsignedWrap() || !OBO2->hasNoUnsignedWrap()) &&
-          (!OBO1->hasNoSignedWrap() || !OBO2->hasNoSignedWrap()))
-        break;
-
-      // Assume operand order has been canonicalized
-      if (O1->getOperand(1) == O2->getOperand(1) &&
-          isa<ConstantInt>(O1->getOperand(1)) &&
-          !cast<ConstantInt>(O1->getOperand(1))->isZero())
-        return isKnownNonEqual(O1->getOperand(0), O2->getOperand(0),
-                               Depth + 1, Q);
-      break;
+    if (Optional<unsigned> Opt = getInvertibleOperand(O1, O2)) {
+      unsigned Idx = *Opt;
+      return isKnownNonEqual(O1->getOperand(Idx), O2->getOperand(Idx),
+                             Depth + 1, Q);
     }
-    case Instruction::SExt:
-    case Instruction::ZExt:
-      if (O1->getOperand(0)->getType() == O2->getOperand(0)->getType())
-        return isKnownNonEqual(O1->getOperand(0), O2->getOperand(0),
-                               Depth + 1, Q);
-      break;
+    if (const PHINode *PN1 = dyn_cast<PHINode>(V1)) {
+      const PHINode *PN2 = cast<PHINode>(V2);
+      // FIXME: This is missing a generalization to handle the case where one is
+      // a PHI and another one isn't.
+      if (isNonEqualPHIs(PN1, PN2, Depth, Q))
+        return true;
     };
   }
-  
+
   if (isAddOfNonZero(V1, V2, Depth, Q) || isAddOfNonZero(V2, V1, Depth, Q))
+    return true;
+
+  if (isNonEqualMul(V1, V2, Depth, Q) || isNonEqualMul(V2, V1, Depth, Q))
+    return true;
+
+  if (isNonEqualShl(V1, V2, Depth, Q) || isNonEqualShl(V2, V1, Depth, Q))
     return true;
 
   if (V1->getType()->isIntOrIntVectorTy()) {
@@ -4391,7 +4520,8 @@ bool llvm::mustSuppressSpeculation(const LoadInst &LI) {
 
 bool llvm::isSafeToSpeculativelyExecute(const Value *V,
                                         const Instruction *CtxI,
-                                        const DominatorTree *DT) {
+                                        const DominatorTree *DT,
+                                        const TargetLibraryInfo *TLI) {
   const Operator *Inst = dyn_cast<Operator>(V);
   if (!Inst)
     return false;
@@ -4438,7 +4568,7 @@ bool llvm::isSafeToSpeculativelyExecute(const Value *V,
     const DataLayout &DL = LI->getModule()->getDataLayout();
     return isDereferenceableAndAlignedPointer(
         LI->getPointerOperand(), LI->getType(), MaybeAlign(LI->getAlignment()),
-        DL, CtxI, DT);
+        DL, CtxI, DT, TLI);
   }
   case Instruction::Call: {
     auto *CI = cast<const CallInst>(Inst);
@@ -4778,6 +4908,20 @@ static bool canCreateUndefOrPoison(const Operator *Op, bool PoisonOnly) {
     // destination type.
     return true;
   case Instruction::Call:
+    if (auto *II = dyn_cast<IntrinsicInst>(Op)) {
+      switch (II->getIntrinsicID()) {
+      // TODO: Add more intrinsics.
+      case Intrinsic::ctpop:
+      case Intrinsic::sadd_with_overflow:
+      case Intrinsic::ssub_with_overflow:
+      case Intrinsic::smul_with_overflow:
+      case Intrinsic::uadd_with_overflow:
+      case Intrinsic::usub_with_overflow:
+      case Intrinsic::umul_with_overflow:
+        return false;
+      }
+    }
+    LLVM_FALLTHROUGH;
   case Instruction::CallBr:
   case Instruction::Invoke: {
     const auto *CB = cast<CallBase>(Op);
@@ -5101,8 +5245,24 @@ bool llvm::propagatesPoison(const Operator *I) {
   case Instruction::Freeze:
   case Instruction::Select:
   case Instruction::PHI:
-  case Instruction::Call:
   case Instruction::Invoke:
+    return false;
+  case Instruction::Call:
+    if (auto *II = dyn_cast<IntrinsicInst>(I)) {
+      switch (II->getIntrinsicID()) {
+      // TODO: Add more intrinsics.
+      case Intrinsic::sadd_with_overflow:
+      case Intrinsic::ssub_with_overflow:
+      case Intrinsic::smul_with_overflow:
+      case Intrinsic::uadd_with_overflow:
+      case Intrinsic::usub_with_overflow:
+      case Intrinsic::umul_with_overflow:
+        // If an input is a vector containing a poison element, the
+        // two output vectors (calculated results, overflow bits)'
+        // corresponding lanes are poison.
+        return true;
+      }
+    }
     return false;
   case Instruction::ICmp:
   case Instruction::FCmp:

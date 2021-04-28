@@ -201,6 +201,19 @@ LogicalResult OpaqueType::verify(function_ref<InFlightDiagnostic()> emitError,
                                  Identifier dialect, StringRef typeData) {
   if (!Dialect::isValidNamespace(dialect.strref()))
     return emitError() << "invalid dialect namespace '" << dialect << "'";
+
+  // Check that the dialect is actually registered.
+  MLIRContext *context = dialect.getContext();
+  if (!context->allowsUnregisteredDialects() &&
+      !context->getLoadedDialect(dialect.strref())) {
+    return emitError()
+           << "`!" << dialect << "<\"" << typeData << "\">"
+           << "` type created with unregistered dialect. If this is "
+              "intended, please call allowUnregisteredDialects() on the "
+              "MLIRContext, or use -allow-unregistered-dialect with "
+              "mlir-opt";
+  }
+
   return success();
 }
 
@@ -379,7 +392,7 @@ LogicalResult VectorType::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << "vector types must have at least one dimension";
 
   if (!isValidElementType(elementType))
-    return emitError() << "vector elements must be int or float type";
+    return emitError() << "vector elements must be int/index/float type";
 
   if (any_of(shape, [](int64_t i) { return i <= 0; }))
     return emitError() << "vector types must have positive constant sizes";
@@ -428,10 +441,12 @@ bool TensorType::isValidElementType(Type type) {
 
 LogicalResult
 RankedTensorType::verify(function_ref<InFlightDiagnostic()> emitError,
-                         ArrayRef<int64_t> shape, Type elementType) {
+                         ArrayRef<int64_t> shape, Type elementType,
+                         Attribute encoding) {
   for (int64_t s : shape)
     if (s < -1)
       return emitError() << "invalid tensor dimension size";
+  // TODO: verify contents of encoding attribute.
   return checkTensorElementType(emitError, elementType);
 }
 
@@ -673,25 +688,22 @@ LogicalResult mlir::getStridesAndOffset(MemRefType t,
                                         SmallVectorImpl<AffineExpr> &strides,
                                         AffineExpr &offset) {
   auto affineMaps = t.getAffineMaps();
-  // For now strides are only computed on a single affine map with a single
-  // result (i.e. the closed subset of linearization maps that are compatible
-  // with striding semantics).
-  // TODO: support more forms on a per-need basis.
-  if (affineMaps.size() > 1)
+
+  if (!affineMaps.empty() && affineMaps.back().getNumResults() != 1)
     return failure();
-  if (affineMaps.size() == 1 && affineMaps[0].getNumResults() != 1)
-    return failure();
+
+  AffineMap m;
+  if (!affineMaps.empty()) {
+    m = affineMaps.back();
+    for (size_t i = affineMaps.size() - 1; i > 0; --i)
+      m = m.compose(affineMaps[i - 1]);
+    assert(!m.isIdentity() && "unexpected identity map");
+  }
 
   auto zero = getAffineConstantExpr(0, t.getContext());
   auto one = getAffineConstantExpr(1, t.getContext());
   offset = zero;
   strides.assign(t.getRank(), zero);
-
-  AffineMap m;
-  if (!affineMaps.empty()) {
-    m = affineMaps.front();
-    assert(!m.isIdentity() && "unexpected identity map");
-  }
 
   // Canonical case for empty map.
   if (!m) {

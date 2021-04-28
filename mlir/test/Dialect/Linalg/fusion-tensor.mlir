@@ -578,3 +578,126 @@ func @consumer_with_reduction(%arg0: tensor<1x10xf32>,
 //      CHECK:     %[[T4:.+]] = addf %[[T3]], %[[T2]] : f32
 //      CHECK:     linalg.yield %[[T4]]
 //      CHECK:   return %[[RES]]
+
+// -----
+
+// CHECK-LABEL: func @sigmoid_dynamic_dim(
+//       CHECK:   %[[RES:.*]] = linalg.generic
+//   CHECK-NOT:   linalg.generic
+//       CHECK:   return %[[RES]]
+func @sigmoid_dynamic_dim(%0: tensor<?x1xf32>) -> tensor<?x1xf32> {
+  %cp5 = constant 5.000000e-01 : f32
+  %c0 = constant 0 : index
+  %shape = shape.shape_of %0 : tensor<?x1xf32> -> tensor<?xindex>
+  %extend = shape.to_extent_tensor %shape : tensor<?xindex> -> tensor<2xindex>
+  %extracted = tensor.extract %extend[%c0] : tensor<2xindex>
+  %init0 = linalg.init_tensor [%extracted, 1] : tensor<?x1xf32>
+  %1 = linalg.generic {indexing_maps = [
+    affine_map<(d0, d1) -> (d0, d1)>],
+    iterator_types = ["parallel", "parallel"]
+  }
+     outs(%init0 : tensor<?x1xf32>) {
+    ^bb0(%a: f32):  // no predecessors
+      linalg.yield %cp5 : f32
+  } -> tensor<?x1xf32>
+  %d0 = memref.dim %0, %c0 : tensor<?x1xf32>
+  %init1 = linalg.init_tensor [%d0, 1] : tensor<?x1xf32>
+  %2 = linalg.generic {indexing_maps = [
+    affine_map<(d0, d1) -> (d0, d1)>,
+    affine_map<(d0, d1) -> (d0, d1)>,
+    affine_map<(d0, d1) -> (d0, d1)>],
+    iterator_types = ["parallel", "parallel"]
+  }
+      ins(%0, %1 : tensor<?x1xf32>, tensor<?x1xf32>)
+     outs(%init1 : tensor<?x1xf32>) {
+  ^bb0(%a: f32, %b: f32, %c: f32):  // no predecessors
+      %m = mulf %a, %b : f32
+      linalg.yield %m : f32
+  } -> tensor<?x1xf32>
+  return %2 : tensor<?x1xf32>
+}
+
+// -----
+
+func private @compute1(%a: f64) -> f64
+func private @compute2(%a: f64, %b: i32) -> i32
+
+// CHECK-LABEL: func @generic_index_op2(
+func @generic_index_op2(%arg0: tensor<1x8xf64>, %arg1: tensor<1x8xi32>) -> tensor<1x8xi32> {
+  %0 = linalg.generic {
+    indexing_maps = [affine_map<(i, j) -> (i, j)>],
+    iterator_types = ["parallel", "parallel"]}
+  outs(%arg0 : tensor<1x8xf64>) {
+  ^bb0(%a: f64):
+    %r = call @compute1(%a) : (f64) -> f64
+    linalg.yield %r : f64
+  } -> tensor<1x8xf64>
+
+  // CHECK-NEXT:   %[[R:.*]] = linalg.generic
+  //      CHECK:     bb0(%[[BBA:[0-9a-z]*]]: f64, %[[BBB:[0-9a-z]*]]: i32):
+  // CHECK-NEXT:       %[[A:.*]] = call @compute1(%[[BBA]]) : (f64) -> f64
+  // CHECK-NEXT:       %[[B:.*]] = call @compute2(%[[A]], %[[BBB]]) : (f64, i32) -> i32
+  // CHECK-NEXT:       linalg.yield %[[B]] : i32
+  // CHECK-NEXT:   } -> tensor<1x8xi32>
+  %1 = linalg.generic {
+    indexing_maps = [affine_map<(i, j) -> (i, j)>, affine_map<(i, j) -> (i, j)>],
+    iterator_types = ["parallel", "parallel"]}
+  ins(%0 : tensor<1x8xf64>)
+  outs(%arg1 : tensor<1x8xi32>) {
+  ^bb0(%a: f64, %b: i32):
+    %r = call @compute2(%a, %b) : (f64, i32) -> i32
+    linalg.yield %r : i32
+  } -> tensor<1x8xi32>
+
+  // CHECK-NEXT:   return %[[R]] : tensor<1x8xi32>
+  return %1 : tensor<1x8xi32>
+}
+
+// -----
+
+// CHECK-LABEL: func @index_op(
+// CHECK-COUNT-2: linalg.generic
+func @index_op(%arg0: tensor<1x8xindex>, %arg1: tensor<1x8xindex>) -> tensor<1x8xindex> {
+  %0 = linalg.generic {
+    indexing_maps = [affine_map<(i, j) -> (i, j)>],
+    iterator_types = ["parallel", "parallel"]}
+  outs(%arg0 : tensor<1x8xindex>) {
+  ^bb0(%a: index):   // no predecessors
+    %2 = linalg.index 1 : index
+    linalg.yield %2 : index
+  } -> tensor<1x8xindex>
+  %1 = linalg.generic {
+    indexing_maps = [affine_map<(i, j) -> (i, j)>, affine_map<(i, j) -> (i, j)>],
+    iterator_types = ["parallel", "parallel"]}
+  ins(%0 : tensor<1x8xindex>)
+  outs(%arg1 : tensor<1x8xindex>) {
+  ^bb0(%a: index, %b: index):   // no predecessors
+    %2 = linalg.index 0 : index
+    %3 = addi %2, %a : index
+    linalg.yield %3 : index
+  } -> tensor<1x8xindex>
+  return %1 : tensor<1x8xindex>
+}
+
+// -----
+
+// CHECK-LABEL: func @no_fuse_constant_with_reduction
+func @no_fuse_constant_with_reduction() -> tensor<3xf32>
+{
+  //      CHECK: %[[CONST:.+]] = constant {{.+}} : tensor<3x2xf32>
+  //      CHECK: %[[RESULT:.+]] = linalg.generic
+  // CHECK-SAME:   ins(%[[CONST]] : tensor<3x2xf32>)
+  //      CHECK: return %[[RESULT]]
+  %three = constant dense<3.0> : tensor<3x2xf32>
+  %init = linalg.init_tensor [3] : tensor<3xf32>
+  %result = linalg.generic {
+      indexing_maps = [affine_map<(d0, d1) -> (d0, d1)>,
+                       affine_map<(d0, d1) -> (d0)>],
+      iterator_types = ["parallel", "reduction"]}
+     ins(%three : tensor<3x2xf32>) outs(%init : tensor<3xf32>) {
+     ^bb0(%arg0 : f32, %arg1 : f32):
+        %0 = addf %arg0, %arg1 : f32
+        linalg.yield %0 : f32
+  } -> tensor<3xf32>
+  return %result : tensor<3xf32>
+}

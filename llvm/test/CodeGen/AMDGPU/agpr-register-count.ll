@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -mtriple=amdgcn--amdhsa -mcpu=gfx908 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GFX908 %s
 ; RUN: llc -mtriple=amdgcn--amdhsa -mcpu=gfx90a -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GFX90A %s
 

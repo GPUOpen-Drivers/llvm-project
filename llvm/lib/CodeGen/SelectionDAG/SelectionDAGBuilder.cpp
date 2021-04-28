@@ -1302,8 +1302,8 @@ bool SelectionDAGBuilder::handleDebugValue(ArrayRef<const Value *> Values,
                                            bool IsVariadic) {
   if (Values.empty())
     return true;
-  SDDbgValue::LocOpVector LocationOps;
-  SDDbgValue::SDNodeVector Dependencies;
+  SmallVector<SDDbgOperand> LocationOps;
+  SmallVector<SDNode *> Dependencies;
   for (const Value *V : Values) {
     // Constant value.
     if (isa<ConstantInt>(V) || isa<ConstantFP>(V) || isa<UndefValue>(V) ||
@@ -1331,7 +1331,6 @@ bool SelectionDAGBuilder::handleDebugValue(ArrayRef<const Value *> Values,
       // Only emit func arg dbg value for non-variadic dbg.values for now.
       if (!IsVariadic && EmitFuncArgumentDbgValue(V, Var, Expr, dl, false, N))
         return true;
-      Dependencies.push_back(N.getNode());
       if (auto *FISDN = dyn_cast<FrameIndexSDNode>(N.getNode())) {
         // Construct a FrameIndexDbgValue for FrameIndexSDNodes so we can
         // describe stack slot locations.
@@ -1343,6 +1342,7 @@ bool SelectionDAGBuilder::handleDebugValue(ArrayRef<const Value *> Values,
         //   dbg.value(i32* %px, !"int x", !DIExpression(DW_OP_deref))
         //
         // Both describe the direct values of their associated variables.
+        Dependencies.push_back(N.getNode());
         LocationOps.emplace_back(SDDbgOperand::fromFrameIdx(FISDN->getIndex()));
         continue;
       }
@@ -6945,7 +6945,9 @@ void SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I,
   case Intrinsic::experimental_deoptimize:
     LowerDeoptimizeCall(&I);
     return;
-
+  case Intrinsic::experimental_stepvector:
+    visitStepVector(I);
+    return;
   case Intrinsic::vector_reduce_fadd:
   case Intrinsic::vector_reduce_fmul:
   case Intrinsic::vector_reduce_add:
@@ -10927,6 +10929,16 @@ void SelectionDAGBuilder::visitSwitch(const SwitchInst &SI) {
 
     lowerWorkItem(W, SI.getCondition(), SwitchMBB, DefaultMBB);
   }
+}
+
+void SelectionDAGBuilder::visitStepVector(const CallInst &I) {
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+  auto DL = getCurSDLoc();
+  EVT ResultVT = TLI.getValueType(DAG.getDataLayout(), I.getType());
+  EVT OpVT =
+      TLI.getTypeToTransformTo(*DAG.getContext(), ResultVT.getScalarType());
+  SDValue Step = DAG.getConstant(1, DL, OpVT);
+  setValue(&I, DAG.getStepVector(DL, ResultVT, Step));
 }
 
 void SelectionDAGBuilder::visitVectorReverse(const CallInst &I) {

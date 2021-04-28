@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -mtriple=amdgcn-amd-amdhsa -verify-machineinstrs < %s | FileCheck -check-prefix=GCN %s
 ; RUN: opt -S -mtriple=amdgcn-amd-amdhsa -amdgpu-fix-function-bitcasts < %s | FileCheck -check-prefix=OPT %s
 

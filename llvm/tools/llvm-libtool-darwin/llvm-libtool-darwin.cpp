@@ -22,7 +22,7 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/WithColor.h"
-#include "llvm/TextAPI/MachO/Architecture.h"
+#include "llvm/TextAPI/Architecture.h"
 #include <map>
 
 using namespace llvm;
@@ -147,7 +147,7 @@ static Error processFileList() {
   std::tie(FileName, DirName) = StringRef(FileList).rsplit(",");
 
   ErrorOr<std::unique_ptr<MemoryBuffer>> FileOrErr =
-      MemoryBuffer::getFileOrSTDIN(FileName, /*FileSize=*/-1,
+      MemoryBuffer::getFileOrSTDIN(FileName, /*IsText=*/false,
                                    /*RequiresNullTerminator=*/false);
   if (std::error_code EC = FileOrErr.getError())
     return createFileError(FileName, errorCodeToError(EC));

@@ -604,6 +604,9 @@ private:
   std::unique_ptr<interp::Context> InterpContext;
   std::unique_ptr<ParentMapContext> ParentMapCtx;
 
+  /// Keeps track of the deallocated DeclListNodes for future reuse.
+  DeclListNode *ListNodeFreeList = nullptr;
+
 public:
   IdentifierTable &Idents;
   SelectorTable &Selectors;
@@ -654,6 +657,24 @@ public:
     return static_cast<T *>(Allocate(Num * sizeof(T), alignof(T)));
   }
   void Deallocate(void *Ptr) const {}
+
+  /// Allocates a \c DeclListNode or returns one from the \c ListNodeFreeList
+  /// pool.
+  DeclListNode *AllocateDeclListNode(clang::NamedDecl *ND) {
+    if (DeclListNode *Alloc = ListNodeFreeList) {
+      ListNodeFreeList = Alloc->Rest.dyn_cast<DeclListNode*>();
+      Alloc->D = ND;
+      Alloc->Rest = nullptr;
+      return Alloc;
+    }
+    return new (*this) DeclListNode(ND);
+  }
+  /// Deallcates a \c DeclListNode by returning it to the \c ListNodeFreeList
+  /// pool.
+  void DeallocateDeclListNode(DeclListNode *N) {
+    N->Rest = ListNodeFreeList;
+    ListNodeFreeList = N;
+  }
 
   /// Return the total amount of physical memory allocated for representing
   /// AST nodes and type information.
@@ -2726,6 +2747,14 @@ public:
   // accepts fixed point types and returns the corresponding unsigned type for
   // a given fixed point type.
   QualType getCorrespondingUnsignedType(QualType T) const;
+
+  // Per C99 6.2.5p6, for every signed integer type, there is a corresponding
+  // unsigned integer type.  This method takes an unsigned type, and returns the
+  // corresponding signed integer type.
+  // With the introduction of fixed point types in ISO N1169, this method also
+  // accepts fixed point types and returns the corresponding signed type for
+  // a given fixed point type.
+  QualType getCorrespondingSignedType(QualType T) const;
 
   // Per ISO N1169, this method accepts fixed point types and returns the
   // corresponding saturated type for a given fixed point type.

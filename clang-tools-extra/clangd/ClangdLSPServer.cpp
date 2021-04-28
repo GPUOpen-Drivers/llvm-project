@@ -518,6 +518,7 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
   if (Params.capabilities.WorkDoneProgress)
     BackgroundIndexProgressState = BackgroundIndexProgress::Empty;
   BackgroundIndexSkipCreate = Params.capabilities.ImplicitProgressCreation;
+  Opts.ImplicitCancellation = !Params.capabilities.CancelsStaleRequests;
 
   llvm::json::Object ServerCaps{
       {"textDocumentSync",
@@ -570,6 +571,7 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
       {"referencesProvider", true},
       {"astProvider", true}, // clangd extension
       {"typeHierarchyProvider", true},
+      {"clangdInlayHintsProvider", true},
       {"memoryUsageProvider", true}, // clangd extension
       {"compilationDatabase",        // clangd extension
        llvm::json::Object{{"automaticReload", true}}},
@@ -779,7 +781,7 @@ void ClangdLSPServer::onWorkspaceSymbol(
     const WorkspaceSymbolParams &Params,
     Callback<std::vector<SymbolInformation>> Reply) {
   Server->workspaceSymbols(
-      Params.query, Opts.CodeComplete.Limit,
+      Params.query, Params.limit.getValueOr(Opts.CodeComplete.Limit),
       [Reply = std::move(Reply),
        this](llvm::Expected<std::vector<SymbolInformation>> Items) mutable {
         if (!Items)
@@ -1030,21 +1032,24 @@ void ClangdLSPServer::onCompletion(const CompletionParams &Params,
     vlog("ignored auto-triggered completion, preceding char did not match");
     return Reply(CompletionList());
   }
-  Server->codeComplete(
-      Params.textDocument.uri.file(), Params.position, Opts.CodeComplete,
-      [Reply = std::move(Reply),
-       this](llvm::Expected<CodeCompleteResult> List) mutable {
-        if (!List)
-          return Reply(List.takeError());
-        CompletionList LSPList;
-        LSPList.isIncomplete = List->HasMore;
-        for (const auto &R : List->Completions) {
-          CompletionItem C = R.render(Opts.CodeComplete);
-          C.kind = adjustKindToCapability(C.kind, SupportedCompletionItemKinds);
-          LSPList.items.push_back(std::move(C));
-        }
-        return Reply(std::move(LSPList));
-      });
+  auto Opts = this->Opts.CodeComplete;
+  if (Params.limit && *Params.limit >= 0)
+    Opts.Limit = *Params.limit;
+  Server->codeComplete(Params.textDocument.uri.file(), Params.position, Opts,
+                       [Reply = std::move(Reply), Opts,
+                        this](llvm::Expected<CodeCompleteResult> List) mutable {
+                         if (!List)
+                           return Reply(List.takeError());
+                         CompletionList LSPList;
+                         LSPList.isIncomplete = List->HasMore;
+                         for (const auto &R : List->Completions) {
+                           CompletionItem C = R.render(Opts);
+                           C.kind = adjustKindToCapability(
+                               C.kind, SupportedCompletionItemKinds);
+                           LSPList.items.push_back(std::move(C));
+                         }
+                         return Reply(std::move(LSPList));
+                       });
 }
 
 void ClangdLSPServer::onSignatureHelp(const TextDocumentPositionParams &Params,
@@ -1202,6 +1207,11 @@ void ClangdLSPServer::onCallHierarchyOutgoingCalls(
     Callback<std::vector<CallHierarchyOutgoingCall>> Reply) {
   // FIXME: To be implemented.
   Reply(std::vector<CallHierarchyOutgoingCall>{});
+}
+
+void ClangdLSPServer::onInlayHints(const InlayHintsParams &Params,
+                                   Callback<std::vector<InlayHint>> Reply) {
+  Server->inlayHints(Params.textDocument.uri.file(), std::move(Reply));
 }
 
 void ClangdLSPServer::applyConfiguration(
@@ -1467,6 +1477,7 @@ void ClangdLSPServer::bindMethods(LSPBinder &Bind,
   Bind.method("textDocument/documentLink", this, &ClangdLSPServer::onDocumentLink);
   Bind.method("textDocument/semanticTokens/full", this, &ClangdLSPServer::onSemanticTokens);
   Bind.method("textDocument/semanticTokens/full/delta", this, &ClangdLSPServer::onSemanticTokensDelta);
+  Bind.method("clangd/inlayHints", this, &ClangdLSPServer::onInlayHints);
   Bind.method("$/memoryUsage", this, &ClangdLSPServer::onMemoryUsage);
   if (Opts.FoldingRanges)
     Bind.method("textDocument/foldingRange", this, &ClangdLSPServer::onFoldingRange);

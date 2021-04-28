@@ -1,5 +1,12 @@
 add_flang_unittest(FlangRuntimeTests
   CharacterTest.cpp
+  CrashHandlerFixture.cpp
+  MiscIntrinsic.cpp
+  Numeric.cpp
+  NumericalFormatTest.cpp
+  Random.cpp
+  Reduction.cpp
+  RuntimeCrashTest.cpp
 )
 
 target_link_libraries(FlangRuntimeTests

@@ -108,8 +108,11 @@ namespace {
 
   /// Given a CallExpr, try to get the alloc_size attribute. May return null.
   static const AllocSizeAttr *getAllocSizeAttr(const CallExpr *CE) {
-    const FunctionDecl *Callee = CE->getDirectCallee();
-    return Callee ? Callee->getAttr<AllocSizeAttr>() : nullptr;
+    if (const FunctionDecl *DirectCallee = CE->getDirectCallee())
+      return DirectCallee->getAttr<AllocSizeAttr>();
+    if (const Decl *IndirectCallee = CE->getCalleeDecl())
+      return IndirectCallee->getAttr<AllocSizeAttr>();
+    return nullptr;
   }
 
   /// Attempts to unwrap a CallExpr (with an alloc_size attribute) from an Expr.
@@ -10307,10 +10310,10 @@ bool VectorExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
          "Must both be vector types");
   // Checking JUST the types are the same would be fine, except shifts don't
   // need to have their types be the same (since you always shift by an int).
-  assert(LHS->getType()->getAs<VectorType>()->getNumElements() ==
-             E->getType()->getAs<VectorType>()->getNumElements() &&
-         RHS->getType()->getAs<VectorType>()->getNumElements() ==
-             E->getType()->getAs<VectorType>()->getNumElements() &&
+  assert(LHS->getType()->castAs<VectorType>()->getNumElements() ==
+             E->getType()->castAs<VectorType>()->getNumElements() &&
+         RHS->getType()->castAs<VectorType>()->getNumElements() ==
+             E->getType()->castAs<VectorType>()->getNumElements() &&
          "All operands must be the same size.");
 
   APValue LHSValue;
@@ -12010,9 +12013,6 @@ bool IntExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
     return BuiltinOp == Builtin::BI__atomic_always_lock_free ?
         Success(0, E) : Error(E);
   }
-  case Builtin::BIomp_is_initial_device:
-    // We can decide statically which value the runtime would return if called.
-    return Success(Info.getLangOpts().OpenMPIsDevice ? 0 : 1, E);
   case Builtin::BI__builtin_add_overflow:
   case Builtin::BI__builtin_sub_overflow:
   case Builtin::BI__builtin_mul_overflow:
@@ -12472,25 +12472,6 @@ void DataRecursiveIntBinOpEvaluator::process(EvalResult &Result) {
 }
 
 namespace {
-/// Used when we determine that we should fail, but can keep evaluating prior to
-/// noting that we had a failure.
-class DelayedNoteFailureRAII {
-  EvalInfo &Info;
-  bool NoteFailure;
-
-public:
-  DelayedNoteFailureRAII(EvalInfo &Info, bool NoteFailure = true)
-      : Info(Info), NoteFailure(NoteFailure) {}
-  ~DelayedNoteFailureRAII() {
-    if (NoteFailure) {
-      bool ContinueAfterFailure = Info.noteFailure();
-      (void)ContinueAfterFailure;
-      assert(ContinueAfterFailure &&
-             "Shouldn't have kept evaluating on failure.");
-    }
-  }
-};
-
 enum class CmpResult {
   Unequal,
   Less,
@@ -12858,12 +12839,14 @@ bool RecordExprEvaluator::VisitBinCmp(const BinaryOperator *E) {
 }
 
 bool IntExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
-  // We don't call noteFailure immediately because the assignment happens after
-  // we evaluate LHS and RHS.
-  if (!Info.keepEvaluatingAfterFailure() && E->isAssignmentOp())
-    return Error(E);
+  // We don't support assignment in C. C++ assignments don't get here because
+  // assignment is an lvalue in C++.
+  if (E->isAssignmentOp()) {
+    Error(E);
+    if (!Info.noteFailure())
+      return false;
+  }
 
-  DelayedNoteFailureRAII MaybeNoteFailureLater(Info, E->isAssignmentOp());
   if (DataRecursiveIntBinOpEvaluator::shouldEnqueue(E))
     return DataRecursiveIntBinOpEvaluator(*this, Result).Traverse(E);
 
@@ -13200,6 +13183,7 @@ bool IntExprEvaluator::VisitCastExpr(const CastExpr *E) {
   case CK_FixedPointToFloating:
   case CK_FixedPointCast:
   case CK_IntegralToFixedPoint:
+  case CK_MatrixCast:
     llvm_unreachable("invalid cast kind for integral value");
 
   case CK_BitCast:
@@ -13940,6 +13924,7 @@ bool ComplexExprEvaluator::VisitCastExpr(const CastExpr *E) {
   case CK_FixedPointToBoolean:
   case CK_FixedPointToIntegral:
   case CK_IntegralToFixedPoint:
+  case CK_MatrixCast:
     llvm_unreachable("invalid cast kind for complex value");
 
   case CK_LValueToRValue:

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/StandardOps/Utils/Utils.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -16,6 +17,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
@@ -182,8 +184,8 @@ struct SimplifyAllocConst : public OpRewritePattern<AllocLikeOp> {
            newMemRefType.getNumDynamicDims());
 
     // Create and insert the alloc op for the new memref.
-    auto newAlloc = rewriter.create<AllocLikeOp>(alloc.getLoc(), newMemRefType,
-                                                 newOperands, IntegerAttr());
+    auto newAlloc = rewriter.create<AllocLikeOp>(
+        alloc.getLoc(), newMemRefType, newOperands, alloc.alignmentAttr());
     // Insert a cast so we have the same type as the old alloc.
     auto resultCast =
         rewriter.create<CastOp>(alloc.getLoc(), newAlloc, alloc.getType());
@@ -209,14 +211,14 @@ struct SimplifyDeadAlloc : public OpRewritePattern<AllocOp> {
 };
 } // end anonymous namespace.
 
-void AllocOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void AllocOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
-  results.insert<SimplifyAllocConst<AllocOp>, SimplifyDeadAlloc>(context);
+  results.add<SimplifyAllocConst<AllocOp>, SimplifyDeadAlloc>(context);
 }
 
-void AllocaOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void AllocaOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                            MLIRContext *context) {
-  results.insert<SimplifyAllocConst<AllocaOp>>(context);
+  results.add<SimplifyAllocConst<AllocaOp>>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -290,9 +292,9 @@ struct TensorLoadToMemRef : public OpRewritePattern<BufferCastOp> {
 
 } // namespace
 
-void BufferCastOp::getCanonicalizationPatterns(
-    OwningRewritePatternList &results, MLIRContext *context) {
-  results.insert<BufferCast, TensorLoadToMemRef>(context);
+void BufferCastOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                               MLIRContext *context) {
+  results.add<BufferCast, TensorLoadToMemRef>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -420,7 +422,7 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
         if (!checkCompatible(aStride.value(), bStrides[aStride.index()]))
           return false;
     }
-    if (aT.getMemorySpaceAsInt() != bT.getMemorySpaceAsInt())
+    if (aT.getMemorySpace() != bT.getMemorySpace())
       return false;
 
     // They must have the same rank, and any specified dimensions must match.
@@ -447,10 +449,8 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
     if (aEltType != bEltType)
       return false;
 
-    auto aMemSpace =
-        (aT) ? aT.getMemorySpaceAsInt() : uaT.getMemorySpaceAsInt();
-    auto bMemSpace =
-        (bT) ? bT.getMemorySpaceAsInt() : ubT.getMemorySpaceAsInt();
+    auto aMemSpace = (aT) ? aT.getMemorySpace() : uaT.getMemorySpace();
+    auto bMemSpace = (bT) ? bT.getMemorySpace() : ubT.getMemorySpace();
     if (aMemSpace != bMemSpace)
       return false;
 
@@ -461,6 +461,76 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 }
 
 OpFoldResult CastOp::fold(ArrayRef<Attribute> operands) {
+  return succeeded(foldMemRefCast(*this)) ? getResult() : Value();
+}
+
+//===----------------------------------------------------------------------===//
+// CloneOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verify(CloneOp op) { return success(); }
+
+void CloneOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), input(),
+                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get(), output(),
+                       SideEffects::DefaultResource::get());
+}
+
+namespace {
+/// Fold Dealloc operations that are deallocating an AllocOp that is only used
+/// by other Dealloc operations.
+struct SimplifyClones : public OpRewritePattern<CloneOp> {
+  using OpRewritePattern<CloneOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(CloneOp cloneOp,
+                                PatternRewriter &rewriter) const override {
+    if (cloneOp.use_empty()) {
+      rewriter.eraseOp(cloneOp);
+      return success();
+    }
+
+    Value source = cloneOp.input();
+
+    // Removes the clone operation and the corresponding dealloc and alloc
+    // operation (if any).
+    auto tryRemoveClone = [&](Operation *sourceOp, Operation *dealloc,
+                              Operation *alloc) {
+      if (!sourceOp || !dealloc || !alloc ||
+          alloc->getBlock() != dealloc->getBlock())
+        return false;
+      rewriter.replaceOp(cloneOp, source);
+      rewriter.eraseOp(dealloc);
+      return true;
+    };
+
+    // Removes unnecessary clones that are derived from the result of the clone
+    // op.
+    Operation *deallocOp = findDealloc(cloneOp.output());
+    Operation *sourceOp = source.getDefiningOp();
+    if (tryRemoveClone(sourceOp, deallocOp, sourceOp))
+      return success();
+
+    // Removes unnecessary clones that are derived from the source of the clone
+    // op.
+    deallocOp = findDealloc(source);
+    if (tryRemoveClone(sourceOp, deallocOp, cloneOp))
+      return success();
+
+    return failure();
+  }
+};
+
+} // end anonymous namespace.
+
+void CloneOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+                                          MLIRContext *context) {
+  results.insert<SimplifyClones>(context);
+}
+
+OpFoldResult CloneOp::fold(ArrayRef<Attribute> operands) {
   return succeeded(foldMemRefCast(*this)) ? getResult() : Value();
 }
 
@@ -498,9 +568,9 @@ static LogicalResult verify(DeallocOp op) {
   return success();
 }
 
-void DeallocOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void DeallocOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
-  results.insert<SimplifyDeadDealloc>(context);
+  results.add<SimplifyDeadDealloc>(context);
 }
 
 LogicalResult DeallocOp::fold(ArrayRef<Attribute> cstOperands,
@@ -617,6 +687,10 @@ OpFoldResult DimOp::fold(ArrayRef<Attribute> operands) {
     return *(alloc.getDynamicSizes().begin() +
              memrefType.getDynamicDimIndex(unsignedIndex));
 
+  if (auto alloca = dyn_cast_or_null<AllocaOp>(definingOp))
+    return *(alloca.getDynamicSizes().begin() +
+             memrefType.getDynamicDimIndex(unsignedIndex));
+
   if (auto view = dyn_cast_or_null<ViewOp>(definingOp))
     return *(view.getDynamicSizes().begin() +
              memrefType.getDynamicDimIndex(unsignedIndex));
@@ -671,12 +745,84 @@ struct DimOfCastOp : public OpRewritePattern<DimOp> {
     return success();
   }
 };
+
+/// Helper method to get the `Value` that is the shape of the `resultIdx`-th
+/// result at dimension `dimIndex` from the `ShapedTypeOpInterface`.
+/// TODO(ravishankarm): This is better put as a interface utility method
+/// somewhere, but that would imply the interface will depend on the `tensor`
+/// dialect. Ideally maybe a utility method in the `tensor` dialect.
+static Value getResultDimFromShapeInterface(OpBuilder &builder, OpResult result,
+                                            int64_t dimIndex) {
+  unsigned resultNumber = result.getResultNumber();
+  auto shapedTypeOp = dyn_cast<InferShapedTypeOpInterface>(result.getOwner());
+  Location loc = result.getOwner()->getLoc();
+  if (!shapedTypeOp)
+    return nullptr;
+
+  // The interface exposes two methods, one that returns the shape of all the
+  // results as `Value` and other that returns the shape as a list of
+  // `SmallVector<Value>`. The former takes precedence over the latter. So first
+  // check if the op implements the first interface method or the second, and
+  // get the value to use appropriately.
+  SmallVector<Value> reifiedResultShapes;
+  if (succeeded(
+          shapedTypeOp.reifyReturnTypeShapes(builder, reifiedResultShapes))) {
+    if (reifiedResultShapes.size() <= resultNumber)
+      return nullptr;
+    Value resultShape = reifiedResultShapes[resultNumber];
+    auto resultShapeType = resultShape.getType().dyn_cast<RankedTensorType>();
+    if (!resultShapeType || !resultShapeType.getElementType().isa<IndexType>())
+      return nullptr;
+    return builder.create<tensor::ExtractOp>(
+        loc, resultShape, builder.createOrFold<ConstantIndexOp>(loc, dimIndex));
+  }
+
+  SmallVector<SmallVector<Value>> reifiedResultShapesPerDim;
+  if (failed(shapedTypeOp.reifyReturnTypeShapesPerResultDim(
+          builder, reifiedResultShapesPerDim)))
+    return nullptr;
+  if (reifiedResultShapesPerDim.size() <= resultNumber ||
+      reifiedResultShapesPerDim[resultNumber].size() !=
+          static_cast<size_t>(result.getType().cast<ShapedType>().getRank()))
+    return nullptr;
+  OpFoldResult valueOrAttr = reifiedResultShapesPerDim[resultNumber][dimIndex];
+  if (auto attr = valueOrAttr.dyn_cast<Attribute>())
+    return builder.createOrFold<ConstantIndexOp>(
+        loc, attr.cast<IntegerAttr>().getInt());
+  return valueOrAttr.get<Value>();
+}
+
+/// Fold dim of an operation that implements the InferShapedTypeOpInterface
+struct DimOfShapedTypeOpInterface : public OpRewritePattern<DimOp> {
+  using OpRewritePattern<DimOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DimOp dimOp,
+                                PatternRewriter &rewriter) const override {
+    OpResult dimValue = dimOp.memrefOrTensor().dyn_cast<OpResult>();
+    if (!dimValue)
+      return failure();
+    auto shapedTypeOp =
+        dyn_cast<InferShapedTypeOpInterface>(dimValue.getOwner());
+    if (!shapedTypeOp)
+      return failure();
+
+    Optional<int64_t> dimIndex = dimOp.getConstantIndex();
+    if (!dimIndex)
+      return failure();
+    Value replacement =
+        getResultDimFromShapeInterface(rewriter, dimValue, *dimIndex);
+    if (!replacement)
+      return failure();
+    rewriter.replaceOp(dimOp, replacement);
+    return success();
+  }
+};
 } // end anonymous namespace.
 
-void DimOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void DimOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                         MLIRContext *context) {
-  results.insert<DimOfMemRefReshape, DimOfCastOp<BufferCastOp>,
-                 DimOfCastOp<tensor::CastOp>>(context);
+  results.add<DimOfMemRefReshape, DimOfCastOp<BufferCastOp>,
+              DimOfCastOp<tensor::CastOp>, DimOfShapedTypeOpInterface>(context);
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,9 +1211,9 @@ struct LoadOfBufferCast : public OpRewritePattern<LoadOp> {
 };
 } // end anonymous namespace.
 
-void LoadOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                          MLIRContext *context) {
-  results.insert<LoadOfBufferCast>(context);
+  results.add<LoadOfBufferCast>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1200,7 +1346,7 @@ static LogicalResult verify(ReinterpretCastOp op) {
   // The source and result memrefs should be in the same memory space.
   auto srcType = op.source().getType().cast<BaseMemRefType>();
   auto resultType = op.getType().cast<MemRefType>();
-  if (srcType.getMemorySpaceAsInt() != resultType.getMemorySpaceAsInt())
+  if (srcType.getMemorySpace() != resultType.getMemorySpace())
     return op.emitError("different memory spaces specified for source type ")
            << srcType << " and result memref type " << resultType;
   if (srcType.getElementType() != resultType.getElementType())
@@ -1385,7 +1531,7 @@ Type SubViewOp::inferResultType(MemRefType sourceMemRefType,
       staticSizes, sourceMemRefType.getElementType(),
       makeStridedLinearLayoutMap(targetStrides, targetOffset,
                                  sourceMemRefType.getContext()),
-      sourceMemRefType.getMemorySpaceAsInt());
+      sourceMemRefType.getMemorySpace());
 }
 
 Type SubViewOp::inferResultType(MemRefType sourceMemRefType,
@@ -1431,7 +1577,7 @@ Type SubViewOp::inferRankReducedResultType(
       map = getProjectedMap(maps.front(), dimsToProject);
     inferredType =
         MemRefType::get(projectedShape, inferredType.getElementType(), map,
-                        inferredType.getMemorySpaceAsInt());
+                        inferredType.getMemorySpace());
   }
   return inferredType;
 }
@@ -1609,7 +1755,7 @@ isRankReducedType(Type originalType, Type candidateReducedType,
   // Strided layout logic is relevant for MemRefType only.
   MemRefType original = originalType.cast<MemRefType>();
   MemRefType candidateReduced = candidateReducedType.cast<MemRefType>();
-  if (original.getMemorySpaceAsInt() != candidateReduced.getMemorySpaceAsInt())
+  if (original.getMemorySpace() != candidateReduced.getMemorySpace())
     return SubViewVerificationResult::MemSpaceMismatch;
 
   llvm::SmallDenseSet<unsigned> unusedDims = optionalUnusedDimsMask.getValue();
@@ -1683,7 +1829,7 @@ static LogicalResult verify(SubViewOp op) {
   MemRefType subViewType = op.getType();
 
   // The base memref and the view memref should be in the same memory space.
-  if (baseType.getMemorySpaceAsInt() != subViewType.getMemorySpaceAsInt())
+  if (baseType.getMemorySpace() != subViewType.getMemorySpace())
     return op.emitError("different memory spaces specified for base memref "
                         "type ")
            << baseType << " and subview memref type " << subViewType;
@@ -1798,11 +1944,11 @@ struct SubViewCanonicalizer {
   }
 };
 
-void SubViewOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void SubViewOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
-  results.insert<OpWithOffsetSizesAndStridesConstantArgumentFolder<
-                     SubViewOp, SubViewCanonicalizer>,
-                 SubViewOpMemRefCastFolder>(context);
+  results.add<OpWithOffsetSizesAndStridesConstantArgumentFolder<
+                  SubViewOp, SubViewCanonicalizer>,
+              SubViewOpMemRefCastFolder>(context);
 }
 
 OpFoldResult SubViewOp::fold(ArrayRef<Attribute> operands) {
@@ -1975,7 +2121,7 @@ static LogicalResult verify(ViewOp op) {
     return op.emitError("unsupported map for result memref type ") << viewType;
 
   // The base memref and the view memref should be in the same memory space.
-  if (baseType.getMemorySpaceAsInt() != viewType.getMemorySpaceAsInt())
+  if (baseType.getMemorySpace() != viewType.getMemorySpace())
     return op.emitError("different memory spaces specified for base memref "
                         "type ")
            << baseType << " and view memref type " << viewType;
@@ -2081,9 +2227,9 @@ struct ViewOpMemrefCastFolder : public OpRewritePattern<ViewOp> {
 
 } // end anonymous namespace
 
-void ViewOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+void ViewOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                          MLIRContext *context) {
-  results.insert<ViewOpShapeFolder, ViewOpMemrefCastFolder>(context);
+  results.add<ViewOpShapeFolder, ViewOpMemrefCastFolder>(context);
 }
 
 //===----------------------------------------------------------------------===//

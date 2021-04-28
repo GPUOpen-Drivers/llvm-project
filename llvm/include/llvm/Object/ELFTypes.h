@@ -655,9 +655,15 @@ public:
   Elf_Word getType() const { return Nhdr.n_type; }
 };
 
-template <class ELFT>
-class Elf_Note_Iterator_Impl
-    : std::iterator<std::forward_iterator_tag, Elf_Note_Impl<ELFT>> {
+template <class ELFT> class Elf_Note_Iterator_Impl {
+public:
+  using iterator_category = std::forward_iterator_tag;
+  using value_type = Elf_Note_Impl<ELFT>;
+  using difference_type = std::ptrdiff_t;
+  using pointer = value_type *;
+  using reference = value_type &;
+
+private:
   // Nhdr being a nullptr marks the end of iteration.
   const Elf_Nhdr_Impl<ELFT> *Nhdr = nullptr;
   size_t RemainingSize = 0u;
@@ -802,13 +808,15 @@ template <class ELFT> struct Elf_BBAddrMap_Impl {
 
     // The following fields are decoded from the Metadata field. The encoding
     // happens in AsmPrinter.cpp:getBBAddrMapMetadata.
-    bool HasReturn;   // If this block ends with a return (or tail call).
-    bool HasTailCall; // If this block ends with a tail call.
-    bool IsEHPad;     // If this is an exception handling block.
+    bool HasReturn;      // If this block ends with a return (or tail call).
+    bool HasTailCall;    // If this block ends with a tail call.
+    bool IsEHPad;        // If this is an exception handling block.
+    bool CanFallThrough; // If this block can fall through to its next.
 
     BBEntry(uint32_t Offset, uint32_t Size, uint32_t Metadata)
         : Offset(Offset), Size(Size), HasReturn(Metadata & 1),
-          HasTailCall(Metadata & (1 << 1)), IsEHPad(Metadata & (1 << 2)){};
+          HasTailCall(Metadata & (1 << 1)), IsEHPad(Metadata & (1 << 2)),
+          CanFallThrough(Metadata & (1 << 3)){};
   };
   std::vector<BBEntry> BBEntries; // Basic block entries for this function.
 };

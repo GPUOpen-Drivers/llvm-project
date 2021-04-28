@@ -17,10 +17,10 @@ config.name = 'lldb-api'
 config.suffixes = ['.py']
 
 # test_source_root: The root path where tests are located.
-# test_exec_root: The root path where tests should be run.
 config.test_source_root = os.path.dirname(__file__)
-config.test_exec_root = config.test_source_root
 
+# test_exec_root: The root path where tests should be run.
+config.test_exec_root = os.path.join(config.lldb_obj_root, 'test', 'API')
 
 def mkdir_p(path):
   import errno
@@ -251,11 +251,6 @@ config.test_format = lldbtest.LLDBTest(dotest_cmd)
 if 'FREEBSD_LEGACY_PLUGIN' in os.environ:
   config.environment['FREEBSD_LEGACY_PLUGIN'] = os.environ[
       'FREEBSD_LEGACY_PLUGIN']
-
-# Propagate LLDB_CAPTURE_REPRODUCER
-if 'LLDB_CAPTURE_REPRODUCER' in os.environ:
-  config.environment['LLDB_CAPTURE_REPRODUCER'] = os.environ[
-      'LLDB_CAPTURE_REPRODUCER']
 
 # Propagate XDG_CACHE_HOME
 if 'XDG_CACHE_HOME' in os.environ:

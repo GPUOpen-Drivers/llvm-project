@@ -70,10 +70,10 @@ def gi_smrd_sgpr :
 
 def gi_flat_offset :
     GIComplexOperandMatcher<s64, "selectFlatOffset">,
-    GIComplexPatternEquiv<FLATOffset>;
-def gi_flat_offset_signed :
-    GIComplexOperandMatcher<s64, "selectFlatOffsetSigned">,
-    GIComplexPatternEquiv<FLATOffsetSigned>;
+    GIComplexPatternEquiv<FlatOffset>;
+def gi_global_offset :
+    GIComplexOperandMatcher<s64, "selectGlobalOffset">,
+    GIComplexPatternEquiv<GlobalOffset>;
 def gi_global_saddr :
     GIComplexOperandMatcher<s64, "selectGlobalSAddr">,
     GIComplexPatternEquiv<GlobalSAddr>;
@@ -86,7 +86,7 @@ def gi_mubuf_scratch_offen :
     GIComplexPatternEquiv<MUBUFScratchOffen>;
 
 def gi_flat_scratch_offset :
-    GIComplexOperandMatcher<s32, "selectFlatOffsetSigned">,
+    GIComplexOperandMatcher<s32, "selectScratchOffset">,
     GIComplexPatternEquiv<ScratchOffset>;
 
 def gi_flat_scratch_saddr :
@@ -112,14 +112,6 @@ def gi_mubuf_addr64 :
 def gi_mubuf_offset :
     GIComplexOperandMatcher<s64, "selectMUBUFOffset">,
     GIComplexPatternEquiv<MUBUFOffset>;
-
-def gi_mubuf_addr64_atomic :
-    GIComplexOperandMatcher<s64, "selectMUBUFAddr64Atomic">,
-    GIComplexPatternEquiv<MUBUFAddr64Atomic>;
-
-def gi_mubuf_offset_atomic :
-    GIComplexOperandMatcher<s64, "selectMUBUFOffsetAtomic">,
-    GIComplexPatternEquiv<MUBUFOffsetAtomic>;
 
 def gi_smrd_buffer_imm :
     GIComplexOperandMatcher<s64, "selectSMRDBufferImm">,
@@ -328,20 +320,14 @@ def gi_bitcast_fpimm_to_i32 : GICustomOperandRenderer<"renderBitcastImm">,
 def gi_IMMPopCount : GICustomOperandRenderer<"renderPopcntImm">,
   GISDNodeXFormEquiv<IMMPopCount>;
 
-def gi_extract_glc : GICustomOperandRenderer<"renderExtractGLC">,
-  GISDNodeXFormEquiv<extract_glc>;
-
-def gi_extract_slc : GICustomOperandRenderer<"renderExtractSLC">,
-  GISDNodeXFormEquiv<extract_slc>;
-
-def gi_extract_dlc : GICustomOperandRenderer<"renderExtractDLC">,
-  GISDNodeXFormEquiv<extract_dlc>;
+def gi_extract_cpol : GICustomOperandRenderer<"renderExtractCPol">,
+  GISDNodeXFormEquiv<extract_cpol>;
 
 def gi_extract_swz : GICustomOperandRenderer<"renderExtractSWZ">,
   GISDNodeXFormEquiv<extract_swz>;
 
-def gi_extract_sccb : GICustomOperandRenderer<"renderExtractSCCB">,
-  GISDNodeXFormEquiv<extract_sccb>;
+def gi_set_glc : GICustomOperandRenderer<"renderSetGLC">,
+  GISDNodeXFormEquiv<set_glc>;
 
 def gi_frameindex_to_targetframeindex : GICustomOperandRenderer<"renderFrameIndex">,
   GISDNodeXFormEquiv<frameindex_to_targetframeindex>;

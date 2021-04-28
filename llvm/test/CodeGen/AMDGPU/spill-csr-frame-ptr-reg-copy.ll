@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -mtriple=amdgcn-amd-amdhsa -verify-machineinstrs -stress-regalloc=7 < %s | FileCheck -check-prefix=GCN %s
 
 ; GCN-LABEL: {{^}}spill_csr_s5_copy:

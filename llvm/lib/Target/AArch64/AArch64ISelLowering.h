@@ -285,6 +285,8 @@ enum NodeType : unsigned {
   /// mode without emitting such REV instructions.
   NVCAST,
 
+  MRS, // MRS, also sets the flags via a glue.
+
   SMULL,
   UMULL,
 
@@ -934,6 +936,7 @@ private:
   SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSPLAT_VECTOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerSTEP_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerDUPQLane(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerToPredicatedOp(SDValue Op, SelectionDAG &DAG, unsigned NewOp,
                               bool OverrideNEON = false) const;
@@ -985,6 +988,8 @@ private:
   SDValue LowerFixedLengthVectorStoreToSVE(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFixedLengthVectorTruncateToSVE(SDValue Op,
                                               SelectionDAG &DAG) const;
+  SDValue LowerFixedLengthExtractVectorElt(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerFixedLengthInsertVectorElt(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue BuildSDIVPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
                         SmallVectorImpl<SDNode *> &Created) const override;

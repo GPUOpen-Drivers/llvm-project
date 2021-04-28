@@ -455,11 +455,13 @@ static Sema::TemplateDeductionResult DeduceNullPtrTemplateArgument(
     const NonTypeTemplateParmDecl *NTTP, QualType NullPtrType,
     TemplateDeductionInfo &Info,
     SmallVectorImpl<DeducedTemplateArgument> &Deduced) {
-  Expr *Value =
-      S.ImpCastExprToType(new (S.Context) CXXNullPtrLiteralExpr(
-                              S.Context.NullPtrTy, NTTP->getLocation()),
-                          NullPtrType, CK_NullToPointer)
-          .get();
+  Expr *Value = S.ImpCastExprToType(
+                     new (S.Context) CXXNullPtrLiteralExpr(S.Context.NullPtrTy,
+                                                           NTTP->getLocation()),
+                     NullPtrType,
+                     NullPtrType->isMemberPointerType() ? CK_NullToMemberPointer
+                                                        : CK_NullToPointer)
+                    .get();
   return DeduceNonTypeTemplateArgument(S, TemplateParams, NTTP,
                                        DeducedTemplateArgument(Value),
                                        Value->getType(), Info, Deduced);
@@ -3918,7 +3920,7 @@ static bool AdjustFunctionParmAndArgTypesForDeduction(
   if (isSimpleTemplateIdType(ParamType) ||
       (isa<PointerType>(ParamType) &&
        isSimpleTemplateIdType(
-                              ParamType->getAs<PointerType>()->getPointeeType())))
+           ParamType->castAs<PointerType>()->getPointeeType())))
     TDF |= TDF_DerivedClass;
 
   return false;

@@ -12,6 +12,18 @@ func @address_space(%arg0 : memref<32xf32, affine_map<(d0) -> (d0)>, 7>) {
 
 // -----
 
+// CHECK-LABEL: func @log1p(
+// CHECK-SAME: f32
+func @log1p(%arg0 : f32) {
+  // CHECK: %[[ONE:.*]] = llvm.mlir.constant(1.000000e+00 : f32) : f32
+  // CHECK: %[[ADD:.*]] = llvm.fadd %[[ONE]], %arg0 : f32
+  // CHECK: %[[LOG:.*]] = "llvm.intr.log"(%[[ADD]]) : (f32) -> f32
+  %0 = math.log1p %arg0 : f32
+  std.return
+}
+
+// -----
+
 // CHECK-LABEL: func @rsqrt(
 // CHECK-SAME: f32
 func @rsqrt(%arg0 : f32) {
@@ -236,3 +248,16 @@ func @fmaf(%arg0: f32, %arg1: vector<4xf32>) {
   %1 = fmaf %arg1, %arg1, %arg1 : vector<4xf32>
   std.return
 }
+
+// -----
+
+// CHECK-LABEL: func @index_vector(
+// CHECK-SAME: %[[ARG0:.*]]: vector<4xi64>
+func @index_vector(%arg0: vector<4xindex>) {
+  // CHECK: %[[CST:.*]] = llvm.mlir.constant(dense<[0, 1, 2, 3]> : vector<4xindex>) : vector<4xi64>
+  %0 = constant dense<[0, 1, 2, 3]> : vector<4xindex>
+  // CHECK: %[[V:.*]] = llvm.add %[[ARG0]], %[[CST]] : vector<4xi64>
+  %1 = addi %arg0, %0 : vector<4xindex>
+  std.return
+}
+

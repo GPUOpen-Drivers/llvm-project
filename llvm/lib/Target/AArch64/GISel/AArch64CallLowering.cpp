@@ -164,11 +164,17 @@ struct ReturnedArgCallReturnHandler : public CallReturnHandler {
 struct OutgoingArgHandler : public CallLowering::OutgoingValueHandler {
   OutgoingArgHandler(MachineIRBuilder &MIRBuilder, MachineRegisterInfo &MRI,
                      MachineInstrBuilder MIB, CCAssignFn *AssignFn,
-                     CCAssignFn *AssignFnVarArg, bool IsTailCall = false,
-                     int FPDiff = 0)
+                     CCAssignFn *AssignFnVarArg, bool IsVarArg,
+                     bool IsTailCall = false, int FPDiff = 0)
       : OutgoingValueHandler(MIRBuilder, MRI, AssignFn), MIB(MIB),
         AssignFnVarArg(AssignFnVarArg), IsTailCall(IsTailCall), FPDiff(FPDiff),
-        StackSize(0), SPReg(0) {}
+        StackSize(0), SPReg(0) {
+    MachineFunction &MF = MIRBuilder.getMF();
+    const auto &Subtarget = MF.getSubtarget<AArch64Subtarget>();
+    bool IsWin =
+        Subtarget.isCallingConvWin64(MF.getFunction().getCallingConv());
+    UseVarArgsCCForFixed = IsVarArg && IsWin;
+  }
 
   Register getStackAddress(uint64_t Size, int64_t Offset,
                            MachinePointerInfo &MPO,
@@ -240,7 +246,7 @@ struct OutgoingArgHandler : public CallLowering::OutgoingValueHandler {
                  ISD::ArgFlagsTy Flags,
                  CCState &State) override {
     bool Res;
-    if (Info.IsFixed)
+    if (Info.IsFixed && !UseVarArgsCCForFixed)
       Res = AssignFn(ValNo, ValVT, LocVT, LocInfo, Flags, State);
     else
       Res = AssignFnVarArg(ValNo, ValVT, LocVT, LocInfo, Flags, State);
@@ -252,6 +258,7 @@ struct OutgoingArgHandler : public CallLowering::OutgoingValueHandler {
   MachineInstrBuilder MIB;
   CCAssignFn *AssignFnVarArg;
   bool IsTailCall;
+  bool UseVarArgsCCForFixed;
 
   /// For tail calls, the byte offset of the call's argument area from the
   /// callee's. Unused elsewhere.
@@ -357,9 +364,14 @@ bool AArch64CallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
               return false;
             }
           } else {
-            // A scalar extend.
-            CurVReg =
-                MIRBuilder.buildInstr(ExtendOp, {NewLLT}, {CurVReg}).getReg(0);
+            // If the split EVT was a <1 x T> vector, and NewVT is T, then we
+            // don't have to do anything since we don't distinguish between the
+            // two.
+            if (NewLLT != MRI.getType(CurVReg)) {
+              // A scalar extend.
+              CurVReg = MIRBuilder.buildInstr(ExtendOp, {NewLLT}, {CurVReg})
+                            .getReg(0);
+            }
           }
         }
       }
@@ -371,7 +383,8 @@ bool AArch64CallLowering::lowerReturn(MachineIRBuilder &MIRBuilder,
       splitToValueTypes(CurArgInfo, SplitArgs, DL, CC);
     }
 
-    OutgoingArgHandler Handler(MIRBuilder, MRI, MIB, AssignFn, AssignFn);
+    OutgoingArgHandler Handler(MIRBuilder, MRI, MIB, AssignFn, AssignFn,
+                               F.isVarArg());
     Success =
         handleAssignments(MIRBuilder, SplitArgs, Handler, CC, F.isVarArg());
   }
@@ -428,12 +441,19 @@ static void handleMustTailForwardedRegisters(MachineIRBuilder &MIRBuilder,
   }
 }
 
-bool AArch64CallLowering::fallBackToDAGISel(const Function &F) const {
+bool AArch64CallLowering::fallBackToDAGISel(const MachineFunction &MF) const {
+  auto &F = MF.getFunction();
   if (isa<ScalableVectorType>(F.getReturnType()))
     return true;
-  return llvm::any_of(F.args(), [](const Argument &A) {
-    return isa<ScalableVectorType>(A.getType());
-  });
+  if (llvm::any_of(F.args(), [](const Argument &A) {
+        return isa<ScalableVectorType>(A.getType());
+      }))
+    return true;
+  const auto &ST = MF.getSubtarget<AArch64Subtarget>();
+  LLVM_DEBUG(dbgs() << "Falling back to SDAG because we don't support no-NEON");
+  if (!ST.hasNEON() || !ST.hasFPARMv8())
+    return true;
+  return false;
 }
 
 bool AArch64CallLowering::lowerFormalArguments(
@@ -450,7 +470,7 @@ bool AArch64CallLowering::lowerFormalArguments(
     if (DL.getTypeStoreSize(Arg.getType()).isZero())
       continue;
 
-    ArgInfo OrigArg{VRegs[i], Arg.getType()};
+    ArgInfo OrigArg{VRegs[i], Arg};
     setArgFlags(OrigArg, i + AttributeList::FirstArgIndex, DL, F);
 
     splitToValueTypes(OrigArg, SplitArgs, DL, F.getCallingConv());
@@ -867,7 +887,7 @@ bool AArch64CallLowering::lowerTailCall(
 
   // Do the actual argument marshalling.
   OutgoingArgHandler Handler(MIRBuilder, MRI, MIB, AssignFnFixed,
-                             AssignFnVarArg, true, FPDiff);
+                             AssignFnVarArg, Info.IsVarArg, true, FPDiff);
   if (!handleAssignments(MIRBuilder, OutArgs, Handler, CalleeCC, Info.IsVarArg))
     return false;
 
@@ -979,7 +999,7 @@ bool AArch64CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
 
   // Do the actual argument marshalling.
   OutgoingArgHandler Handler(MIRBuilder, MRI, MIB, AssignFnFixed,
-                             AssignFnVarArg, false);
+                             AssignFnVarArg, Info.IsVarArg, false);
   if (!handleAssignments(MIRBuilder, OutArgs, Handler, Info.CallConv,
                          Info.IsVarArg))
     return false;

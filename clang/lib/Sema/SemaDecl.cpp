@@ -2540,9 +2540,18 @@ static bool mergeAlignedAttrs(Sema &S, NamedDecl *New, Decl *Old) {
   return AnyAdded;
 }
 
+#define WANT_DECL_MERGE_LOGIC
+#include "clang/Sema/AttrParsedAttrImpl.inc"
+#undef WANT_DECL_MERGE_LOGIC
+
 static bool mergeDeclAttribute(Sema &S, NamedDecl *D,
                                const InheritableAttr *Attr,
                                Sema::AvailabilityMergeKind AMK) {
+  // Diagnose any mutual exclusions between the attribute that we want to add
+  // and attributes that already exist on the declaration.
+  if (!DiagnoseMutualExclusions(S, D, Attr))
+    return false;
+
   // This function copies an attribute Attr from a previous declaration to the
   // new declaration D if the new declaration doesn't itself have that attribute
   // yet or if that attribute allows duplicates.
@@ -2592,8 +2601,6 @@ static bool mergeDeclAttribute(Sema &S, NamedDecl *D,
     NewAttr = S.mergeOptimizeNoneAttr(D, *OA);
   else if (const auto *InternalLinkageA = dyn_cast<InternalLinkageAttr>(Attr))
     NewAttr = S.mergeInternalLinkageAttr(D, *InternalLinkageA);
-  else if (const auto *CommonA = dyn_cast<CommonAttr>(Attr))
-    NewAttr = S.mergeCommonAttr(D, *CommonA);
   else if (isa<AlignedAttr>(Attr))
     // AlignedAttrs are handled separately, because we need to handle all
     // such attributes on a declaration at the same time.
@@ -2604,10 +2611,6 @@ static bool mergeDeclAttribute(Sema &S, NamedDecl *D,
     NewAttr = nullptr;
   else if (const auto *UA = dyn_cast<UuidAttr>(Attr))
     NewAttr = S.mergeUuidAttr(D, *UA, UA->getGuid(), UA->getGuidDecl());
-  else if (const auto *SLHA = dyn_cast<SpeculativeLoadHardeningAttr>(Attr))
-    NewAttr = S.mergeSpeculativeLoadHardeningAttr(D, *SLHA);
-  else if (const auto *SLHA = dyn_cast<NoSpeculativeLoadHardeningAttr>(Attr))
-    NewAttr = S.mergeNoSpeculativeLoadHardeningAttr(D, *SLHA);
   else if (const auto *IMA = dyn_cast<WebAssemblyImportModuleAttr>(Attr))
     NewAttr = S.mergeImportModuleAttr(D, *IMA);
   else if (const auto *INA = dyn_cast<WebAssemblyImportNameAttr>(Attr))
@@ -5211,7 +5214,8 @@ Decl *Sema::BuildAnonymousStructOrUnion(Scope *S, DeclSpec &DS,
     // trivial in almost all cases, except if a union member has an in-class
     // initializer:
     //   union { int n = 0; };
-    ActOnUninitializedDecl(Anon);
+    if (!Invalid)
+      ActOnUninitializedDecl(Anon);
   }
   Anon->setImplicit();
 
@@ -6038,26 +6042,26 @@ TryToFixInvalidVariablyModifiedTypeSourceInfo(TypeSourceInfo *TInfo,
 
 /// Attempt to fold a variable-sized type to a constant-sized type, returning
 /// true if we were successful.
-static bool tryToFixVariablyModifiedVarType(Sema &S, TypeSourceInfo *&TInfo,
-                                            QualType &T, SourceLocation Loc,
-                                            unsigned FailedFoldDiagID) {
+bool Sema::tryToFixVariablyModifiedVarType(TypeSourceInfo *&TInfo,
+                                           QualType &T, SourceLocation Loc,
+                                           unsigned FailedFoldDiagID) {
   bool SizeIsNegative;
   llvm::APSInt Oversized;
   TypeSourceInfo *FixedTInfo = TryToFixInvalidVariablyModifiedTypeSourceInfo(
-      TInfo, S.Context, SizeIsNegative, Oversized);
+      TInfo, Context, SizeIsNegative, Oversized);
   if (FixedTInfo) {
-    S.Diag(Loc, diag::ext_vla_folded_to_constant);
+    Diag(Loc, diag::ext_vla_folded_to_constant);
     TInfo = FixedTInfo;
     T = FixedTInfo->getType();
     return true;
   }
 
   if (SizeIsNegative)
-    S.Diag(Loc, diag::err_typecheck_negative_array_size);
+    Diag(Loc, diag::err_typecheck_negative_array_size);
   else if (Oversized.getBoolValue())
-    S.Diag(Loc, diag::err_array_too_large) << Oversized.toString(10);
+    Diag(Loc, diag::err_array_too_large) << Oversized.toString(10);
   else if (FailedFoldDiagID)
-    S.Diag(Loc, FailedFoldDiagID);
+    Diag(Loc, FailedFoldDiagID);
   return false;
 }
 
@@ -6827,6 +6831,16 @@ static bool diagnoseOpenCLTypes(Scope *S, Sema &Se, Declarator &D,
   return true;
 }
 
+template <typename AttrTy>
+static void copyAttrFromTypedefToDecl(Sema &S, Decl *D, const TypedefType *TT) {
+  const TypedefNameDecl *TND = TT->getDecl();
+  if (const auto *Attribute = TND->getAttr<AttrTy>()) {
+    AttrTy *Clone = Attribute->clone(S.Context);
+    Clone->setInherited(true);
+    D->addAttr(Clone);
+  }
+}
+
 NamedDecl *Sema::ActOnVariableDeclarator(
     Scope *S, Declarator &D, DeclContext *DC, TypeSourceInfo *TInfo,
     LookupResult &Previous, MultiTemplateParamsArg TemplateParamLists,
@@ -6896,10 +6910,10 @@ NamedDecl *Sema::ActOnVariableDeclarator(
     }
   }
 
-  // If this variable has a variable-modified type and an initializer, try to
+  // If this variable has a VLA type and an initializer, try to
   // fold to a constant-sized type. This is otherwise invalid.
-  if (D.hasInitializer() && R->isVariablyModifiedType())
-    tryToFixVariablyModifiedVarType(*this, TInfo, R, D.getIdentifierLoc(),
+  if (D.hasInitializer() && R->isVariableArrayType())
+    tryToFixVariablyModifiedVarType(TInfo, R, D.getIdentifierLoc(),
                                     /*DiagID=*/0);
 
   bool IsMemberSpecialization = false;
@@ -7248,6 +7262,14 @@ NamedDecl *Sema::ActOnVariableDeclarator(
 
   // Handle attributes prior to checking for duplicates in MergeVarDecl
   ProcessDeclAttributes(S, NewVD, D);
+
+  // FIXME: This is probably the wrong location to be doing this and we should
+  // probably be doing this for more attributes (especially for function
+  // pointer attributes such as format, warn_unused_result, etc.). Ideally
+  // the code to copy attributes would be generated by TableGen.
+  if (R->isFunctionPointerType())
+    if (const auto *TT = R->getAs<TypedefType>())
+      copyAttrFromTypedefToDecl<AllocSizeAttr>(*this, NewVD, TT);
 
   if (getLangOpts().CUDA || getLangOpts().OpenMPIsDevice ||
       getLangOpts().SYCLIsDevice) {
@@ -9671,6 +9693,10 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
             (D.getCXXScopeSpec().getScopeRep()->isDependent() ||
              (!Previous.empty() && CurContext->isDependentContext()))) {
           // ignore these
+        } else if (NewFD->isCPUDispatchMultiVersion() ||
+                   NewFD->isCPUSpecificMultiVersion()) {
+          // ignore this, we allow the redeclaration behavior here to create new
+          // versions of the function.
         } else {
           // The user tried to provide an out-of-line definition for a
           // function that is a member of a class or namespace, but there
@@ -9807,7 +9833,7 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     if (II && II->isStr(getCudaConfigureFuncName()) &&
         !NewFD->isInvalidDecl() &&
         NewFD->getDeclContext()->getRedeclContext()->isTranslationUnit()) {
-      if (!R->getAs<FunctionType>()->getReturnType()->isScalarType())
+      if (!R->castAs<FunctionType>()->getReturnType()->isScalarType())
         Diag(NewFD->getLocation(), diag::err_config_scalar_return)
             << getCudaConfigureFuncName();
       Context.setcudaConfigureCallDecl(NewFD);
@@ -10944,24 +10970,6 @@ bool Sema::CheckFunctionDeclaration(Scope *S, FunctionDecl *NewFD,
     if (!CurContext->isRecord())
       CheckCXXDefaultArguments(NewFD);
 
-    // If this function declares a builtin function, check the type of this
-    // declaration against the expected type for the builtin.
-    if (unsigned BuiltinID = NewFD->getBuiltinID()) {
-      ASTContext::GetBuiltinTypeError Error;
-      LookupNecessaryTypesForBuiltin(S, BuiltinID);
-      QualType T = Context.GetBuiltinType(BuiltinID, Error);
-      // If the type of the builtin differs only in its exception
-      // specification, that's OK.
-      // FIXME: If the types do differ in this way, it would be better to
-      // retain the 'noexcept' form of the type.
-      if (!T.isNull() &&
-          !Context.hasSameFunctionTypeIgnoringExceptionSpec(T,
-                                                            NewFD->getType()))
-        // The type of this function differs from the type of the builtin,
-        // so forget about the builtin entirely.
-        Context.BuiltinInfo.forgetBuiltin(BuiltinID, Context.Idents);
-    }
-
     // If this function is declared as being extern "C", then check to see if
     // the function returns a UDT (class, struct, or union type) that is not C
     // compatible, and if it does, warn the user.
@@ -11173,6 +11181,25 @@ void Sema::CheckMain(FunctionDecl* FD, const DeclSpec& DS) {
   }
 }
 
+static bool isDefaultStdCall(FunctionDecl *FD, Sema &S) {
+
+  // Default calling convention for main and wmain is __cdecl
+  if (FD->getName() == "main" || FD->getName() == "wmain")
+    return false;
+
+  // Default calling convention for MinGW is __cdecl
+  const llvm::Triple &T = S.Context.getTargetInfo().getTriple();
+  if (T.isWindowsGNUEnvironment())
+    return false;
+
+  // Default calling convention for WinMain, wWinMain and DllMain
+  // is __stdcall on 32 bit Windows
+  if (T.isOSWindows() && T.getArch() == llvm::Triple::x86)
+    return true;
+
+  return false;
+}
+
 void Sema::CheckMSVCRTEntryPoint(FunctionDecl *FD) {
   QualType T = FD->getType();
   assert(T->isFunctionType() && "function decl is not of function type");
@@ -11186,6 +11213,21 @@ void Sema::CheckMSVCRTEntryPoint(FunctionDecl *FD) {
     // DllMain is exempt because a return value of zero means it failed.
     if (FD->getName() != "DllMain")
       FD->setHasImplicitReturnZero(true);
+
+  // Explicity specified calling conventions are applied to MSVC entry points
+  if (!hasExplicitCallingConv(T)) {
+    if (isDefaultStdCall(FD, *this)) {
+      if (FT->getCallConv() != CC_X86StdCall) {
+        FT = Context.adjustFunctionType(
+            FT, FT->getExtInfo().withCallingConv(CC_X86StdCall));
+        FD->setType(QualType(FT, 0));
+      }
+    } else if (FT->getCallConv() != CC_C) {
+      FT = Context.adjustFunctionType(FT,
+                                      FT->getExtInfo().withCallingConv(CC_C));
+      FD->setType(QualType(FT, 0));
+    }
+  }
 
   if (!FD->isInvalidDecl() && FD->getDescribedFunctionTemplate()) {
     Diag(FD->getLocation(), diag::err_mainlike_template_decl) << FD;
@@ -16738,7 +16780,7 @@ FieldDecl *Sema::CheckFieldDecl(DeclarationName Name, QualType T,
   // than a variably modified type.
   if (!InvalidDecl && T->isVariablyModifiedType()) {
     if (!tryToFixVariablyModifiedVarType(
-            *this, TInfo, T, Loc, diag::err_typecheck_field_variable_size))
+            TInfo, T, Loc, diag::err_typecheck_field_variable_size))
       InvalidDecl = true;
   }
 
@@ -16966,7 +17008,7 @@ Decl *Sema::ActOnIvar(Scope *S,
   // than a variably modified type.
   else if (T->isVariablyModifiedType()) {
     if (!tryToFixVariablyModifiedVarType(
-            *this, TInfo, T, Loc, diag::err_typecheck_ivar_variable_size))
+            TInfo, T, Loc, diag::err_typecheck_ivar_variable_size))
       D.setInvalidType();
   }
 

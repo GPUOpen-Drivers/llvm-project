@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CGCUDARuntime.h"
+#include "CGCXXABI.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
 #include "clang/AST/Decl.h"
@@ -260,10 +261,15 @@ std::string CGNVCUDARuntime::getDeviceSideName(const NamedDecl *ND) {
   else
     GD = GlobalDecl(ND);
   std::string DeviceSideName;
-  if (DeviceMC->shouldMangleDeclName(ND)) {
+  MangleContext *MC;
+  if (CGM.getLangOpts().CUDAIsDevice)
+    MC = &CGM.getCXXABI().getMangleContext();
+  else
+    MC = DeviceMC.get();
+  if (MC->shouldMangleDeclName(ND)) {
     SmallString<256> Buffer;
     llvm::raw_svector_ostream Out(Buffer);
-    DeviceMC->mangleName(GD, Out);
+    MC->mangleName(GD, Out);
     DeviceSideName = std::string(Out.str());
   } else
     DeviceSideName = std::string(ND->getIdentifier()->getName());
@@ -1021,9 +1027,8 @@ void CGNVCUDARuntime::handleVarRegistration(const VarDecl *D,
              D->getType()->isCUDADeviceBuiltinTextureType()) {
     // Builtin surfaces and textures and their template arguments are
     // also registered with CUDA runtime.
-    const ClassTemplateSpecializationDecl *TD =
-        cast<ClassTemplateSpecializationDecl>(
-            D->getType()->getAs<RecordType>()->getDecl());
+    const auto *TD = cast<ClassTemplateSpecializationDecl>(
+        D->getType()->castAs<RecordType>()->getDecl());
     const TemplateArgumentList &Args = TD->getTemplateArgs();
     if (TD->hasAttr<CUDADeviceBuiltinSurfaceTypeAttr>()) {
       assert(Args.size() == 2 &&

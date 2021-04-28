@@ -182,7 +182,17 @@ Operation::Operation(Location location, OperationName name, unsigned numResults,
 // allocated via malloc.
 Operation::~Operation() {
   assert(block == nullptr && "operation destroyed but still in a block");
-
+#ifndef NDEBUG
+  if (!use_empty()) {
+    {
+      InFlightDiagnostic diag =
+          emitOpError("operation destroyed but still has uses");
+      for (Operation *user : getUsers())
+        diag.attachNote(user->getLoc()) << "- use: " << *user << "\n";
+    }
+    llvm::report_fatal_error("operation destroyed but still has uses");
+  }
+#endif
   // Explicitly run the destructors for the operands.
   if (hasOperandStorage)
     getOperandStorage().~OperandStorage();
@@ -1001,8 +1011,10 @@ static LogicalResult verifyValueSizeAttr(Operation *op, StringRef attrName,
     return op->emitOpError("requires 1D vector attribute '") << attrName << "'";
 
   auto sizeAttrType = sizeAttr.getType().dyn_cast<VectorType>();
-  if (!sizeAttrType || sizeAttrType.getRank() != 1)
-    return op->emitOpError("requires 1D vector attribute '") << attrName << "'";
+  if (!sizeAttrType || sizeAttrType.getRank() != 1 ||
+      !sizeAttrType.getElementType().isInteger(32))
+    return op->emitOpError("requires 1D vector of i32 attribute '")
+           << attrName << "'";
 
   if (llvm::any_of(sizeAttr.getIntValues(), [](const APInt &element) {
         return !element.isNonNegative();

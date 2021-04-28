@@ -17,8 +17,8 @@ using namespace llvm;
 using namespace lld;
 using namespace lld::macho;
 
-Symbol *SymbolTable::find(StringRef name) {
-  auto it = symMap.find(CachedHashStringRef(name));
+Symbol *SymbolTable::find(CachedHashStringRef cachedName) {
+  auto it = symMap.find(cachedName);
   if (it == symMap.end())
     return nullptr;
   return symVector[it->second];
@@ -38,8 +38,9 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef name) {
 }
 
 Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
-                                 InputSection *isec, uint32_t value,
-                                 bool isWeakDef, bool isPrivateExtern) {
+                                 InputSection *isec, uint64_t value,
+                                 uint64_t size, bool isWeakDef,
+                                 bool isPrivateExtern) {
   Symbol *s;
   bool wasInserted;
   bool overridesWeakDef = false;
@@ -54,11 +55,10 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
           defined->privateExtern &= isPrivateExtern;
         return defined;
       }
-      if (!defined->isWeakDef()) {
+      if (!defined->isWeakDef())
         error("duplicate symbol: " + name + "\n>>> defined in " +
               toString(defined->getFile()) + "\n>>> defined in " +
               toString(file));
-      }
     } else if (auto *dysym = dyn_cast<DylibSymbol>(s)) {
       overridesWeakDef = !isWeakDef && dysym->isWeakDef();
     }
@@ -67,7 +67,7 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
   }
 
   Defined *defined =
-      replaceSymbol<Defined>(s, name, file, isec, value, isWeakDef,
+      replaceSymbol<Defined>(s, name, file, isec, value, size, isWeakDef,
                              /*isExternal=*/true, isPrivateExtern);
   defined->overridesWeakDef = overridesWeakDef;
   return defined;
@@ -159,11 +159,11 @@ Symbol *SymbolTable::addLazy(StringRef name, ArchiveFile *file,
 }
 
 Defined *SymbolTable::addSynthetic(StringRef name, InputSection *isec,
-                                   uint32_t value, bool isPrivateExtern,
-                                   bool isLinkerInternal) {
-  Defined *s = addDefined(name, nullptr, isec, value, /*isWeakDef=*/false,
-                          isPrivateExtern);
-  s->linkerInternal = isLinkerInternal;
+                                   uint64_t value, bool isPrivateExtern,
+                                   bool includeInSymtab) {
+  Defined *s = addDefined(name, nullptr, isec, value, /*size=*/0,
+                          /*isWeakDef=*/false, isPrivateExtern);
+  s->includeInSymtab = includeInSymtab;
   return s;
 }
 

@@ -113,14 +113,16 @@ CompilerInvocationBase::CompilerInvocationBase()
     : LangOpts(new LangOptions()), TargetOpts(new TargetOptions()),
       DiagnosticOpts(new DiagnosticOptions()),
       HeaderSearchOpts(new HeaderSearchOptions()),
-      PreprocessorOpts(new PreprocessorOptions()) {}
+      PreprocessorOpts(new PreprocessorOptions()),
+      AnalyzerOpts(new AnalyzerOptions()) {}
 
 CompilerInvocationBase::CompilerInvocationBase(const CompilerInvocationBase &X)
     : LangOpts(new LangOptions(*X.getLangOpts())),
       TargetOpts(new TargetOptions(X.getTargetOpts())),
       DiagnosticOpts(new DiagnosticOptions(X.getDiagnosticOpts())),
       HeaderSearchOpts(new HeaderSearchOptions(X.getHeaderSearchOpts())),
-      PreprocessorOpts(new PreprocessorOptions(X.getPreprocessorOpts())) {}
+      PreprocessorOpts(new PreprocessorOptions(X.getPreprocessorOpts())),
+      AnalyzerOpts(new AnalyzerOptions(*X.getAnalyzerOpts())) {}
 
 CompilerInvocationBase::~CompilerInvocationBase() = default;
 
@@ -211,6 +213,7 @@ static void denormalizeStringImpl(SmallVectorImpl<const char *> &Args,
   switch (OptClass) {
   case Option::SeparateClass:
   case Option::JoinedOrSeparateClass:
+  case Option::JoinedAndSeparateClass:
     Args.push_back(Spelling);
     Args.push_back(SA(Value));
     break;
@@ -466,6 +469,11 @@ static bool FixupInvocation(CompilerInvocation &Invocation,
     LangOpts.NewAlignOverride = 0;
   }
 
+  // Prevent the user from specifying both -fsycl-is-device and -fsycl-is-host.
+  if (LangOpts.SYCLIsDevice && LangOpts.SYCLIsHost)
+    Diags.Report(diag::err_drv_argument_not_allowed_with) << "-fsycl-is-device"
+                                                          << "-fsycl-is-host";
+
   if (Args.hasArg(OPT_fgnu89_inline) && LangOpts.CPlusPlus)
     Diags.Report(diag::err_drv_argument_not_allowed_with)
         << "-fgnu89-inline" << GetInputKindName(IK);
@@ -515,7 +523,9 @@ static bool FixupInvocation(CompilerInvocation &Invocation,
 static unsigned getOptimizationLevel(ArgList &Args, InputKind IK,
                                      DiagnosticsEngine &Diags) {
   unsigned DefaultOpt = llvm::CodeGenOpt::None;
-  if (IK.getLanguage() == Language::OpenCL && !Args.hasArg(OPT_cl_opt_disable))
+  if ((IK.getLanguage() == Language::OpenCL ||
+       IK.getLanguage() == Language::OpenCLCXX) &&
+      !Args.hasArg(OPT_cl_opt_disable))
     DefaultOpt = llvm::CodeGenOpt::Default;
 
   if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
@@ -1641,6 +1651,12 @@ bool CompilerInvocation::ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args,
       llvm::is_contained(DebugEntryValueArchs, T.getArch()))
     Opts.EmitCallSiteInfo = true;
 
+  if (!Opts.EnableDIPreservationVerify && Opts.DIBugsReportFilePath.size()) {
+    Diags.Report(diag::warn_ignoring_verify_debuginfo_preserve_export)
+        << Opts.DIBugsReportFilePath;
+    Opts.DIBugsReportFilePath = "";
+  }
+
   Opts.NewStructPathTBAA = !Args.hasArg(OPT_no_struct_path_tbaa) &&
                            Args.hasArg(OPT_new_struct_path_tbaa);
   Opts.OptimizeSize = getOptimizationLevelSize(Args);
@@ -2464,9 +2480,13 @@ static void GenerateFrontendArgs(const FrontendOptions &Opts,
 
   GenerateProgramAction();
 
-  for (const auto &PluginArgs : Opts.PluginArgs)
+  for (const auto &PluginArgs : Opts.PluginArgs) {
+    Option Opt = getDriverOptTable().getOption(OPT_plugin_arg);
+    const char *Spelling =
+        SA(Opt.getPrefix() + Opt.getName() + PluginArgs.first);
     for (const auto &PluginArg : PluginArgs.second)
-      GenerateArg(Args, OPT_plugin_arg, PluginArgs.first + PluginArg, SA);
+      denormalizeString(Args, Spelling, SA, Opt.getKind(), 0, PluginArg);
+  }
 
   for (const auto &Ext : Opts.ModuleFileExtensions)
     if (auto *TestExt = dyn_cast_or_null<TestModuleFileExtension>(Ext.get()))
@@ -2504,6 +2524,9 @@ static void GenerateFrontendArgs(const FrontendOptions &Opts,
       break;
     case Language::OpenCL:
       Lang = "cl";
+      break;
+    case Language::OpenCLCXX:
+      Lang = "clcpp";
       break;
     case Language::CUDA:
       Lang = "cuda";
@@ -2693,6 +2716,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     DashX = llvm::StringSwitch<InputKind>(XValue)
                 .Case("c", Language::C)
                 .Case("cl", Language::OpenCL)
+                .Case("clcpp", Language::OpenCLCXX)
                 .Case("cuda", Language::CUDA)
                 .Case("hip", Language::HIP)
                 .Case("c++", Language::CXX)
@@ -3058,6 +3082,9 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
     case Language::OpenCL:
       LangStd = LangStandard::lang_opencl10;
       break;
+    case Language::OpenCLCXX:
+      LangStd = LangStandard::lang_openclcpp;
+      break;
     case Language::CUDA:
       LangStd = LangStandard::lang_cuda;
       break;
@@ -3193,7 +3220,11 @@ static bool IsInputCompatibleWithStandard(InputKind IK,
     return S.getLanguage() == Language::C;
 
   case Language::OpenCL:
-    return S.getLanguage() == Language::OpenCL;
+    return S.getLanguage() == Language::OpenCL ||
+           S.getLanguage() == Language::OpenCLCXX;
+
+  case Language::OpenCLCXX:
+    return S.getLanguage() == Language::OpenCLCXX;
 
   case Language::CXX:
   case Language::ObjCXX:
@@ -3230,6 +3261,8 @@ static const StringRef GetInputKindName(InputKind IK) {
     return "Objective-C++";
   case Language::OpenCL:
     return "OpenCL";
+  case Language::OpenCLCXX:
+    return "C++ for OpenCL";
   case Language::CUDA:
     return "CUDA";
   case Language::RenderScript:

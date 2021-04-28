@@ -1,5 +1,8 @@
 # Check the not command
-#
+
+# FIXME: this test depends on order of tests
+# RUN: rm -f %{inputs}/shtest-not/.lit_test_times.txt
+
 # RUN: not %{lit} -j 1 -a -v %{inputs}/shtest-not \
 # RUN: | FileCheck -match-full-lines %s
 #
@@ -7,7 +10,27 @@
 
 # Make sure not and env commands are included in printed commands.
 
-# CHECK: -- Testing: 13 tests{{.*}}
+# CHECK: -- Testing: 16 tests{{.*}}
+
+# CHECK: FAIL: shtest-not :: exclamation-args-nested-none.txt {{.*}}
+# CHECK: $ "!" "!" "!"
+# CHECK: Error: '!' requires a subcommand
+# CHECK: error: command failed with exit status: {{.*}}
+
+# CHECK: FAIL: shtest-not :: exclamation-args-none.txt {{.*}}
+# CHECK: $ "!"
+# CHECK: Error: '!' requires a subcommand
+# CHECK: error: command failed with exit status: {{.*}}
+
+# CHECK: FAIL: shtest-not :: exclamation-calls-external.txt {{.*}}
+
+# CHECK: $ "!" "{{[^"]*}}" "fail.py"
+# CHECK: $ "!" "!" "{{[^"]*}}" "pass.py"
+# CHECK: $ "!" "!" "!" "{{[^"]*}}" "fail.py"
+# CHECK: $ "!" "!" "!" "!" "{{[^"]*}}" "pass.py"
+
+# CHECK: $ "!" "{{[^"]*}}" "pass.py"
+# CHECK: error: command failed with exit status: {{.*}}
 
 # CHECK: FAIL: shtest-not :: not-args-last-is-crash.txt {{.*}}
 # CHECK: $ "not" "--crash"
@@ -111,5 +134,5 @@
 # CHECK: error: command failed with exit status: {{.*}}
 
 # CHECK: Passed:  1
-# CHECK: Failed: 12
+# CHECK: Failed: 15
 # CHECK-NOT: {{.}}

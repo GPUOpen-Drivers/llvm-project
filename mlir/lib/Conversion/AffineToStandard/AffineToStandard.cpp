@@ -368,17 +368,19 @@ public:
 };
 
 /// Returns the identity value associated with an AtomicRMWKind op.
-static Value getIdentityValue(AtomicRMWKind op, OpBuilder &builder,
-                              Location loc) {
+static Value getIdentityValue(AtomicRMWKind op, Type resultType,
+                              OpBuilder &builder, Location loc) {
   switch (op) {
   case AtomicRMWKind::addf:
-    return builder.create<ConstantOp>(loc, builder.getF32FloatAttr(0));
+    return builder.create<ConstantOp>(loc, builder.getFloatAttr(resultType, 0));
   case AtomicRMWKind::addi:
-    return builder.create<ConstantOp>(loc, builder.getI32IntegerAttr(0));
+    return builder.create<ConstantOp>(loc,
+                                      builder.getIntegerAttr(resultType, 0));
   case AtomicRMWKind::mulf:
-    return builder.create<ConstantOp>(loc, builder.getF32FloatAttr(1));
+    return builder.create<ConstantOp>(loc, builder.getFloatAttr(resultType, 1));
   case AtomicRMWKind::muli:
-    return builder.create<ConstantOp>(loc, builder.getI32IntegerAttr(1));
+    return builder.create<ConstantOp>(loc,
+                                      builder.getIntegerAttr(resultType, 1));
   // TODO: Add remaining reduction operations.
   default:
     (void)emitOptionalError(loc, "Reduction operation type not supported");
@@ -453,15 +455,18 @@ public:
     // scf.parallel handles the reduction operation differently unlike
     // affine.parallel.
     ArrayRef<Attribute> reductions = op.reductions().getValue();
-    for (Attribute reduction : reductions) {
+    for (auto pair : llvm::zip(reductions, op.getResultTypes())) {
       // For each of the reduction operations get the identity values for
       // initialization of the result values.
+      Attribute reduction = std::get<0>(pair);
+      Type resultType = std::get<1>(pair);
       Optional<AtomicRMWKind> reductionOp = symbolizeAtomicRMWKind(
           static_cast<uint64_t>(reduction.cast<IntegerAttr>().getInt()));
       assert(reductionOp.hasValue() &&
              "Reduction operation cannot be of None Type");
       AtomicRMWKind reductionOpValue = reductionOp.getValue();
-      identityVals.push_back(getIdentityValue(reductionOpValue, rewriter, loc));
+      identityVals.push_back(
+          getIdentityValue(reductionOpValue, resultType, rewriter, loc));
     }
     parOp = rewriter.create<scf::ParallelOp>(
         loc, lowerBoundTuple, upperBoundTuple, steps, identityVals,
@@ -532,7 +537,8 @@ public:
                 : rewriter.create<ConstantIntOp>(loc, /*value=*/1, /*width=*/1);
 
     bool hasElseRegion = !op.elseRegion().empty();
-    auto ifOp = rewriter.create<scf::IfOp>(loc, cond, hasElseRegion);
+    auto ifOp = rewriter.create<scf::IfOp>(loc, op.getResultTypes(), cond,
+                                           hasElseRegion);
     rewriter.inlineRegionBefore(op.thenRegion(), &ifOp.thenRegion().back());
     rewriter.eraseBlock(&ifOp.thenRegion().back());
     if (hasElseRegion) {
@@ -540,8 +546,8 @@ public:
       rewriter.eraseBlock(&ifOp.elseRegion().back());
     }
 
-    // Ok, we're done!
-    rewriter.eraseOp(op);
+    // Replace the Affine IfOp finally.
+    rewriter.replaceOp(op, ifOp.results());
     return success();
   }
 };
@@ -745,10 +751,9 @@ public:
 
 } // end namespace
 
-void mlir::populateAffineToStdConversionPatterns(
-    OwningRewritePatternList &patterns, MLIRContext *ctx) {
+void mlir::populateAffineToStdConversionPatterns(RewritePatternSet &patterns) {
   // clang-format off
-  patterns.insert<
+  patterns.add<
       AffineApplyLowering,
       AffineDmaStartLowering,
       AffineDmaWaitLowering,
@@ -760,25 +765,25 @@ void mlir::populateAffineToStdConversionPatterns(
       AffineStoreLowering,
       AffineForLowering,
       AffineIfLowering,
-      AffineYieldOpLowering>(ctx);
+      AffineYieldOpLowering>(patterns.getContext());
   // clang-format on
 }
 
 void mlir::populateAffineToVectorConversionPatterns(
-    OwningRewritePatternList &patterns, MLIRContext *ctx) {
+    RewritePatternSet &patterns) {
   // clang-format off
-  patterns.insert<
+  patterns.add<
       AffineVectorLoadLowering,
-      AffineVectorStoreLowering>(ctx);
+      AffineVectorStoreLowering>(patterns.getContext());
   // clang-format on
 }
 
 namespace {
 class LowerAffinePass : public ConvertAffineToStandardBase<LowerAffinePass> {
   void runOnOperation() override {
-    OwningRewritePatternList patterns;
-    populateAffineToStdConversionPatterns(patterns, &getContext());
-    populateAffineToVectorConversionPatterns(patterns, &getContext());
+    RewritePatternSet patterns(&getContext());
+    populateAffineToStdConversionPatterns(patterns);
+    populateAffineToVectorConversionPatterns(patterns);
     ConversionTarget target(getContext());
     target.addLegalDialect<memref::MemRefDialect, scf::SCFDialect,
                            StandardOpsDialect, VectorDialect>();

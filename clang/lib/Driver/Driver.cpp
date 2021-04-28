@@ -135,14 +135,13 @@ Driver::Driver(StringRef ClangExecutable, StringRef TargetTriple,
     : Diags(Diags), VFS(std::move(VFS)), Mode(GCCMode),
       SaveTemps(SaveTempsNone), BitcodeEmbed(EmbedNone), LTOMode(LTOK_None),
       ClangExecutable(ClangExecutable), SysRoot(DEFAULT_SYSROOT),
-      DriverTitle(Title), CCPrintStatReportFilename(nullptr),
-      CCPrintOptionsFilename(nullptr), CCPrintHeadersFilename(nullptr),
-      CCLogDiagnosticsFilename(nullptr), CCCPrintBindings(false),
-      CCPrintOptions(false), CCPrintHeaders(false), CCLogDiagnostics(false),
-      CCGenDiagnostics(false), CCPrintProcessStats(false),
-      TargetTriple(TargetTriple), CCCGenericGCCName(""), Saver(Alloc),
-      CheckInputsExist(true), GenReproducer(false),
-      SuppressMissingInputWarning(false) {
+      DriverTitle(Title), CCPrintStatReportFilename(), CCPrintOptionsFilename(),
+      CCPrintHeadersFilename(), CCLogDiagnosticsFilename(),
+      CCCPrintBindings(false), CCPrintOptions(false), CCPrintHeaders(false),
+      CCLogDiagnostics(false), CCGenDiagnostics(false),
+      CCPrintProcessStats(false), TargetTriple(TargetTriple),
+      CCCGenericGCCName(""), Saver(Alloc), CheckInputsExist(true),
+      GenReproducer(false), SuppressMissingInputWarning(false) {
   // Provide a sane fallback if no VFS is specified.
   if (!this->VFS)
     this->VFS = llvm::vfs::getRealFileSystem();
@@ -1824,6 +1823,15 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
     return false;
   }
 
+  if (C.getArgs().hasArg(options::OPT_print_runtime_dir)) {
+    if (auto RuntimePath = TC.getRuntimePath()) {
+      llvm::outs() << *RuntimePath << '\n';
+      return false;
+    }
+    llvm::outs() << TC.getCompilerRTPath() << '\n';
+    return false;
+  }
+
   // FIXME: The following handlers should use a callback mechanism, we don't
   // know what the client would like to do.
   if (Arg *A = C.getArgs().getLastArg(options::OPT_print_file_name_EQ)) {
@@ -3086,8 +3094,16 @@ class OffloadingActionBuilder final {
       }
 
       // By default, we produce an action for each device arch.
-      for (Action *&A : OpenMPDeviceActions)
+      for (unsigned I = 0; I < ToolChains.size(); ++I) {
+        Action *&A = OpenMPDeviceActions[I];
+        // AMDGPU does not support linking of object files, so we skip
+        // assemble and backend actions to produce LLVM IR.
+        if (ToolChains[I]->getTriple().isAMDGCN() &&
+            (CurPhase == phases::Assemble || CurPhase == phases::Backend))
+          continue;
+
         A = C.getDriver().ConstructPhaseAction(C, Args, CurPhase, A);
+      }
 
       return ABRT_Success;
     }
@@ -4040,7 +4056,7 @@ void Driver::BuildJobs(Compilation &C) const {
       else
         LinkingOutput = getDefaultImageName();
 
-      if (!CCPrintStatReportFilename) {
+      if (CCPrintStatReportFilename.empty()) {
         using namespace llvm;
         // Human readable output.
         outs() << sys::path::filename(Cmd.getExecutable()) << ": "
@@ -4063,8 +4079,9 @@ void Driver::BuildJobs(Compilation &C) const {
             << '\n';
         Out.flush();
         std::error_code EC;
-        llvm::raw_fd_ostream OS(CCPrintStatReportFilename, EC,
-                                llvm::sys::fs::OF_Append);
+        llvm::raw_fd_ostream OS(CCPrintStatReportFilename.c_str(), EC,
+                                llvm::sys::fs::OF_Append |
+                                    llvm::sys::fs::OF_Text);
         if (EC)
           return;
         auto L = OS.lock();
@@ -5053,11 +5070,6 @@ void Driver::generatePrefixedToolNames(
   // FIXME: Needs a better variable than TargetTriple
   Names.emplace_back((TargetTriple + "-" + Tool).str());
   Names.emplace_back(Tool);
-
-  // Allow the discovery of tools prefixed with LLVM's default target triple.
-  std::string DefaultTargetTriple = llvm::sys::getDefaultTargetTriple();
-  if (DefaultTargetTriple != TargetTriple)
-    Names.emplace_back((DefaultTargetTriple + "-" + Tool).str());
 }
 
 static bool ScanDirForExecutable(SmallString<128> &Dir, StringRef Name) {

@@ -1,3 +1,5 @@
+# Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+# Notified per clause 4(b) of the license.
 # RUN: llc -mtriple=amdgcn-amd-amdhsa -verify-machineinstrs -run-pass=si-fold-operands  %s -o - | FileCheck -check-prefix=GCN %s
 
 # We were storing fold candidate uses in an unsigned char, which this exceeds.

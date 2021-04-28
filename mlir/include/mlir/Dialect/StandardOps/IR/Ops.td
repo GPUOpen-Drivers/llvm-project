@@ -182,24 +182,6 @@ class FloatTernaryOp<string mnemonic, list<OpTrait> traits = []> :
                   [DeclareOpInterfaceMethods<VectorUnrollOpInterface>])>,
     Arguments<(ins FloatLike:$a, FloatLike:$b, FloatLike:$c)>;
 
-// Base class for ops with static/dynamic offset, sizes and strides
-// attributes/arguments.
-class BaseOpWithOffsetSizesAndStrides<string mnemonic, list<OpTrait> traits = []> :
-    Std_Op<mnemonic,
-           !listconcat(traits, [NoSideEffect, AttrSizedOperandSegments])> {
-  code extraBaseClassDeclaration = [{
-    /// Returns the dynamic sizes for this subview operation if specified.
-    operand_range getDynamicSizes() { return sizes(); }
-
-    /// Return the list of Range (i.e. offset, size, stride). Each
-    /// Range entry contains either the dynamic value or a ConstantIndexOp
-    /// constructed with `b` at location `loc`.
-    SmallVector<Range, 8> getOrCreateRanges(OpBuilder &b, Location loc) {
-      return mlir::getOrCreateRanges(*this, b, loc);
-    }
-  }];
-}
-
 //===----------------------------------------------------------------------===//
 // AbsFOp
 //===----------------------------------------------------------------------===//
@@ -357,7 +339,7 @@ def AssertOp : Std_Op<"assert"> {
   // AssertOp is fully verified by its traits.
   let verifier = ?;
 
-  let hasCanonicalizer = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -518,7 +500,7 @@ def BranchOp : Std_Op<"br",
     void eraseOperand(unsigned index);
   }];
 
-  let hasCanonicalizer = 1;
+  let hasCanonicalizeMethod = 1;
   let assemblyFormat = [{
     $dest (`(` $destOperands^ `:` type($destOperands) `)`)? attr-dict
   }];
@@ -647,7 +629,7 @@ def CallIndirectOp : Std_Op<"call_indirect", [
   }];
 
   let verifier = ?;
-  let hasCanonicalizer = 1;
+  let hasCanonicalizeMethod = 1;
 
   let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` type($callee)";
 }
@@ -1756,8 +1738,8 @@ def SplatOp : Std_Op<"splat", [NoSideEffect,
   let summary = "splat or broadcast operation";
   let description = [{
     Broadcast the operand to all elements of the result vector or tensor. The
-    operand has to be of either integer or float type. When the result is a
-    tensor, it has to be statically shaped.
+    operand has to be of integer/index/float type. When the result is a tensor,
+    it has to be statically shaped.
 
     Example:
 
@@ -1779,8 +1761,8 @@ def SplatOp : Std_Op<"splat", [NoSideEffect,
     ```
   }];
 
-  let arguments = (ins AnyTypeOf<[AnySignlessInteger, AnyFloat],
-                                 "integer or float type">:$input);
+  let arguments = (ins AnyTypeOf<[AnySignlessInteger, Index, AnyFloat],
+                                 "integer/index/float type">:$input);
   let results = (outs AnyTypeOf<[AnyVector, AnyStaticShapeTensor]>:$aggregate);
 
   let builders = [
@@ -1815,7 +1797,8 @@ def SubIOp : IntBinaryOp<"subi"> {
 //===----------------------------------------------------------------------===//
 
 def SubTensorOp : BaseOpWithOffsetSizesAndStrides<
-    "subtensor", [OffsetSizeAndStrideOpInterface]> {
+    StandardOps_Dialect, "subtensor", [NoSideEffect, AttrSizedOperandSegments,
+                                       OffsetSizeAndStrideOpInterface]> {
   let summary = "subtensor operation";
   let description = [{
     The "subtensor" operation extract a tensor from another tensor as
@@ -1951,8 +1934,8 @@ def SubTensorOp : BaseOpWithOffsetSizesAndStrides<
 //===----------------------------------------------------------------------===//
 
 def SubTensorInsertOp : BaseOpWithOffsetSizesAndStrides<
-    "subtensor_insert",
-    [OffsetSizeAndStrideOpInterface,
+    StandardOps_Dialect, "subtensor_insert",
+    [NoSideEffect, AttrSizedOperandSegments, OffsetSizeAndStrideOpInterface,
      TypesMatchWith<"expected result type to match dest type",
                     "dest", "result", "$_self">]> {
   let summary = "subtensor_insert operation";
@@ -2047,6 +2030,89 @@ def SubTensorInsertOp : BaseOpWithOffsetSizesAndStrides<
   let hasFolder = 1;
 }
 
+
+//===----------------------------------------------------------------------===//
+// SwitchOp
+//===----------------------------------------------------------------------===//
+
+def SwitchOp : Std_Op<"switch",
+    [AttrSizedOperandSegments,
+     DeclareOpInterfaceMethods<BranchOpInterface, ["getSuccessorForOperands"]>,
+     NoSideEffect, Terminator]> {
+  let summary = "switch operation";
+  let description = [{
+    The `switch` terminator operation represents a switch on a signless integer
+    value. If the flag matches one of the specified cases, then the
+    corresponding destination is jumped to. If the flag does not match any of
+    the cases, the default destination is jumped to. The count and types of
+    operands must align with the arguments in the corresponding target blocks.
+
+    Example:
+
+    ```mlir
+    switch %flag : i32, [
+      default: ^bb1(%a : i32),
+      42: ^bb1(%b : i32),
+      43: ^bb3(%c : i32)
+    ]
+    ```
+  }];
+
+  let arguments = (ins AnyInteger:$flag,
+                       Variadic<AnyType>:$defaultOperands,
+                       Variadic<AnyType>:$caseOperands,
+                       OptionalAttr<AnyIntElementsAttr>:$case_values,
+                       OptionalAttr<I32ElementsAttr>:$case_operand_offsets);
+  let successors = (successor
+                        AnySuccessor:$defaultDestination,
+                        VariadicSuccessor<AnySuccessor>:$caseDestinations);
+  let builders = [
+    OpBuilder<(ins "Value":$flag,
+      "Block *":$defaultDestination,
+      "ValueRange":$defaultOperands,
+      CArg<"ArrayRef<APInt>", "{}">:$caseValues,
+      CArg<"BlockRange", "{}">:$caseDestinations,
+      CArg<"ArrayRef<ValueRange>", "{}">:$caseOperands)>,
+    OpBuilder<(ins "Value":$flag,
+      "Block *":$defaultDestination,
+      "ValueRange":$defaultOperands,
+      CArg<"ArrayRef<int32_t>", "{}">:$caseValues,
+      CArg<"BlockRange", "{}">:$caseDestinations,
+      CArg<"ArrayRef<ValueRange>", "{}">:$caseOperands)>,
+    OpBuilder<(ins "Value":$flag,
+      "Block *":$defaultDestination,
+      "ValueRange":$defaultOperands,
+      CArg<"DenseIntElementsAttr", "{}">:$caseValues,
+      CArg<"BlockRange", "{}">:$caseDestinations,
+      CArg<"ArrayRef<ValueRange>", "{}">:$caseOperands)>
+  ];
+
+  let assemblyFormat = [{
+    $flag `:` type($flag) `,` `[` `\n`
+      custom<SwitchOpCases>(ref(type($flag)),$defaultDestination,
+                            $defaultOperands,
+                            type($defaultOperands),
+                            $case_values,
+                            $caseDestinations,
+                            $caseOperands,
+                            type($caseOperands),
+                            $case_operand_offsets)
+   `]`
+    attr-dict
+  }];
+
+  let extraClassDeclaration = [{
+    /// Return the operands for the case destination block at the given index.
+    OperandRange getCaseOperands(unsigned index);
+
+    /// Return a mutable range of operands for the case destination block at the
+    /// given index.
+    MutableOperandRange getCaseOperandsMutable(unsigned index);
+  }];
+
+  let hasCanonicalizer = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // TruncateIOp
 //===----------------------------------------------------------------------===//
@@ -2087,6 +2153,8 @@ def TruncateIOp : Std_Op<"trunci", [NoSideEffect,
   let printer = [{
     return printStandardCastOp(this->getOperation(), p);
   }];
+
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//

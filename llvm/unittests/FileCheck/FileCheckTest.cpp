@@ -161,7 +161,7 @@ struct ExpressionFormatParameterisedFixture
     return (Twine(Prefix) + Twine(Num)).str();
   }
 
-  void checkWildcardRegexCharMatchFailure(StringRef Chars) const {
+  void checkPerCharWildcardRegexMatchFailure(StringRef Chars) const {
     for (auto C : Chars) {
       std::string Str = addBasePrefix(StringRef(&C, 1));
       EXPECT_FALSE(WildcardRegex.match(Str));
@@ -259,9 +259,9 @@ TEST_P(ExpressionFormatParameterisedFixture, FormatGetWildcardRegex) {
   if (AllowHex) {
     LongNumberStr = addBasePrefix(AcceptedHexOnlyDigits);
     checkWildcardRegexMatch(LongNumberStr, 16);
-    checkWildcardRegexCharMatchFailure(RefusedHexOnlyDigits);
+    checkPerCharWildcardRegexMatchFailure(RefusedHexOnlyDigits);
   }
-  checkWildcardRegexCharMatchFailure(FirstInvalidCharDigits);
+  checkPerCharWildcardRegexMatchFailure(FirstInvalidCharDigits);
 
   // Check leading zeros are only accepted if number of digits is less than the
   // precision.
@@ -1027,8 +1027,10 @@ public:
 
   Expected<size_t> match(StringRef Buffer) {
     StringRef BufferRef = bufferize(SM, Buffer);
-    size_t MatchLen;
-    return P.match(BufferRef, MatchLen, SM);
+    Pattern::MatchResult Res = P.match(BufferRef, SM);
+    if (Res.TheError)
+      return std::move(Res.TheError);
+    return Res.TheMatch->Pos;
   }
 
   void printVariableDefs(FileCheckDiag::MatchType MatchTy,
@@ -1341,6 +1343,9 @@ TEST_F(FileCheckTest, ParsePattern) {
   // Collision with numeric variable.
   EXPECT_TRUE(Tester.parsePattern("[[FOO:]]"));
 
+  // Invalid use of string variable.
+  EXPECT_TRUE(Tester.parsePattern("[[FOO-BAR]]"));
+
   // Valid use of string variable.
   EXPECT_FALSE(Tester.parsePattern("[[BAR]]"));
 
@@ -1640,8 +1645,8 @@ TEST_F(FileCheckTest, FileCheckContext) {
   FileCheckRequest Req;
   Cxt.createLineVariable();
   ASSERT_FALSE(P.parsePattern("[[@LINE]]", "CHECK", SM, Req));
-  size_t MatchLen;
-  ASSERT_THAT_EXPECTED(P.match("1", MatchLen, SM), Succeeded());
+  Pattern::MatchResult Res = P.match("1", SM);
+  ASSERT_THAT_ERROR(std::move(Res.TheError), Succeeded());
 
 #ifndef NDEBUG
   // Recreating @LINE pseudo numeric variable fails.

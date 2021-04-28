@@ -258,7 +258,7 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
       Builder.CreateBr(TheOnlyDest);
       BasicBlock *BB = SI->getParent();
 
-      SmallSetVector<BasicBlock *, 8> RemovedSuccessors;
+      SmallSet<BasicBlock *, 8> RemovedSuccessors;
 
       // Remove entries from PHI nodes which we no longer branch to...
       BasicBlock *SuccToKeep = TheOnlyDest;
@@ -330,7 +330,7 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
     if (auto *BA =
           dyn_cast<BlockAddress>(IBI->getAddress()->stripPointerCasts())) {
       BasicBlock *TheOnlyDest = BA->getBasicBlock();
-      SmallSetVector<BasicBlock *, 8> RemovedSuccessors;
+      SmallSet<BasicBlock *, 8> RemovedSuccessors;
 
       // Insert the new branch.
       Builder.CreateBr(TheOnlyDest);
@@ -457,7 +457,7 @@ bool llvm::wouldInstructionBeTriviallyDead(Instruction *I,
     // sophisticated tradeoffs for guards considering potential for check
     // widening, but for now we keep things simple.
     if ((II->getIntrinsicID() == Intrinsic::assume &&
-         isAssumeWithEmptyBundle(*II)) ||
+         isAssumeWithEmptyBundle(cast<AssumeInst>(*II))) ||
         II->getIntrinsicID() == Intrinsic::experimental_guard) {
       if (ConstantInt *Cond = dyn_cast<ConstantInt>(II->getArgOperand(0)))
         return !Cond->isZero();
@@ -738,12 +738,15 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB,
   SmallVector<DominatorTree::UpdateType, 32> Updates;
 
   if (DTU) {
-    for (BasicBlock *PredPredBB : predecessors(PredBB)) {
+    SmallPtrSet<BasicBlock *, 2> PredsOfPredBB(pred_begin(PredBB),
+                                               pred_end(PredBB));
+    Updates.reserve(Updates.size() + 2 * PredsOfPredBB.size() + 1);
+    for (BasicBlock *PredOfPredBB : PredsOfPredBB)
       // This predecessor of PredBB may already have DestBB as a successor.
-      if (!llvm::is_contained(successors(PredPredBB), DestBB))
-        Updates.push_back({DominatorTree::Insert, PredPredBB, DestBB});
-      Updates.push_back({DominatorTree::Delete, PredPredBB, PredBB});
-    }
+      if (PredOfPredBB != PredBB)
+        Updates.push_back({DominatorTree::Insert, PredOfPredBB, DestBB});
+    for (BasicBlock *PredOfPredBB : PredsOfPredBB)
+      Updates.push_back({DominatorTree::Delete, PredOfPredBB, PredBB});
     Updates.push_back({DominatorTree::Delete, PredBB, DestBB});
   }
 
@@ -1072,14 +1075,15 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
   SmallVector<DominatorTree::UpdateType, 32> Updates;
   if (DTU) {
     // All predecessors of BB will be moved to Succ.
-    SmallSetVector<BasicBlock *, 8> Predecessors(pred_begin(BB), pred_end(BB));
-    Updates.reserve(Updates.size() + 2 * Predecessors.size());
-    for (auto *Predecessor : Predecessors) {
+    SmallPtrSet<BasicBlock *, 8> PredsOfBB(pred_begin(BB), pred_end(BB));
+    SmallPtrSet<BasicBlock *, 8> PredsOfSucc(pred_begin(Succ), pred_end(Succ));
+    Updates.reserve(Updates.size() + 2 * PredsOfBB.size() + 1);
+    for (auto *PredOfBB : PredsOfBB)
       // This predecessor of BB may already have Succ as a successor.
-      if (!llvm::is_contained(successors(Predecessor), Succ))
-        Updates.push_back({DominatorTree::Insert, Predecessor, Succ});
-      Updates.push_back({DominatorTree::Delete, Predecessor, BB});
-    }
+      if (!PredsOfSucc.contains(PredOfBB))
+        Updates.push_back({DominatorTree::Insert, PredOfBB, Succ});
+    for (auto *PredOfBB : PredsOfBB)
+      Updates.push_back({DominatorTree::Delete, PredOfBB, BB});
     Updates.push_back({DominatorTree::Delete, BB, Succ});
   }
 
@@ -1614,8 +1618,8 @@ void llvm::insertDebugValuesForPHIs(BasicBlock *BB,
   // so that if a dbg.value is being rewritten to use more than one of the
   // inserted PHIs in the same destination BB, we can update the same dbg.value
   // with all the new PHIs instead of creating one copy for each.
-  SmallDenseMap<std::pair<BasicBlock *, DbgVariableIntrinsic *>,
-                DbgVariableIntrinsic *>
+  MapVector<std::pair<BasicBlock *, DbgVariableIntrinsic *>,
+            DbgVariableIntrinsic *>
       NewDbgValueMap;
   // Then iterate through the new PHIs and look to see if they use one of the
   // previously mapped PHIs. If so, create a new dbg.value intrinsic that will
@@ -2132,7 +2136,7 @@ unsigned llvm::changeToUnreachable(Instruction *I, bool UseLLVMTrap,
   if (MSSAU)
     MSSAU->changeToUnreachable(I);
 
-  SmallSetVector<BasicBlock *, 8> UniqueSuccessors;
+  SmallSet<BasicBlock *, 8> UniqueSuccessors;
 
   // Loop over all of the successors, removing BB's entry from any PHI
   // nodes.
@@ -2393,7 +2397,7 @@ static bool markAliveBlocks(Function &F,
         }
       };
 
-      SmallMapVector<BasicBlock *, int, 8> NumPerSuccessorCases;
+      SmallDenseMap<BasicBlock *, int, 8> NumPerSuccessorCases;
       // Set of unique CatchPads.
       SmallDenseMap<CatchPadInst *, detail::DenseSetEmpty, 4,
                     CatchPadDenseMapInfo, detail::DenseSetPair<CatchPadInst *>>
@@ -2403,22 +2407,25 @@ static bool markAliveBlocks(Function &F,
                                              E = CatchSwitch->handler_end();
            I != E; ++I) {
         BasicBlock *HandlerBB = *I;
-        ++NumPerSuccessorCases[HandlerBB];
+        if (DTU)
+          ++NumPerSuccessorCases[HandlerBB];
         auto *CatchPad = cast<CatchPadInst>(HandlerBB->getFirstNonPHI());
         if (!HandlerSet.insert({CatchPad, Empty}).second) {
-          --NumPerSuccessorCases[HandlerBB];
+          if (DTU)
+            --NumPerSuccessorCases[HandlerBB];
           CatchSwitch->removeHandler(I);
           --I;
           --E;
           Changed = true;
         }
       }
-      std::vector<DominatorTree::UpdateType> Updates;
-      for (const std::pair<BasicBlock *, int> &I : NumPerSuccessorCases)
-        if (I.second == 0)
-          Updates.push_back({DominatorTree::Delete, BB, I.first});
-      if (DTU)
+      if (DTU) {
+        std::vector<DominatorTree::UpdateType> Updates;
+        for (const std::pair<BasicBlock *, int> &I : NumPerSuccessorCases)
+          if (I.second == 0)
+            Updates.push_back({DominatorTree::Delete, BB, I.first});
         DTU->applyUpdates(Updates);
+      }
     }
 
     Changed |= ConstantFoldTerminator(BB, true, nullptr, DTU);
@@ -2504,7 +2511,7 @@ bool llvm::removeUnreachableBlocks(Function &F, DomTreeUpdater *DTU,
   // their internal references. Update DTU if available.
   std::vector<DominatorTree::UpdateType> Updates;
   for (auto *BB : BlocksToRemove) {
-    SmallSetVector<BasicBlock *, 8> UniqueSuccessors;
+    SmallSet<BasicBlock *, 8> UniqueSuccessors;
     for (BasicBlock *Successor : successors(BB)) {
       // Only remove references to BB in reachable successors of BB.
       if (Reachable.count(Successor))
@@ -3384,4 +3391,34 @@ Value *llvm::invertCondition(Value *Condition) {
   else
     Inverted->insertBefore(&*Parent->getFirstInsertionPt());
   return Inverted;
+}
+
+bool llvm::inferAttributesFromOthers(Function &F) {
+  // Note: We explicitly check for attributes rather than using cover functions
+  // because some of the cover functions include the logic being implemented.
+
+  bool Changed = false;
+  // readnone + not convergent implies nosync
+  if (!F.hasFnAttribute(Attribute::NoSync) &&
+      F.doesNotAccessMemory() && !F.isConvergent()) {
+    F.setNoSync();
+    Changed = true;
+  }
+
+  // readonly implies nofree
+  if (!F.hasFnAttribute(Attribute::NoFree) && F.onlyReadsMemory()) {
+    F.setDoesNotFreeMemory();
+    Changed = true;
+  }
+
+  // willreturn implies mustprogress
+  if (!F.hasFnAttribute(Attribute::MustProgress) && F.willReturn()) {
+    F.setMustProgress();
+    Changed = true;
+  }
+
+  // TODO: There are a bunch of cases of restrictive memory effects we
+  // can infer by inspecting arguments of argmemonly-ish functions.
+
+  return Changed;
 }

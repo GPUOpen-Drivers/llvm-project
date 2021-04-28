@@ -97,6 +97,18 @@ TEST(ContainsN, Two) {
   ASSERT_THAT(Array, ContainsN(StrEq("x"), 2));
 }
 
+// Copy constructor performs a deep copy of reference-counted pointers.
+
+TEST(CompilerInvocationTest, DeepCopyConstructor) {
+  CompilerInvocation A;
+  A.getAnalyzerOpts()->Config["Key"] = "Old";
+
+  CompilerInvocation B(A);
+  B.getAnalyzerOpts()->Config["Key"] = "New";
+
+  ASSERT_EQ(A.getAnalyzerOpts()->Config["Key"], "Old");
+}
+
 // Boolean option with a keypath that defaults to true.
 // The only flag with a negative spelling can set the keypath to false.
 
@@ -516,7 +528,8 @@ TEST_F(CommandLineTest, ConditionalParsingIfFalseFlagNotPresent) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_FALSE(Invocation.getLangOpts()->SYCL);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsDevice);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsHost);
   ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_None);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
@@ -531,42 +544,42 @@ TEST_F(CommandLineTest, ConditionalParsingIfFalseFlagPresent) {
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_FALSE(Invocation.getLangOpts()->SYCL);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsDevice);
+  ASSERT_FALSE(Invocation.getLangOpts()->SYCLIsHost);
   ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_None);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
-  ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-fsycl"))));
+  ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-fsycl-is-device"))));
+  ASSERT_THAT(GeneratedArgs, Not(Contains(StrEq("-fsycl-is-host"))));
   ASSERT_THAT(GeneratedArgs, Not(Contains(HasSubstr("-sycl-std="))));
 }
 
 TEST_F(CommandLineTest, ConditionalParsingIfTrueFlagNotPresent) {
-  const char *Args[] = {"-fsycl"};
+  const char *Args[] = {"-fsycl-is-host"};
 
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_TRUE(Invocation.getLangOpts()->SYCL);
   ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_None);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
-  ASSERT_THAT(GeneratedArgs, Contains(StrEq("-fsycl")));
+  ASSERT_THAT(GeneratedArgs, Contains(StrEq("-fsycl-is-host")));
   ASSERT_THAT(GeneratedArgs, Not(Contains(HasSubstr("-sycl-std="))));
 }
 
 TEST_F(CommandLineTest, ConditionalParsingIfTrueFlagPresent) {
-  const char *Args[] = {"-fsycl", "-sycl-std=2017"};
+  const char *Args[] = {"-fsycl-is-device", "-sycl-std=2017"};
 
   CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags);
 
   ASSERT_FALSE(Diags->hasErrorOccurred());
-  ASSERT_TRUE(Invocation.getLangOpts()->SYCL);
   ASSERT_EQ(Invocation.getLangOpts()->getSYCLVersion(), LangOptions::SYCL_2017);
 
   Invocation.generateCC1CommandLine(GeneratedArgs, *this);
 
-  ASSERT_THAT(GeneratedArgs, Contains(StrEq("-fsycl")));
+  ASSERT_THAT(GeneratedArgs, Contains(StrEq("-fsycl-is-device")));
   ASSERT_THAT(GeneratedArgs, Contains(StrEq("-sycl-std=2017")));
 }
 
@@ -875,5 +888,16 @@ TEST_F(CommandLineTest, RoundTrip) {
   ASSERT_EQ(Invocation.getDependencyOutputOpts().ShowIncludesDest,
             ShowIncludesDestination::Stdout);
   ASSERT_TRUE(Invocation.getDependencyOutputOpts().ShowHeaderIncludes);
+}
+
+TEST_F(CommandLineTest, PluginArgsRoundTripDeterminism) {
+  const char *Args[] = {
+      "-plugin-arg-blink-gc-plugin", "no-members-in-stack-allocated",
+      "-plugin-arg-find-bad-constructs", "checked-ptr-as-trivial-member",
+      "-plugin-arg-find-bad-constructs", "check-ipc",
+      // Enable round-trip to ensure '-plugin-arg' generation is deterministic.
+      "-round-trip-args"};
+
+  ASSERT_TRUE(CompilerInvocation::CreateFromArgs(Invocation, Args, *Diags));
 }
 } // anonymous namespace

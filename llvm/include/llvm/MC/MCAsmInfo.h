@@ -122,9 +122,21 @@ protected:
   /// other when on the same line.  Defaults to ';'
   const char *SeparatorString;
 
-  /// This indicates the comment character used by the assembler.  Defaults to
+  /// This indicates the comment string used by the assembler.  Defaults to
   /// "#"
   StringRef CommentString;
+
+  /// This indicates whether the comment string is only accepted as a comment
+  /// at the beginning of statements. Defaults to false.
+  bool RestrictCommentStringToStartOfStatement = false;
+
+  /// This indicates whether to allow additional "comment strings" to be lexed
+  /// as a comment. Setting this attribute to true, will ensure that C-style
+  /// line comments (// ..), C-style block comments (/* .. */), and "#" are
+  /// all treated as comments in addition to the string specified by the
+  /// CommentString attribute.
+  /// Default is true.
+  bool AllowAdditionalComments = true;
 
   /// This is appended to emitted labels.  Defaults to ":"
   const char *LabelSuffix;
@@ -445,6 +457,9 @@ protected:
   // %hi(), and similar unary operators.
   bool HasMipsExpressions = false;
 
+  // If true, use Motorola-style integers in Assembly (ex. $0ac).
+  bool UseMotorolaIntegers = false;
+
   // If true, emit function descriptor symbol on AIX.
   bool NeedsFunctionDescriptors = false;
 
@@ -557,6 +572,10 @@ public:
   unsigned getCommentColumn() const { return 40; }
 
   StringRef getCommentString() const { return CommentString; }
+  bool getRestrictCommentStringToStartOfStatement() const {
+    return RestrictCommentStringToStartOfStatement;
+  }
+  bool shouldAllowAdditionalComments() const { return AllowAdditionalComments; }
   const char *getLabelSuffix() const { return LabelSuffix; }
 
   bool useAssignmentForEHBegin() const { return UseAssignmentForEHBegin; }
@@ -733,6 +752,7 @@ public:
   void setRelaxELFRelocations(bool V) { RelaxELFRelocations = V; }
   bool hasMipsExpressions() const { return HasMipsExpressions; }
   bool needsFunctionDescriptors() const { return NeedsFunctionDescriptors; }
+  bool shouldUseMotorolaIntegers() const { return UseMotorolaIntegers; }
 };
 
 } // end namespace llvm

@@ -638,8 +638,8 @@ void LookupResult::resolveKind() {
 void LookupResult::addDeclsFromBasePaths(const CXXBasePaths &P) {
   CXXBasePaths::const_paths_iterator I, E;
   for (I = P.begin(), E = P.end(); I != E; ++I)
-    for (DeclContext::lookup_iterator DI = I->Decls.begin(),
-         DE = I->Decls.end(); DI != DE; ++DI)
+    for (DeclContext::lookup_iterator DI = I->Decls, DE = DI.end(); DI != DE;
+         ++DI)
       addDecl(*DI);
 }
 
@@ -850,28 +850,24 @@ static void InsertOCLBuiltinDeclarationsFromTable(Sema &S, LookupResult &LR,
     DeclContext *Parent = Context.getTranslationUnitDecl();
     FunctionDecl *NewOpenCLBuiltin;
 
-    for (unsigned Index = 0; Index < GenTypeMaxCnt; Index++) {
+    for (const auto &FTy : FunctionList) {
       NewOpenCLBuiltin = FunctionDecl::Create(
-          Context, Parent, Loc, Loc, II, FunctionList[Index],
-          /*TInfo=*/nullptr, SC_Extern, false,
-          FunctionList[Index]->isFunctionProtoType());
+          Context, Parent, Loc, Loc, II, FTy, /*TInfo=*/nullptr, SC_Extern,
+          false, FTy->isFunctionProtoType());
       NewOpenCLBuiltin->setImplicit();
 
       // Create Decl objects for each parameter, adding them to the
       // FunctionDecl.
-      if (const FunctionProtoType *FP =
-              dyn_cast<FunctionProtoType>(FunctionList[Index])) {
-        SmallVector<ParmVarDecl *, 16> ParmList;
-        for (unsigned IParm = 0, e = FP->getNumParams(); IParm != e; ++IParm) {
-          ParmVarDecl *Parm = ParmVarDecl::Create(
-              Context, NewOpenCLBuiltin, SourceLocation(), SourceLocation(),
-              nullptr, FP->getParamType(IParm),
-              /*TInfo=*/nullptr, SC_None, nullptr);
-          Parm->setScopeInfo(0, IParm);
-          ParmList.push_back(Parm);
-        }
-        NewOpenCLBuiltin->setParams(ParmList);
+      const auto *FP = cast<FunctionProtoType>(FTy);
+      SmallVector<ParmVarDecl *, 4> ParmList;
+      for (unsigned IParm = 0, e = FP->getNumParams(); IParm != e; ++IParm) {
+        ParmVarDecl *Parm = ParmVarDecl::Create(
+            Context, NewOpenCLBuiltin, SourceLocation(), SourceLocation(),
+            nullptr, FP->getParamType(IParm), nullptr, SC_None, nullptr);
+        Parm->setScopeInfo(0, IParm);
+        ParmList.push_back(Parm);
       }
+      NewOpenCLBuiltin->setParams(ParmList);
 
       // Add function attributes.
       if (OpenCLBuiltin.IsPure)
@@ -2230,9 +2226,9 @@ bool Sema::LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
     CXXRecordDecl *BaseRecord = Specifier->getType()->getAsCXXRecordDecl();
     // Drop leading non-matching lookup results from the declaration list so
     // we don't need to consider them again below.
-    for (Path.Decls = BaseRecord->lookup(Name); !Path.Decls.empty();
-         Path.Decls = Path.Decls.slice(1)) {
-      if (Path.Decls.front()->isInIdentifierNamespace(IDNS))
+    for (Path.Decls = BaseRecord->lookup(Name).begin();
+         Path.Decls != Path.Decls.end(); ++Path.Decls) {
+      if ((*Path.Decls)->isInIdentifierNamespace(IDNS))
         return true;
     }
     return false;
@@ -2256,9 +2252,9 @@ bool Sema::LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
   AccessSpecifier SubobjectAccess = AS_none;
 
   // Check whether the given lookup result contains only static members.
-  auto HasOnlyStaticMembers = [&](DeclContextLookupResult Result) {
-    for (NamedDecl *ND : Result)
-      if (ND->isInIdentifierNamespace(IDNS) && ND->isCXXInstanceMember())
+  auto HasOnlyStaticMembers = [&](DeclContext::lookup_iterator Result) {
+    for (DeclContext::lookup_iterator I = Result, E = I.end(); I != E; ++I)
+      if ((*I)->isInIdentifierNamespace(IDNS) && (*I)->isCXXInstanceMember())
         return false;
     return true;
   };
@@ -2267,8 +2263,8 @@ bool Sema::LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
 
   // Determine whether two sets of members contain the same members, as
   // required by C++ [class.member.lookup]p6.
-  auto HasSameDeclarations = [&](DeclContextLookupResult A,
-                                 DeclContextLookupResult B) {
+  auto HasSameDeclarations = [&](DeclContext::lookup_iterator A,
+                                 DeclContext::lookup_iterator B) {
     using Iterator = DeclContextLookupResult::iterator;
     using Result = const void *;
 
@@ -2305,7 +2301,7 @@ bool Sema::LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
 
     // We'll often find the declarations are in the same order. Handle this
     // case (and the special case of only one declaration) efficiently.
-    Iterator AIt = A.begin(), BIt = B.begin(), AEnd = A.end(), BEnd = B.end();
+    Iterator AIt = A, BIt = B, AEnd, BEnd;
     while (true) {
       Result AResult = Next(AIt, AEnd);
       Result BResult = Next(BIt, BEnd);
@@ -2388,10 +2384,11 @@ bool Sema::LookupQualifiedName(LookupResult &R, DeclContext *LookupCtx,
 
   // Lookup in a base class succeeded; return these results.
 
-  for (auto *D : Paths.front().Decls) {
+  for (DeclContext::lookup_iterator I = Paths.front().Decls, E = I.end();
+       I != E; ++I) {
     AccessSpecifier AS = CXXRecordDecl::MergeAccess(SubobjectAccess,
-                                                    D->getAccess());
-    if (NamedDecl *ND = R.getAcceptableDecl(D))
+                                                    (*I)->getAccess());
+    if (NamedDecl *ND = R.getAcceptableDecl(*I))
       R.addDecl(ND, AS);
   }
   R.resolveKind();
@@ -2534,7 +2531,7 @@ void Sema::DiagnoseAmbiguousLookup(LookupResult &Result) {
       << Name << SubobjectType << getAmbiguousPathsDisplayString(*Paths)
       << LookupRange;
 
-    DeclContext::lookup_iterator Found = Paths->front().Decls.begin();
+    DeclContext::lookup_iterator Found = Paths->front().Decls;
     while (isa<CXXMethodDecl>(*Found) &&
            cast<CXXMethodDecl>(*Found)->isStatic())
       ++Found;
@@ -2552,7 +2549,7 @@ void Sema::DiagnoseAmbiguousLookup(LookupResult &Result) {
     for (CXXBasePaths::paths_iterator Path = Paths->begin(),
                                       PathEnd = Paths->end();
          Path != PathEnd; ++Path) {
-      const NamedDecl *D = Path->Decls.front();
+      const NamedDecl *D = *Path->Decls;
       if (!D->isInIdentifierNamespace(Result.getIdentifierNamespace()))
         continue;
       if (DeclsPrinted.insert(D).second) {

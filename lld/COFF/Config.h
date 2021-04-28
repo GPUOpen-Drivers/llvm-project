@@ -74,10 +74,12 @@ enum class DebugType {
   Fixup = 0x4,  /// Relocation Table
 };
 
-enum class GuardCFLevel {
-  Off,
-  NoLongJmp, // Emit gfids but no longjmp tables
-  Full,      // Enable all protections.
+enum GuardCFLevel {
+  Off     = 0x0,
+  CF      = 0x1, /// Emit gfids tables
+  LongJmp = 0x2, /// Emit longjmp tables
+  EHCont  = 0x4, /// Emit ehcont tables
+  All     = 0x7  /// Enable all protections
 };
 
 enum class ICFLevel {
@@ -143,7 +145,7 @@ struct Configuration {
   bool saveTemps = false;
 
   // /guard:cf
-  GuardCFLevel guardCF = GuardCFLevel::Off;
+  int guardCF = GuardCFLevel::Off;
 
   // Used for SafeSEH.
   bool safeSEH = false;
@@ -214,6 +216,12 @@ struct Configuration {
 
   // Used for /lto-obj-path:
   llvm::StringRef ltoObjPath;
+
+  // Used for /lto-cs-profile-generate:
+  bool ltoCSProfileGenerate = false;
+
+  // Used for /lto-cs-profile-path
+  llvm::StringRef ltoCSProfileFile;
 
   // Used for /call-graph-ordering-file:
   llvm::MapVector<std::pair<const SectionChunk *, const SectionChunk *>,

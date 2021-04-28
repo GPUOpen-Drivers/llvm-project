@@ -303,13 +303,20 @@ llvm::Value *mlir::LLVM::detail::createIntrinsicCall(
 /// Given a single MLIR operation, create the corresponding LLVM IR operation
 /// using the `builder`.
 LogicalResult
-ModuleTranslation::convertOperation(Operation &opInst,
+ModuleTranslation::convertOperation(Operation &op,
                                     llvm::IRBuilderBase &builder) {
-  if (failed(iface.convertOperation(&opInst, builder, *this)))
-    return opInst.emitError("unsupported or non-LLVM operation: ")
-           << opInst.getName();
+  const LLVMTranslationDialectInterface *opIface = iface.getInterfaceFor(&op);
+  if (!opIface)
+    return op.emitError("cannot be converted to LLVM IR: missing "
+                        "`LLVMTranslationDialectInterface` registration for "
+                        "dialect for op: ")
+           << op.getName();
 
-  return convertDialectAttributes(&opInst);
+  if (failed(opIface->convertOperation(&op, builder, *this)))
+    return op.emitError("LLVM Translation failed for operation: ")
+           << op.getName();
+
+  return convertDialectAttributes(&op);
 }
 
 /// Convert block to LLVM IR.  Unless `ignoreArguments` is set, emit PHI nodes
@@ -364,6 +371,15 @@ static Block &getModuleBody(Operation *module) {
   return module->getRegion(0).front();
 }
 
+/// A helper method to decide if a constant must not be set as a global variable
+/// initializer.
+static bool shouldDropGlobalInitializer(llvm::GlobalValue::LinkageTypes linkage,
+                                        llvm::Constant *cst) {
+  return (linkage == llvm::GlobalVariable::ExternalLinkage &&
+          isa<llvm::UndefValue>(cst)) ||
+         linkage == llvm::GlobalVariable::ExternalWeakLinkage;
+}
+
 /// Create named global variables that correspond to llvm.mlir.global
 /// definitions.
 LogicalResult ModuleTranslation::convertGlobals() {
@@ -381,7 +397,24 @@ LogicalResult ModuleTranslation::convertGlobals() {
                                          *this))) {
         return failure();
       }
-    } else if (Block *initializer = op.getInitializerBlock()) {
+    }
+
+    auto linkage = convertLinkageToLLVM(op.linkage());
+    auto addrSpace = op.addr_space();
+    auto *var = new llvm::GlobalVariable(
+        *llvmModule, type, op.constant(), linkage,
+        shouldDropGlobalInitializer(linkage, cst) ? nullptr : cst,
+        op.sym_name(),
+        /*InsertBefore=*/nullptr, llvm::GlobalValue::NotThreadLocal, addrSpace);
+
+    globalsMapping.try_emplace(op, var);
+  }
+
+  // Convert global variable bodies. This is done after all global variables
+  // have been created in LLVM IR because a global body may refer to another
+  // global or itself. So all global variables need to be mapped first.
+  for (auto op : getModuleBody(mlirModule).getOps<LLVM::GlobalOp>()) {
+    if (Block *initializer = op.getInitializerBlock()) {
       llvm::IRBuilder<> builder(llvmModule->getContext());
       for (auto &op : initializer->without_terminator()) {
         if (failed(convertOperation(op, builder)) ||
@@ -389,21 +422,12 @@ LogicalResult ModuleTranslation::convertGlobals() {
           return emitError(op.getLoc(), "unemittable constant value");
       }
       ReturnOp ret = cast<ReturnOp>(initializer->getTerminator());
-      cst = cast<llvm::Constant>(lookupValue(ret.getOperand(0)));
+      llvm::Constant *cst =
+          cast<llvm::Constant>(lookupValue(ret.getOperand(0)));
+      auto *global = cast<llvm::GlobalVariable>(lookupGlobal(op));
+      if (!shouldDropGlobalInitializer(global->getLinkage(), cst))
+        global->setInitializer(cst);
     }
-
-    auto linkage = convertLinkageToLLVM(op.linkage());
-    bool anyExternalLinkage =
-        ((linkage == llvm::GlobalVariable::ExternalLinkage &&
-          isa<llvm::UndefValue>(cst)) ||
-         linkage == llvm::GlobalVariable::ExternalWeakLinkage);
-    auto addrSpace = op.addr_space();
-    auto *var = new llvm::GlobalVariable(
-        *llvmModule, type, op.constant(), linkage,
-        anyExternalLinkage ? nullptr : cst, op.sym_name(),
-        /*InsertBefore=*/nullptr, llvm::GlobalValue::NotThreadLocal, addrSpace);
-
-    globalsMapping.try_emplace(op, var);
   }
 
   return success();

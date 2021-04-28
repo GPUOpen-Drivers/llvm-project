@@ -26,7 +26,12 @@ ASTSrcLocProcessor::ASTSrcLocProcessor(StringRef JsonPath)
           isDefinition(),
           isSameOrDerivedFrom(
               // TODO: Extend this with other clades
-              namedDecl(hasName("clang::Stmt")).bind("nodeClade")),
+              namedDecl(hasAnyName("clang::Stmt", "clang::Decl",
+                                   "clang::CXXCtorInitializer",
+                                   "clang::NestedNameSpecifierLoc",
+                                   "clang::TemplateArgumentLoc",
+                                   "clang::CXXBaseSpecifier"))
+                  .bind("nodeClade")),
           optionally(isDerivedFrom(cxxRecordDecl().bind("derivedFrom"))))
           .bind("className"),
       this);
@@ -79,17 +84,16 @@ llvm::json::Object toJSON(llvm::StringMap<ClassData> const &Obj) {
   return JsonObj;
 }
 
-void WriteJSON(std::string JsonPath,
-               llvm::StringMap<StringRef> const &ClassInheritance,
-               llvm::StringMap<std::vector<StringRef>> const &ClassesInClade,
-               llvm::StringMap<ClassData> const &ClassEntries) {
+void WriteJSON(std::string JsonPath, llvm::json::Object &&ClassInheritance,
+               llvm::json::Object &&ClassesInClade,
+               llvm::json::Object &&ClassEntries) {
   llvm::json::Object JsonObj;
 
   using llvm::json::toJSON;
 
-  JsonObj["classInheritance"] = ::toJSON(ClassInheritance);
-  JsonObj["classesInClade"] = ::toJSON(ClassesInClade);
-  JsonObj["classEntries"] = ::toJSON(ClassEntries);
+  JsonObj["classInheritance"] = std::move(ClassInheritance);
+  JsonObj["classesInClade"] = std::move(ClassesInClade);
+  JsonObj["classEntries"] = std::move(ClassEntries);
 
   std::error_code EC;
   llvm::raw_fd_ostream JsonOut(JsonPath, EC, llvm::sys::fs::F_Text);
@@ -101,8 +105,11 @@ void WriteJSON(std::string JsonPath,
 }
 
 void ASTSrcLocProcessor::generate() {
-  WriteJSON(JsonPath, ClassInheritance, ClassesInClade, ClassEntries);
+  WriteJSON(JsonPath, ::toJSON(ClassInheritance), ::toJSON(ClassesInClade),
+            ::toJSON(ClassEntries));
 }
+
+void ASTSrcLocProcessor::generateEmpty() { WriteJSON(JsonPath, {}, {}, {}); }
 
 std::vector<std::string>
 CaptureMethods(std::string TypeString, const clang::CXXRecordDecl *ASTClass,
@@ -113,22 +120,30 @@ CaptureMethods(std::string TypeString, const clang::CXXRecordDecl *ASTClass,
                          InnerMatcher...);
   };
 
-  auto BoundNodesVec =
-      match(findAll(publicAccessor(ofClass(equalsNode(ASTClass)),
-                                   returns(asString(TypeString)))
-                        .bind("classMethod")),
-            *ASTClass, *Result.Context);
+  auto BoundNodesVec = match(
+      findAll(
+          publicAccessor(
+              ofClass(cxxRecordDecl(
+                  equalsNode(ASTClass),
+                  optionally(isDerivedFrom(
+                      cxxRecordDecl(hasAnyName("clang::Stmt", "clang::Decl"))
+                          .bind("stmtOrDeclBase"))))),
+              returns(asString(TypeString)))
+              .bind("classMethod")),
+      *ASTClass, *Result.Context);
 
   std::vector<std::string> Methods;
   for (const auto &BN : BoundNodesVec) {
+    const auto *StmtOrDeclBase =
+        BN.getNodeAs<clang::CXXRecordDecl>("stmtOrDeclBase");
     if (const auto *Node = BN.getNodeAs<clang::NamedDecl>("classMethod")) {
       // Only record the getBeginLoc etc on Stmt etc, because it will call
       // more-derived implementations pseudo-virtually.
-      if ((ASTClass->getName() != "Stmt" && ASTClass->getName() != "Decl") &&
+      if (StmtOrDeclBase &&
           (Node->getName() == "getBeginLoc" || Node->getName() == "getEndLoc" ||
-           Node->getName() == "getSourceRange")) {
+           Node->getName() == "getSourceRange"))
         continue;
-      }
+
       // Only record the getExprLoc on Expr, because it will call
       // more-derived implementations pseudo-virtually.
       if (ASTClass->getName() != "Expr" && Node->getName() == "getExprLoc") {
@@ -142,29 +157,28 @@ CaptureMethods(std::string TypeString, const clang::CXXRecordDecl *ASTClass,
 
 void ASTSrcLocProcessor::run(const MatchFinder::MatchResult &Result) {
 
-  if (const auto *ASTClass =
-          Result.Nodes.getNodeAs<clang::CXXRecordDecl>("className")) {
+  const auto *ASTClass =
+      Result.Nodes.getNodeAs<clang::CXXRecordDecl>("className");
 
-    StringRef ClassName = ASTClass->getName();
+  StringRef ClassName = ASTClass->getName();
 
-    ClassData CD;
+  ClassData CD;
 
-    const auto *NodeClade =
-        Result.Nodes.getNodeAs<clang::CXXRecordDecl>("nodeClade");
-    StringRef CladeName = NodeClade->getName();
+  const auto *NodeClade =
+      Result.Nodes.getNodeAs<clang::CXXRecordDecl>("nodeClade");
+  StringRef CladeName = NodeClade->getName();
 
-    if (const auto *DerivedFrom =
-            Result.Nodes.getNodeAs<clang::CXXRecordDecl>("derivedFrom"))
-      ClassInheritance[ClassName] = DerivedFrom->getName();
+  if (const auto *DerivedFrom =
+          Result.Nodes.getNodeAs<clang::CXXRecordDecl>("derivedFrom"))
+    ClassInheritance[ClassName] = DerivedFrom->getName();
 
-    CD.ASTClassLocations =
-        CaptureMethods("class clang::SourceLocation", ASTClass, Result);
-    CD.ASTClassRanges =
-        CaptureMethods("class clang::SourceRange", ASTClass, Result);
+  CD.ASTClassLocations =
+      CaptureMethods("class clang::SourceLocation", ASTClass, Result);
+  CD.ASTClassRanges =
+      CaptureMethods("class clang::SourceRange", ASTClass, Result);
 
-    if (!CD.isEmpty()) {
-      ClassEntries[ClassName] = CD;
-      ClassesInClade[CladeName].push_back(ClassName);
-    }
+  if (!CD.isEmpty()) {
+    ClassEntries[ClassName] = CD;
+    ClassesInClade[CladeName].push_back(ClassName);
   }
 }

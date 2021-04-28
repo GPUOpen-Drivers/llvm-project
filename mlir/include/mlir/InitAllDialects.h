@@ -14,7 +14,7 @@
 #ifndef MLIR_INITALLDIALECTS_H_
 #define MLIR_INITALLDIALECTS_H_
 
-#include "mlir/Dialect/AVX512/AVX512Dialect.h"
+#include "mlir/Dialect/AMX/AMXDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/ArmNeon/ArmNeonDialect.h"
 #include "mlir/Dialect/ArmSVE/ArmSVEDialect.h"
@@ -42,6 +42,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/Dialect/X86Vector/X86VectorDialect.h"
 #include "mlir/IR/Dialect.h"
 
 namespace mlir {
@@ -51,9 +52,9 @@ inline void registerAllDialects(DialectRegistry &registry) {
   // clang-format off
   registry.insert<acc::OpenACCDialect,
                   AffineDialect,
+                  amx::AMXDialect,
                   arm_neon::ArmNeonDialect,
                   async::AsyncDialect,
-                  avx512::AVX512Dialect,
                   complex::ComplexDialect,
                   DLTIDialect,
                   gpu::GPUDialect,
@@ -76,7 +77,8 @@ inline void registerAllDialects(DialectRegistry &registry) {
                   SDBMDialect,
                   shape::ShapeDialect,
                   tensor::TensorDialect,
-                  tosa::TosaDialect>();
+                  tosa::TosaDialect,
+                  x86vector::X86VectorDialect>();
   // clang-format on
 }
 

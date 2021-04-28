@@ -164,6 +164,18 @@ uint64_t LLVMGetEnumAttributeValue(LLVMAttributeRef A) {
   return Attr.getValueAsInt();
 }
 
+LLVMAttributeRef LLVMCreateTypeAttribute(LLVMContextRef C, unsigned KindID,
+                                         LLVMTypeRef type_ref) {
+  auto &Ctx = *unwrap(C);
+  auto AttrKind = (Attribute::AttrKind)KindID;
+  return wrap(Attribute::get(Ctx, AttrKind, unwrap(type_ref)));
+}
+
+LLVMTypeRef LLVMGetTypeAttributeValue(LLVMAttributeRef A) {
+  auto Attr = unwrap(A);
+  return wrap(Attr.getValueAsType());
+}
+
 LLVMAttributeRef LLVMCreateStringAttribute(LLVMContextRef C,
                                            const char *K, unsigned KLength,
                                            const char *V, unsigned VLength) {
@@ -192,6 +204,10 @@ LLVMBool LLVMIsEnumAttribute(LLVMAttributeRef A) {
 
 LLVMBool LLVMIsStringAttribute(LLVMAttributeRef A) {
   return unwrap(A).isStringAttribute();
+}
+
+LLVMBool LLVMIsTypeAttribute(LLVMAttributeRef A) {
+  return unwrap(A).isTypeAttribute();
 }
 
 char *LLVMGetDiagInfoDescription(LLVMDiagnosticInfoRef DI) {
@@ -396,7 +412,7 @@ void LLVMDumpModule(LLVMModuleRef M) {
 LLVMBool LLVMPrintModuleToFile(LLVMModuleRef M, const char *Filename,
                                char **ErrorMessage) {
   std::error_code EC;
-  raw_fd_ostream dest(Filename, EC, sys::fs::OF_Text);
+  raw_fd_ostream dest(Filename, EC, sys::fs::OF_TextWithCRLF);
   if (EC) {
     *ErrorMessage = strdup(EC.message().c_str());
     return true;

@@ -5776,6 +5776,9 @@ def note_goto_ms_asm_label : Note<
 def warn_unused_label : Warning<"unused label %0">,
   InGroup<UnusedLabel>, DefaultIgnore;
 
+def err_continue_from_cond_var_init : Error<
+  "cannot jump from this continue statement to the loop increment; "
+  "jump bypasses initialization of loop condition variable">;
 def err_goto_into_protected_scope : Error<
   "cannot jump from this goto statement to its label">;
 def ext_goto_into_protected_scope : ExtWarn<
@@ -6781,6 +6784,10 @@ def warn_unsigned_always_true_comparison : Warning<
   "result of comparison of %select{%3|unsigned expression}0 %2 "
   "%select{unsigned expression|%3}0 is always %4">,
   InGroup<TautologicalUnsignedZeroCompare>, DefaultIgnore;
+def warn_unsigned_char_always_true_comparison : Warning<
+  "result of comparison of %select{%3|char expression}0 %2 "
+  "%select{char expression|%3}0 is always %4, since char is interpreted as "
+  "unsigned">, InGroup<TautologicalUnsignedCharZeroCompare>, DefaultIgnore;
 def warn_unsigned_enum_always_true_comparison : Warning<
   "result of comparison of %select{%3|unsigned enum expression}0 %2 "
   "%select{unsigned enum expression|%3}0 is always %4">,
@@ -8185,6 +8192,9 @@ def err_atomic_op_needs_non_const_pointer : Error<
 def err_atomic_op_needs_trivial_copy : Error<
   "address argument to atomic operation must be a pointer to a "
   "trivially-copyable type (%0 invalid)">;
+def err_atomic_op_needs_atomic_int_ptr_or_fp : Error<
+  "address argument to atomic operation must be a pointer to %select{|atomic }0"
+  "integer, pointer or supported floating point type (%1 invalid)">;
 def err_atomic_op_needs_atomic_int_or_ptr : Error<
   "address argument to atomic operation must be a pointer to %select{|atomic }0"
   "integer or pointer (%1 invalid)">;
@@ -8300,6 +8310,9 @@ def note_cuda_device_builtin_surftex_should_be_template_class : Note<
     "%0 needs to be instantiated from a class template with proper "
     "template arguments">;
 
+def err_hip_invalid_args_builtin_mangled_name : Error<
+    "invalid argument: symbol must be a device-side function or global variable">;
+
 def warn_non_pod_vararg_with_format_string : Warning<
   "cannot pass %select{non-POD|non-trivial}0 object of type %1 to variadic "
   "%select{function|block|method|constructor}2; expected type from format "
@@ -8383,6 +8396,9 @@ def note_change_calling_conv_fixit : Note<
 def warn_bad_function_cast : Warning<
   "cast from function call of type %0 to non-matching type %1">,
   InGroup<BadFunctionCast>, DefaultIgnore;
+def warn_cast_function_type : Warning<
+  "cast %diff{from $ to $ |}0,1converts to incompatible function type">,
+  InGroup<CastFunctionType>, DefaultIgnore;
 def err_cast_pointer_to_non_pointer_int : Error<
   "pointer cannot be cast to type %0">;
 def err_cast_to_bfloat16 : Error<"cannot type-cast to __bf16">;
@@ -8568,6 +8584,12 @@ let CategoryName = "Inline Assembly Issue" in {
 
 let CategoryName = "Semantic Issue" in {
 
+def err_invalid_conversion_between_matrixes : Error<
+  "conversion between matrix types%diff{ $ and $|}0,1 of different size is not allowed">;
+
+def err_invalid_conversion_between_matrix_and_type : Error<
+  "conversion between matrix type %0 and incompatible type %1 is not allowed">;
+
 def err_invalid_conversion_between_vectors : Error<
   "invalid conversion between vector type%diff{ $ and $|}0,1 of different "
   "size">;
@@ -8603,6 +8625,15 @@ def warn_initializer_out_of_order : Warning<
   "%select{field|base class}0 %1 will be initialized after "
   "%select{field|base}2 %3">,
   InGroup<ReorderCtor>, DefaultIgnore;
+
+def warn_some_initializers_out_of_order : Warning<
+  "initializer order does not match the declaration order">,
+  InGroup<ReorderCtor>, DefaultIgnore;
+
+def note_initializer_out_of_order : Note<
+  "%select{field|base class}0 %1 will be initialized after "
+  "%select{field|base}2 %3">;
+
 def warn_abstract_vbase_init_ignored : Warning<
   "initializer for virtual base class %0 of abstract class %1 "
   "will never be used">,
@@ -9978,9 +10009,9 @@ def err_opencl_enqueue_kernel_blocks_no_args : Error<
 def err_opencl_builtin_expected_type : Error<
   "illegal call to %0, expected %1 argument type">;
 
-// OpenCL v2.2 s2.1.2.3 - Vector Component Access
+// OpenCL v3.0 s6.3.7 - Vector Components
 def ext_opencl_ext_vector_type_rgba_selector: ExtWarn<
-  "vector component name '%0' is an OpenCL version 2.2 feature">,
+  "vector component name '%0' is an OpenCL C version 3.0 feature">,
   InGroup<OpenCLUnsupportedRGBA>;
 
 def err_openclcxx_placement_new : Error<
@@ -10587,6 +10618,20 @@ def note_omp_protected_structured_block
     : Note<"jump bypasses OpenMP structured block">;
 def note_omp_exits_structured_block
     : Note<"jump exits scope of OpenMP structured block">;
+def err_omp_interop_variable_expected : Error<
+  "expected%select{| non-const}0 variable of type 'omp_interop_t'">;
+def err_omp_interop_variable_wrong_type : Error<
+  "interop variable must be of type 'omp_interop_t'">;
+def err_omp_interop_prefer_type : Error<
+  "prefer_list item must be a string literal or constant integral "
+  "expression">;
+def err_omp_interop_bad_depend_clause : Error<
+  "'depend' clause requires the 'targetsync' interop type">;
+def err_omp_interop_var_multiple_actions : Error<
+  "interop variable %0 used in multiple action clauses">;
+def err_omp_dispatch_statement_call
+    : Error<"statement after '#pragma omp dispatch' must be a direct call"
+            " to a target function or an assignment to one">;
 } // end of OpenMP category
 
 let CategoryName = "Related Result Type Issue" in {
@@ -11153,7 +11198,7 @@ def warn_tcb_enforcement_violation : Warning<
   "calling %0 is a violation of trusted computing base '%1'">,
   InGroup<DiagGroup<"tcb-enforcement">>;
 
-// RISC-V V-extension
-def err_riscvv_builtin_requires_v : Error<
-   "builtin requires 'V' extension support to be enabled">;
+// RISC-V builtin required extension warning
+def err_riscv_builtin_requires_extension : Error<
+  "builtin requires '%0' extension support to be enabled">;
 } // end of sema component.

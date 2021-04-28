@@ -791,6 +791,16 @@ void AsmPrinter::emitFunctionHeader() {
   // their wild and crazy things as required.
   emitFunctionEntryLabel();
 
+  // If the function had address-taken blocks that got deleted, then we have
+  // references to the dangling symbols.  Emit them at the start of the function
+  // so that we don't get references to undefined symbols.
+  std::vector<MCSymbol*> DeadBlockSyms;
+  MMI->takeDeletedSymbolsForFunction(&F, DeadBlockSyms);
+  for (unsigned i = 0, e = DeadBlockSyms.size(); i != e; ++i) {
+    OutStreamer->AddComment("Address taken block that was later removed");
+    OutStreamer->emitLabel(DeadBlockSyms[i]);
+  }
+
   if (CurrentFnBegin) {
     if (MAI->useAssignmentForEHBegin()) {
       MCSymbol *CurPos = OutContext.createTempSymbol();
@@ -1078,17 +1088,19 @@ void AsmPrinter::emitFrameAlloc(const MachineInstr &MI) {
 
 /// Returns the BB metadata to be emitted in the .llvm_bb_addr_map section for a
 /// given basic block. This can be used to capture more precise profile
-/// information. We use the last 3 bits (LSBs) to ecnode the following
+/// information. We use the last 4 bits (LSBs) to encode the following
 /// information:
 ///  * (1): set if return block (ret or tail call).
 ///  * (2): set if ends with a tail call.
 ///  * (3): set if exception handling (EH) landing pad.
+///  * (4): set if the block can fall through to its next.
 /// The remaining bits are zero.
 static unsigned getBBAddrMapMetadata(const MachineBasicBlock &MBB) {
   const TargetInstrInfo *TII = MBB.getParent()->getSubtarget().getInstrInfo();
   return ((unsigned)MBB.isReturnBlock()) |
          ((!MBB.empty() && TII->isTailCall(MBB.back())) << 1) |
-         (MBB.isEHPad() << 2);
+         (MBB.isEHPad() << 2) |
+         (const_cast<MachineBasicBlock &>(MBB).canFallThrough() << 3);
 }
 
 void AsmPrinter::emitBBAddrMapSection(const MachineFunction &MF) {
@@ -1363,8 +1375,7 @@ void AsmPrinter::emitFunctionBody() {
   const Triple &TT = TM.getTargetTriple();
   if (!HasAnyRealCode && (MAI->hasSubsectionsViaSymbols() ||
                           (TT.isOSWindows() && TT.isOSBinFormatCOFF()))) {
-    MCInst Noop;
-    MF->getSubtarget().getInstrInfo()->getNoop(Noop);
+    MCInst Noop = MF->getSubtarget().getInstrInfo()->getNop();
 
     // Targets can opt-out of emitting the noop here by leaving the opcode
     // unspecified.
@@ -1429,8 +1440,8 @@ void AsmPrinter::emitFunctionBody() {
   }
 
   // Emit section containing BB address offsets and their metadata, when
-  // BB labels are requested for this function.
-  if (MF->hasBBLabels())
+  // BB labels are requested for this function. Skip empty functions.
+  if (MF->hasBBLabels() && HasAnyRealCode)
     emitBBAddrMapSection(*MF);
 
   // Emit section containing stack size metadata.
@@ -3003,8 +3014,7 @@ void AsmPrinter::printOffset(int64_t Offset, raw_ostream &OS) const {
 }
 
 void AsmPrinter::emitNops(unsigned N) {
-  MCInst Nop;
-  MF->getSubtarget().getInstrInfo()->getNoop(Nop);
+  MCInst Nop = MF->getSubtarget().getInstrInfo()->getNop();
   for (; N; --N)
     EmitToStreamer(*OutStreamer, Nop);
 }

@@ -19,6 +19,8 @@
 #include "flang/Semantics/tools.h"
 #include "flang/Semantics/type.h"
 #include <algorithm>
+#include <map>
+#include <string>
 
 namespace Fortran::semantics {
 
@@ -100,6 +102,7 @@ private:
     }
   }
   bool IsResultOkToDiffer(const FunctionResult &);
+  void CheckBindCName(const Symbol &);
 
   SemanticsContext &context_;
   evaluate::FoldingContext &foldingContext_{context_.foldingContext()};
@@ -110,7 +113,10 @@ private:
   // that has a symbol.
   const Symbol *innermostSymbol_{nullptr};
   // Cache of calls to Procedure::Characterize(Symbol)
-  std::map<SymbolRef, std::optional<Procedure>> characterizeCache_;
+  std::map<SymbolRef, std::optional<Procedure>, SymbolAddressCompare>
+      characterizeCache_;
+  // Collection of symbols with BIND(C) names
+  std::map<std::string, SymbolRef> bindC_;
 };
 
 class DistinguishabilityHelper {
@@ -194,6 +200,7 @@ void CheckHelper::Check(const Symbol &symbol) {
   if (symbol.attrs().test(Attr::VOLATILE)) {
     CheckVolatile(symbol, derived);
   }
+  CheckBindCName(symbol);
   if (isDone) {
     return; // following checks do not apply
   }
@@ -1653,6 +1660,35 @@ void CheckHelper::CheckGenericOps(const Scope &scope) {
   helper.Check(scope);
 }
 
+static const std::string *DefinesBindCName(const Symbol &symbol) {
+  const auto *subp{symbol.detailsIf<SubprogramDetails>()};
+  if ((subp && !subp->isInterface()) || symbol.has<ObjectEntityDetails>()) {
+    // Symbol defines data or entry point
+    return symbol.GetBindName();
+  } else {
+    return nullptr;
+  }
+}
+
+// Check that BIND(C) names are distinct
+void CheckHelper::CheckBindCName(const Symbol &symbol) {
+  if (const std::string * name{DefinesBindCName(symbol)}) {
+    auto pair{bindC_.emplace(*name, symbol)};
+    if (!pair.second) {
+      const Symbol &other{*pair.first->second};
+      if (DefinesBindCName(other) && !context_.HasError(other)) {
+        if (auto *msg{messages_.Say(
+                "Two symbols have the same BIND(C) name '%s'"_err_en_US,
+                *name)}) {
+          msg->Attach(other.name(), "Conflicting symbol"_en_US);
+        }
+        context_.SetError(symbol);
+        context_.SetError(other);
+      }
+    }
+  }
+}
+
 void SubprogramMatchHelper::Check(
     const Symbol &symbol1, const Symbol &symbol2) {
   const auto details1{symbol1.get<SubprogramDetails>()};
@@ -1686,24 +1722,23 @@ void SubprogramMatchHelper::Check(
             : "Module subprogram '%s' does not have NON_RECURSIVE prefix but "
               "the corresponding interface body does"_err_en_US);
   }
-  MaybeExpr bindName1{details1.bindName()};
-  MaybeExpr bindName2{details2.bindName()};
-  if (bindName1.has_value() != bindName2.has_value()) {
+  const std::string *bindName1{details1.bindName()};
+  const std::string *bindName2{details2.bindName()};
+  if (!bindName1 && !bindName2) {
+    // OK - neither has a binding label
+  } else if (!bindName1) {
     Say(symbol1, symbol2,
-        bindName1.has_value()
-            ? "Module subprogram '%s' has a binding label but the corresponding"
-              " interface body does not"_err_en_US
-            : "Module subprogram '%s' does not have a binding label but the"
-              " corresponding interface body does"_err_en_US);
-  } else if (bindName1) {
-    std::string string1{bindName1->AsFortran()};
-    std::string string2{bindName2->AsFortran()};
-    if (string1 != string2) {
-      Say(symbol1, symbol2,
-          "Module subprogram '%s' has binding label %s but the corresponding"
-          " interface body has %s"_err_en_US,
-          string1, string2);
-    }
+        "Module subprogram '%s' does not have a binding label but the"
+        " corresponding interface body does"_err_en_US);
+  } else if (!bindName2) {
+    Say(symbol1, symbol2,
+        "Module subprogram '%s' has a binding label but the"
+        " corresponding interface body does not"_err_en_US);
+  } else if (*bindName1 != *bindName2) {
+    Say(symbol1, symbol2,
+        "Module subprogram '%s' has binding label '%s' but the corresponding"
+        " interface body has '%s'"_err_en_US,
+        *details1.bindName(), *details2.bindName());
   }
   const Procedure *proc1{checkHelper.Characterize(symbol1)};
   const Procedure *proc2{checkHelper.Characterize(symbol2)};

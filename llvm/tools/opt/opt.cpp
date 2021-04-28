@@ -520,7 +520,8 @@ static bool shouldPinPassToLegacyPM(StringRef Pass) {
       "expand-reductions",    "indirectbr-expand",
       "generic-to-nvvm",      "expandmemcmp",
       "loop-reduce",          "lower-amx-type",
-      "polyhedral-info",      "replace-with-veclib"};
+      "lower-amx-intrinsics", "polyhedral-info",
+      "replace-with-veclib"};
   for (const auto &P : PassNamePrefix)
     if (Pass.startswith(P))
       return true;
@@ -699,8 +700,8 @@ int main(int argc, char **argv) {
       OutputFilename = "-";
 
     std::error_code EC;
-    sys::fs::OpenFlags Flags = OutputAssembly ? sys::fs::OF_Text
-                                              : sys::fs::OF_None;
+    sys::fs::OpenFlags Flags =
+        OutputAssembly ? sys::fs::OF_TextWithCRLF : sys::fs::OF_None;
     Out.reset(new ToolOutputFile(OutputFilename, EC, Flags));
     if (EC) {
       errs() << EC.message() << '\n';

@@ -38,11 +38,12 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TimeProfiler.h"
-#include "llvm/TextAPI/MachO/PackedVersion.h"
+#include "llvm/TextAPI/PackedVersion.h"
 
 #include <algorithm>
 
@@ -54,7 +55,8 @@ using namespace llvm::sys;
 using namespace lld;
 using namespace lld::macho;
 
-Configuration *lld::macho::config;
+Configuration *macho::config;
+DependencyTracker *macho::depTracker;
 
 static HeaderFileType getOutputType(const InputArgList &args) {
   // TODO: -r, -dylinker, -preload...
@@ -84,6 +86,8 @@ findAlongPathsWithExtensions(StringRef name, ArrayRef<StringRef> extensions) {
       Twine location = base + ext;
       if (fs::exists(location))
         return location.str();
+      else
+        depTracker->logFileNotFound(location);
     }
   }
   return {};
@@ -352,8 +356,9 @@ static void addFramework(StringRef name, bool isWeak) {
   error("framework not found for -framework " + name);
 }
 
-// Parses LC_LINKER_OPTION contents, which can add additional command line flags.
-void macho::parseLCLinkerOption(InputFile* f, unsigned argc, StringRef data) {
+// Parses LC_LINKER_OPTION contents, which can add additional command line
+// flags.
+void macho::parseLCLinkerOption(InputFile *f, unsigned argc, StringRef data) {
   SmallVector<const char *, 4> argv;
   size_t offset = 0;
   for (unsigned i = 0; i < argc && offset < data.size(); ++i) {
@@ -493,6 +498,7 @@ static void initLLVM() {
 }
 
 static void compileBitcodeFiles() {
+  TimeTraceScope timeScope("LTO");
   auto *lto = make<BitcodeCompiler>();
   for (InputFile *file : inputFiles)
     if (auto *bitcodeFile = dyn_cast<BitcodeFile>(file))
@@ -507,7 +513,8 @@ static void compileBitcodeFiles() {
 // all InputFiles have been loaded.) As a result, later operations won't see
 // any CommonSymbols.
 static void replaceCommonSymbols() {
-  for (macho::Symbol *sym : symtab->getSymbols()) {
+  TimeTraceScope timeScope("Replace common symbols");
+  for (Symbol *sym : symtab->getSymbols()) {
     auto *common = dyn_cast<CommonSymbol>(sym);
     if (common == nullptr)
       continue;
@@ -525,6 +532,7 @@ static void replaceCommonSymbols() {
     inputSections.push_back(isec);
 
     replaceSymbol<Defined>(sym, sym->getName(), isec->file, isec, /*value=*/0,
+                           /*size=*/0,
                            /*isWeakDef=*/false,
                            /*isExternal=*/true, common->privateExtern);
   }
@@ -670,12 +678,15 @@ static const char *getReproduceOption(InputArgList &args) {
 static bool isPie(InputArgList &args) {
   if (config->outputType != MH_EXECUTE || args.hasArg(OPT_no_pie))
     return false;
-  if (config->target.Arch == AK_arm64 || config->target.Arch == AK_arm64e)
+  if (config->target.Arch == AK_arm64 || config->target.Arch == AK_arm64e ||
+      config->target.Arch == AK_arm64_32)
     return true;
 
   // TODO: add logic here as we support more archs. E.g. i386 should default
   // to PIE from 10.7
-  assert(config->target.Arch == AK_x86_64 || config->target.Arch == AK_x86_64h);
+  assert(config->target.Arch == AK_x86_64 ||
+         config->target.Arch == AK_x86_64h ||
+         config->target.Arch == AK_arm64_32);
 
   PlatformKind kind = config->target.Platform;
   if (kind == PlatformKind::macOS &&
@@ -716,6 +727,29 @@ static uint32_t parseDylibVersion(const ArgList &args, unsigned id) {
   }
 
   return version.rawValue();
+}
+
+static uint32_t parseProtection(StringRef protStr) {
+  uint32_t prot = 0;
+  for (char c : protStr) {
+    switch (c) {
+    case 'r':
+      prot |= VM_PROT_READ;
+      break;
+    case 'w':
+      prot |= VM_PROT_WRITE;
+      break;
+    case 'x':
+      prot |= VM_PROT_EXECUTE;
+      break;
+    case '-':
+      break;
+    default:
+      error("unknown -segprot letter '" + Twine(c) + "' in " + protStr);
+      return 0;
+    }
+  }
+  return prot;
 }
 
 void SymbolPatterns::clear() {
@@ -769,6 +803,44 @@ static void handleSymbolPatterns(InputArgList &args,
   }
 }
 
+void createFiles(const InputArgList &args) {
+  TimeTraceScope timeScope("Load input files");
+  // This loop should be reserved for options whose exact ordering matters.
+  // Other options should be handled via filtered() and/or getLastArg().
+  for (const Arg *arg : args) {
+    const Option &opt = arg->getOption();
+    warnIfDeprecatedOption(opt);
+    warnIfUnimplementedOption(opt);
+
+    switch (opt.getID()) {
+    case OPT_INPUT:
+      addFile(arg->getValue(), false);
+      break;
+    case OPT_weak_library:
+      if (auto *dylibFile =
+              dyn_cast_or_null<DylibFile>(addFile(arg->getValue(), false)))
+        dylibFile->forceWeakImport = true;
+      break;
+    case OPT_filelist:
+      addFileList(arg->getValue());
+      break;
+    case OPT_force_load:
+      addFile(arg->getValue(), true);
+      break;
+    case OPT_l:
+    case OPT_weak_l:
+      addLibrary(arg->getValue(), opt.getID() == OPT_weak_l);
+      break;
+    case OPT_framework:
+    case OPT_weak_framework:
+      addFramework(arg->getValue(), opt.getID() == OPT_weak_framework);
+      break;
+    default:
+      break;
+    }
+  }
+}
+
 bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
                  raw_ostream &stdoutOS, raw_ostream &stderrOS) {
   lld::stdoutOS = &stdoutOS;
@@ -779,7 +851,6 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
   errorHandler().logName = args::getFilenameWithoutExe(argsArr[0]);
   stderrOS.enable_colors(stderrOS.has_colors());
   // TODO: Set up error handler properly, e.g. the errorLimitExceededMsg
-
 
   MachOOptTable parser;
   InputArgList args = parser.parse(argsArr.slice(1));
@@ -815,6 +886,23 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
   symtab = make<SymbolTable>();
   target = createTargetInfo(args);
 
+  depTracker =
+      make<DependencyTracker>(args.getLastArgValue(OPT_dependency_info, ""));
+
+  if (auto *arg = args.getLastArg(OPT_threads_eq)) {
+    StringRef v(arg->getValue());
+    unsigned threads = 0;
+    if (!llvm::to_integer(v, threads, 0) || threads == 0)
+      error(arg->getSpelling() + ": expected a positive integer, but got '" +
+            arg->getValue() + "'");
+    parallel::strategy = hardware_concurrency(threads);
+    config->thinLTOJobs = v;
+  }
+  if (auto *arg = args.getLastArg(OPT_thinlto_jobs_eq))
+    config->thinLTOJobs = arg->getValue();
+  if (!get_threadpool_strategy(config->thinLTOJobs))
+    error("--thinlto-jobs: invalid job count: " + config->thinLTOJobs);
+
   config->entry = symtab->addUndefined(args.getLastArgValue(OPT_e, "_main"),
                                        /*file=*/nullptr,
                                        /*isWeakRef=*/false);
@@ -826,7 +914,9 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
   for (const Arg *arg : args.filtered(OPT_U))
     symtab->addDynamicLookup(arg->getValue());
 
+  config->mapFile = args.getLastArgValue(OPT_map);
   config->outputFile = args.getLastArgValue(OPT_o, "a.out");
+  config->astPaths = args.getAllArgValues(OPT_add_ast_path);
   config->headerPad = args::getHex(args, OPT_headerpad, /*Default=*/32);
   config->headerPadMaxInstallNames =
       args.hasArg(OPT_headerpad_max_install_names);
@@ -847,6 +937,7 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
   config->forceLoadObjC = args.hasArg(OPT_ObjC);
   config->demangle = args.hasArg(OPT_demangle);
   config->implicitDylibs = !args.hasArg(OPT_no_implicit_dylibs);
+  config->emitFunctionStarts = !args.hasArg(OPT_no_function_starts);
 
   if (const Arg *arg = args.getLastArg(OPT_install_name)) {
     if (config->outputType != MH_DYLIB)
@@ -907,6 +998,18 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
         validName(arg->getValue(1));
   }
 
+  for (const Arg *arg : args.filtered(OPT_segprot)) {
+    StringRef segName = arg->getValue(0);
+    uint32_t maxProt = parseProtection(arg->getValue(1));
+    uint32_t initProt = parseProtection(arg->getValue(2));
+    if (maxProt != initProt && config->target.Arch != AK_i386)
+      error("invalid argument '" + arg->getAsString(args) +
+            "': max and init must be the same for non-i386 archs");
+    if (segName == segment_names::linkEdit)
+      error("-segprot cannot be used to change __LINKEDIT's protections");
+    config->segmentProtections.push_back({segName, maxProt, initProt});
+  }
+
   handleSymbolPatterns(args, config->exportedSymbols, OPT_exported_symbol,
                        OPT_exported_symbols_list);
   handleSymbolPatterns(args, config->unexportedSymbols, OPT_unexported_symbol,
@@ -927,79 +1030,53 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
   if (args.hasArg(OPT_v)) {
     message(getLLDVersion());
     message(StringRef("Library search paths:") +
-            (config->librarySearchPaths.size()
-                 ? "\n\t" + join(config->librarySearchPaths, "\n\t")
-                 : ""));
+            (config->librarySearchPaths.empty()
+                 ? ""
+                 : "\n\t" + join(config->librarySearchPaths, "\n\t")));
     message(StringRef("Framework search paths:") +
-            (config->frameworkSearchPaths.size()
-                 ? "\n\t" + join(config->frameworkSearchPaths, "\n\t")
-                 : ""));
+            (config->frameworkSearchPaths.empty()
+                 ? ""
+                 : "\n\t" + join(config->frameworkSearchPaths, "\n\t")));
   }
 
   config->progName = argsArr[0];
 
-  config->timeTraceEnabled = args.hasArg(OPT_time_trace);
+  config->timeTraceEnabled = args.hasArg(
+      OPT_time_trace, OPT_time_trace_granularity_eq, OPT_time_trace_file_eq);
+  config->timeTraceGranularity =
+      args::getInteger(args, OPT_time_trace_granularity_eq, 500);
 
   // Initialize time trace profiler.
   if (config->timeTraceEnabled)
     timeTraceProfilerInitialize(config->timeTraceGranularity, config->progName);
 
   {
-    llvm::TimeTraceScope timeScope("Link", StringRef("ExecuteLinker"));
+    TimeTraceScope timeScope("ExecuteLinker");
 
     initLLVM(); // must be run before any call to addFile()
-
-    // This loop should be reserved for options whose exact ordering matters.
-    // Other options should be handled via filtered() and/or getLastArg().
-    for (const Arg *arg : args) {
-      const Option &opt = arg->getOption();
-      warnIfDeprecatedOption(opt);
-      warnIfUnimplementedOption(opt);
-
-      switch (opt.getID()) {
-      case OPT_INPUT:
-        addFile(arg->getValue(), false);
-        break;
-      case OPT_weak_library:
-        if (auto *dylibFile =
-                dyn_cast_or_null<DylibFile>(addFile(arg->getValue(), false)))
-          dylibFile->forceWeakImport = true;
-        break;
-      case OPT_filelist:
-        addFileList(arg->getValue());
-        break;
-      case OPT_force_load:
-        addFile(arg->getValue(), true);
-        break;
-      case OPT_l:
-      case OPT_weak_l:
-        addLibrary(arg->getValue(), opt.getID() == OPT_weak_l);
-        break;
-      case OPT_framework:
-      case OPT_weak_framework:
-        addFramework(arg->getValue(), opt.getID() == OPT_weak_framework);
-        break;
-      default:
-        break;
-      }
-    }
+    createFiles(args);
 
     config->isPic = config->outputType == MH_DYLIB ||
                     config->outputType == MH_BUNDLE || isPie(args);
 
     // Now that all dylibs have been loaded, search for those that should be
     // re-exported.
-    for (const Arg *arg : args.filtered(OPT_sub_library, OPT_sub_umbrella)) {
-      config->hasReexports = true;
-      StringRef searchName = arg->getValue();
-      std::vector<StringRef> extensions;
-      if (arg->getOption().getID() == OPT_sub_library)
-        extensions = {".dylib", ".tbd"};
-      else
-        extensions = {".tbd"};
-      if (!markReexport(searchName, extensions))
-        error(arg->getSpelling() + " " + searchName +
-              " does not match a supplied dylib");
+    {
+      auto reexportHandler = [](const Arg *arg,
+                                const std::vector<StringRef> &extensions) {
+        config->hasReexports = true;
+        StringRef searchName = arg->getValue();
+        if (!markReexport(searchName, extensions))
+          error(arg->getSpelling() + " " + searchName +
+                " does not match a supplied dylib");
+      };
+      std::vector<StringRef> extensions = {".tbd"};
+      for (const Arg *arg : args.filtered(OPT_sub_umbrella))
+        reexportHandler(arg, extensions);
+
+      extensions.push_back(".dylib");
+      for (const Arg *arg : args.filtered(OPT_sub_library))
+        reexportHandler(arg, extensions);
     }
 
     // Parse LTO options.
@@ -1030,16 +1107,23 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
         return false;
       }
     }
+    // Literal exported-symbol names must be defined, but glob
+    // patterns need not match.
+    for (const CachedHashStringRef &cachedName :
+         config->exportedSymbols.literals) {
+      if (const Symbol *sym = symtab->find(cachedName))
+        if (isa<Defined>(sym))
+          continue;
+      error("undefined symbol " + cachedName.val() +
+            "\n>>> referenced from option -exported_symbol(s_list)");
+    }
 
-    createSyntheticSections();
+    if (target->wordSize == 8)
+      createSyntheticSections<LP64>();
+    else
+      createSyntheticSections<ILP32>();
 
-    // The Itanium C++ ABI requires dylibs to pass a pointer to __cxa_atexit
-    // which does e.g. cleanup of static global variables. The ABI document says
-    // that the pointer can point to any address in one of the dylib's segments,
-    // but in practice ld64 seems to set it to point to the header, so that's
-    // what's implemented here.
-    symtab->addSynthetic("___dso_handle", in.header->isec, 0,
-                         /*privateExtern=*/true, /*linkerInternal=*/true);
+    createSyntheticSymbols();
 
     for (const Arg *arg : args.filtered(OPT_sectcreate)) {
       StringRef segName = arg->getValue(0);
@@ -1050,18 +1134,23 @@ bool macho::link(ArrayRef<const char *> argsArr, bool canExitEarly,
         inputFiles.insert(make<OpaqueFile>(*buffer, segName, sectName));
     }
 
-    // Initialize InputSections.
-    for (const InputFile *file : inputFiles) {
-      for (const SubsectionMap &map : file->subsections) {
-        for (const auto &p : map) {
-          InputSection *isec = p.second;
-          inputSections.push_back(isec);
-        }
+    {
+      TimeTraceScope timeScope("Gathering input sections");
+      // Gather all InputSections into one vector.
+      for (const InputFile *file : inputFiles) {
+        for (const SubsectionMap &map : file->subsections)
+          for (const SubsectionEntry &subsectionEntry : map)
+            inputSections.push_back(subsectionEntry.isec);
       }
     }
 
     // Write to an output file.
-    writeResult();
+    if (target->wordSize == 8)
+      writeResult<LP64>();
+    else
+      writeResult<ILP32>();
+
+    depTracker->write(getLLDVersion(), inputFiles, config->outputFile);
   }
 
   if (config->timeTraceEnabled) {
