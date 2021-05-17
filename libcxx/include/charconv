@@ -76,12 +76,12 @@ namespace std {
 #include <__config>
 #include <__availability>
 #include <__errc>
+#include <__utility/to_underlying.h>
 #include <cmath> // for log2f
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <type_traits>
-#include <utility>
 
 #include <__debug>
 
@@ -659,10 +659,10 @@ from_chars(const char* __first, const char* __last, _Tp& __value, int __base)
     return __from_chars_integral(__first, __last, __value, __base);
 }
 
-#endif  // _LIBCPP_CXX03_LANG
+#endif // _LIBCPP_CXX03_LANG
 
 _LIBCPP_END_NAMESPACE_STD
 
 _LIBCPP_POP_MACROS
 
-#endif  // _LIBCPP_CHARCONV
+#endif // _LIBCPP_CHARCONV

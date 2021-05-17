@@ -1415,10 +1415,15 @@ bool SITargetLowering::allowsMisalignedMemoryAccessesImpl(
       return true;
     }
 
+    // Either, the alignment requirements are "enabled", or there is an
+    // unaligned LDS access related hardware bug though alignment requirements
+    // are "disabled". In either case, we need to check for proper alignment
+    // requirements.
+    //
     if (Size == 64) {
-      // ds_read/write_b64 require 8-byte alignment, but we can do a 4 byte
-      // aligned, 8 byte access in a single operation using ds_read2/write2_b32
-      // with adjacent offsets.
+      // 8 byte accessing via ds_read/write_b64 require 8-byte alignment, but we
+      // can do a 4 byte aligned, 8 byte access in a single operation using
+      // ds_read2/write2_b32 with adjacent offsets.
       bool AlignedBy4 = Alignment >= Align(4);
       if (IsFast)
         *IsFast = AlignedBy4;
@@ -1426,22 +1431,23 @@ bool SITargetLowering::allowsMisalignedMemoryAccessesImpl(
       return AlignedBy4;
     }
     if (Size == 96) {
-      // ds_read/write_b96 require 16-byte alignment on gfx8 and older.
-      bool Aligned = Alignment >= Align(16);
+      // 12 byte accessing via ds_read/write_b96 require 16-byte alignment on
+      // gfx8 and older.
+      bool AlignedBy16 = Alignment >= Align(16);
       if (IsFast)
-        *IsFast = Aligned;
+        *IsFast = AlignedBy16;
 
-      return Aligned;
+      return AlignedBy16;
     }
     if (Size == 128) {
-      // ds_read/write_b128 require 16-byte alignment on gfx8 and older, but we
-      // can do a 8 byte aligned, 16 byte access in a single operation using
-      // ds_read2/write2_b64.
-      bool Aligned = Alignment >= Align(8);
+      // 16 byte accessing via ds_read/write_b128 require 16-byte alignment on
+      // gfx8 and older, but  we can do a 8 byte aligned, 16 byte access in a
+      // single operation using ds_read2/write2_b64.
+      bool AlignedBy8 = Alignment >= Align(8);
       if (IsFast)
-        *IsFast = Aligned;
+        *IsFast = AlignedBy8;
 
-      return Aligned;
+      return AlignedBy8;
     }
   }
 
@@ -2846,6 +2852,11 @@ bool SITargetLowering::isEligibleForTailCallOptimization(
     const SmallVectorImpl<SDValue> &OutVals,
     const SmallVectorImpl<ISD::InputArg> &Ins, SelectionDAG &DAG) const {
   if (!mayTailCallThisCC(CalleeCC))
+    return false;
+
+  // For a divergent call target, we need to do a waterfall loop over the
+  // possible callees which precludes us from using a simple jump.
+  if (Callee->isDivergent())
     return false;
 
   MachineFunction &MF = DAG.getMachineFunction();
@@ -9670,6 +9681,45 @@ bool SITargetLowering::isCanonicalized(SelectionDAG &DAG, SDValue Op,
   llvm_unreachable("invalid operation");
 }
 
+bool SITargetLowering::isCanonicalized(Register Reg, MachineFunction &MF,
+                                       unsigned MaxDepth) const {
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  MachineInstr *MI = MRI.getVRegDef(Reg);
+  unsigned Opcode = MI->getOpcode();
+
+  if (Opcode == AMDGPU::G_FCANONICALIZE)
+    return true;
+
+  if (Opcode == AMDGPU::G_FCONSTANT) {
+    auto F = MI->getOperand(1).getFPImm()->getValueAPF();
+    if (F.isNaN() && F.isSignaling())
+      return false;
+    return !F.isDenormal() || denormalsEnabledForType(MRI.getType(Reg), MF);
+  }
+
+  if (MaxDepth == 0)
+    return false;
+
+  switch (Opcode) {
+  case AMDGPU::G_FMINNUM_IEEE:
+  case AMDGPU::G_FMAXNUM_IEEE: {
+    if (Subtarget->supportsMinMaxDenormModes() ||
+        denormalsEnabledForType(MRI.getType(Reg), MF))
+      return true;
+    for (unsigned I = 1, E = MI->getNumOperands(); I != E; ++I) {
+      if (!isCanonicalized(MI->getOperand(I).getReg(), MF, MaxDepth - 1))
+        return false;
+    }
+    return true;
+  }
+  default:
+    return denormalsEnabledForType(MRI.getType(Reg), MF) &&
+           isKnownNeverSNaN(Reg, MRI);
+  }
+
+  llvm_unreachable("invalid operation");
+}
+
 // Constant fold canonicalize.
 SDValue SITargetLowering::getCanonicalConstantFP(
   SelectionDAG &DAG, const SDLoc &SL, EVT VT, const APFloat &C) const {
@@ -12030,6 +12080,19 @@ bool SITargetLowering::denormalsEnabledForType(const SelectionDAG &DAG,
   case MVT::f64:
   case MVT::f16:
     return hasFP64FP16Denormals(DAG.getMachineFunction());
+  default:
+    return false;
+  }
+}
+
+bool SITargetLowering::denormalsEnabledForType(LLT Ty,
+                                               MachineFunction &MF) const {
+  switch (Ty.getScalarSizeInBits()) {
+  case 32:
+    return hasFP32Denormals(MF);
+  case 64:
+  case 16:
+    return hasFP64FP16Denormals(MF);
   default:
     return false;
   }

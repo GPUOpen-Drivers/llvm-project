@@ -642,6 +642,15 @@ def Alias : Attr {
   let Documentation = [Undocumented];
 }
 
+def BuiltinAlias : Attr {
+  let Spellings = [CXX11<"clang", "builtin_alias">,
+                   C2x<"clang", "builtin_alias">,
+                   GNU<"clang_builtin_alias">];
+  let Args = [IdentifierArgument<"BuiltinName">];
+  let Subjects = SubjectList<[Function], ErrorDiag>;
+  let Documentation = [BuiltinAliasDocs];
+}
+
 def ArmBuiltinAlias : InheritableAttr, TargetSpecificAttr<TargetAnyArm> {
   let Spellings = [Clang<"__clang_arm_builtin_alias">];
   let Args = [IdentifierArgument<"BuiltinName">];
@@ -1370,6 +1379,12 @@ def NoMerge : DeclOrStmtAttr {
   let SimpleHandler = 1;
 }
 
+def MustTail : StmtAttr {
+  let Spellings = [Clang<"musttail">];
+  let Documentation = [MustTailDocs];
+  let Subjects = SubjectList<[ReturnStmt], ErrorDiag, "return statements">;
+}
+
 def FastCall : DeclOrTypeAttr {
   let Spellings = [GCC<"fastcall">, Keyword<"__fastcall">,
                    Keyword<"_fastcall">];
@@ -1488,7 +1503,7 @@ def IFunc : Attr, TargetSpecificAttr<TargetELF> {
 def Restrict : InheritableAttr {
   let Spellings = [Declspec<"restrict">, GCC<"malloc">];
   let Subjects = SubjectList<[Function]>;
-  let Documentation = [Undocumented];
+  let Documentation = [RestrictDocs];
 }
 
 def LayoutVersion : InheritableAttr, TargetSpecificAttr<TargetMicrosoftCXXABI> {

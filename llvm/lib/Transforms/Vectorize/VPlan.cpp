@@ -510,6 +510,31 @@ void VPRegionBlock::print(raw_ostream &O, const Twine &Indent,
 }
 #endif
 
+bool VPRecipeBase::mayHaveSideEffects() const {
+  switch (getVPDefID()) {
+  case VPBranchOnMaskSC:
+    return false;
+  case VPBlendSC:
+  case VPWidenSC:
+  case VPWidenGEPSC:
+  case VPReductionSC:
+  case VPWidenSelectSC: {
+    const Instruction *I =
+        dyn_cast_or_null<Instruction>(getVPValue()->getUnderlyingValue());
+    (void)I;
+    assert((!I || !I->mayHaveSideEffects()) &&
+           "underlying instruction has side-effects");
+    return false;
+  }
+  case VPReplicateSC: {
+    auto *R = cast<VPReplicateRecipe>(this);
+    return R->getUnderlyingInstr()->mayHaveSideEffects();
+  }
+  default:
+    return true;
+  }
+}
+
 void VPRecipeBase::insertBefore(VPRecipeBase *InsertPos) {
   assert(!Parent && "Recipe already in some VPBasicBlock");
   assert(InsertPos->getParent() &&
@@ -1225,26 +1250,6 @@ void VPSlotTracker::assignSlot(const VPValue *V) {
   Slots[V] = NextSlot++;
 }
 
-void VPSlotTracker::assignSlots(const VPBlockBase *VPBB) {
-  if (auto *Region = dyn_cast<VPRegionBlock>(VPBB))
-    assignSlots(Region);
-  else
-    assignSlots(cast<VPBasicBlock>(VPBB));
-}
-
-void VPSlotTracker::assignSlots(const VPRegionBlock *Region) {
-  ReversePostOrderTraversal<const VPBlockBase *> RPOT(Region->getEntry());
-  for (const VPBlockBase *Block : RPOT)
-    assignSlots(Block);
-}
-
-void VPSlotTracker::assignSlots(const VPBasicBlock *VPBB) {
-  for (const VPRecipeBase &Recipe : *VPBB) {
-    for (VPValue *Def : Recipe.definedValues())
-      assignSlot(Def);
-  }
-}
-
 void VPSlotTracker::assignSlots(const VPlan &Plan) {
 
   for (const VPValue *V : Plan.VPExternalDefs)
@@ -1253,7 +1258,13 @@ void VPSlotTracker::assignSlots(const VPlan &Plan) {
   if (Plan.BackedgeTakenCount)
     assignSlot(Plan.BackedgeTakenCount);
 
-  ReversePostOrderTraversal<const VPBlockBase *> RPOT(Plan.getEntry());
-  for (const VPBlockBase *Block : RPOT)
-    assignSlots(Block);
+  ReversePostOrderTraversal<
+      VPBlockRecursiveTraversalWrapper<const VPBlockBase *>>
+      RPOT(VPBlockRecursiveTraversalWrapper<const VPBlockBase *>(
+          Plan.getEntry()));
+  for (const VPBasicBlock *VPBB :
+       VPBlockUtils::blocksOnly<const VPBasicBlock>(RPOT))
+    for (const VPRecipeBase &Recipe : *VPBB)
+      for (VPValue *Def : Recipe.definedValues())
+        assignSlot(Def);
 }

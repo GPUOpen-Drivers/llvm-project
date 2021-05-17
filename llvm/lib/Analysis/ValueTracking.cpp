@@ -107,40 +107,13 @@ struct Query {
   // provide it currently.
   OptimizationRemarkEmitter *ORE;
 
-  /// Set of assumptions that should be excluded from further queries.
-  /// This is because of the potential for mutual recursion to cause
-  /// computeKnownBits to repeatedly visit the same assume intrinsic. The
-  /// classic case of this is assume(x = y), which will attempt to determine
-  /// bits in x from bits in y, which will attempt to determine bits in y from
-  /// bits in x, etc. Regarding the mutual recursion, computeKnownBits can call
-  /// isKnownNonZero, which calls computeKnownBits and isKnownToBeAPowerOfTwo
-  /// (all of which can call computeKnownBits), and so on.
-  std::array<const Value *, MaxAnalysisRecursionDepth> Excluded;
-
   /// If true, it is safe to use metadata during simplification.
   InstrInfoQuery IIQ;
-
-  unsigned NumExcluded = 0;
 
   Query(const DataLayout &DL, AssumptionCache *AC, const Instruction *CxtI,
         const DominatorTree *DT, bool UseInstrInfo,
         OptimizationRemarkEmitter *ORE = nullptr)
       : DL(DL), AC(AC), CxtI(CxtI), DT(DT), ORE(ORE), IIQ(UseInstrInfo) {}
-
-  Query(const Query &Q, const Value *NewExcl)
-      : DL(Q.DL), AC(Q.AC), CxtI(Q.CxtI), DT(Q.DT), ORE(Q.ORE), IIQ(Q.IIQ),
-        NumExcluded(Q.NumExcluded) {
-    Excluded = Q.Excluded;
-    Excluded[NumExcluded++] = NewExcl;
-    assert(NumExcluded <= Excluded.size());
-  }
-
-  bool isExcluded(const Value *Value) const {
-    if (NumExcluded == 0)
-      return false;
-    auto End = Excluded.begin() + NumExcluded;
-    return std::find(Excluded.begin(), End, Value) != End;
-  }
 };
 
 } // end anonymous namespace
@@ -632,8 +605,6 @@ static bool isKnownNonZeroFromAssume(const Value *V, const Query &Q) {
     CallInst *I = cast<CallInst>(AssumeVH);
     assert(I->getFunction() == Q.CxtI->getFunction() &&
            "Got assumption for the wrong function!");
-    if (Q.isExcluded(I))
-      continue;
 
     // Warning: This loop can end up being somewhat performance sensitive.
     // We're running this loop for once for each value queried resulting in a
@@ -681,8 +652,6 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
     CallInst *I = cast<CallInst>(AssumeVH);
     assert(I->getParent()->getParent() == Q.CxtI->getParent()->getParent() &&
            "Got assumption for the wrong function!");
-    if (Q.isExcluded(I))
-      continue;
 
     // Warning: This loop can end up being somewhat performance sensitive.
     // We're running this loop for once for each value queried resulting in a
@@ -713,6 +682,15 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
     if (!Cmp)
       continue;
 
+    // We are attempting to compute known bits for the operands of an assume.
+    // Do not try to use other assumptions for those recursive calls because
+    // that can lead to mutual recursion and a compile-time explosion.
+    // An example of the mutual recursion: computeKnownBits can call
+    // isKnownNonZero which calls computeKnownBitsFromAssume (this function)
+    // and so on.
+    Query QueryNoAC = Q;
+    QueryNoAC.AC = nullptr;
+
     // Note that ptrtoint may change the bitwidth.
     Value *A, *B;
     auto m_V = m_CombineOr(m_Specific(V), m_PtrToInt(m_Specific(V)));
@@ -727,7 +705,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
       if (match(Cmp, m_c_ICmp(Pred, m_V, m_Value(A))) &&
           isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         Known.Zero |= RHSKnown.Zero;
         Known.One  |= RHSKnown.One;
       // assume(v & b = a)
@@ -735,9 +713,9 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                        m_c_ICmp(Pred, m_c_And(m_V, m_Value(B)), m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         KnownBits MaskKnown =
-            computeKnownBits(B, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(B, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // For those bits in the mask that are known to be one, we can propagate
         // known bits from the RHS to V.
@@ -748,9 +726,9 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                                      m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         KnownBits MaskKnown =
-            computeKnownBits(B, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(B, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // For those bits in the mask that are known to be one, we can propagate
         // inverted known bits from the RHS to V.
@@ -761,9 +739,9 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                        m_c_ICmp(Pred, m_c_Or(m_V, m_Value(B)), m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         KnownBits BKnown =
-            computeKnownBits(B, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(B, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // For those bits in B that are known to be zero, we can propagate known
         // bits from the RHS to V.
@@ -774,9 +752,9 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                                      m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         KnownBits BKnown =
-            computeKnownBits(B, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(B, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // For those bits in B that are known to be zero, we can propagate
         // inverted known bits from the RHS to V.
@@ -787,9 +765,9 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                        m_c_ICmp(Pred, m_c_Xor(m_V, m_Value(B)), m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         KnownBits BKnown =
-            computeKnownBits(B, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(B, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // For those bits in B that are known to be zero, we can propagate known
         // bits from the RHS to V. For those bits in B that are known to be one,
@@ -803,9 +781,9 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                                      m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         KnownBits BKnown =
-            computeKnownBits(B, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(B, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // For those bits in B that are known to be zero, we can propagate
         // inverted known bits from the RHS to V. For those bits in B that are
@@ -819,7 +797,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                                      m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT) && C < BitWidth) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // For those bits in RHS that are known, we can propagate them to known
         // bits in V shifted to the right by C.
@@ -832,7 +810,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                                      m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT) && C < BitWidth) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         // For those bits in RHS that are known, we can propagate them inverted
         // to known bits in V shifted to the right by C.
         RHSKnown.One.lshrInPlace(C);
@@ -844,7 +822,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                                      m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT) && C < BitWidth) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         // For those bits in RHS that are known, we can propagate them to known
         // bits in V shifted to the right by C.
         Known.Zero |= RHSKnown.Zero << C;
@@ -854,7 +832,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
                                      m_Value(A))) &&
                  isValidAssumeForContext(I, Q.CxtI, Q.DT) && C < BitWidth) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
         // For those bits in RHS that are known, we can propagate them inverted
         // to known bits in V shifted to the right by C.
         Known.Zero |= RHSKnown.One  << C;
@@ -866,7 +844,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
       if (match(Cmp, m_ICmp(Pred, m_V, m_Value(A))) &&
           isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth + 1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth + 1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         if (RHSKnown.isNonNegative()) {
           // We know that the sign bit is zero.
@@ -879,7 +857,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
       if (match(Cmp, m_ICmp(Pred, m_V, m_Value(A))) &&
           isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth + 1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth + 1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         if (RHSKnown.isAllOnes() || RHSKnown.isNonNegative()) {
           // We know that the sign bit is zero.
@@ -892,7 +870,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
       if (match(Cmp, m_ICmp(Pred, m_V, m_Value(A))) &&
           isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth + 1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth + 1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         if (RHSKnown.isNegative()) {
           // We know that the sign bit is one.
@@ -905,7 +883,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
       if (match(Cmp, m_ICmp(Pred, m_V, m_Value(A))) &&
           isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         if (RHSKnown.isZero() || RHSKnown.isNegative()) {
           // We know that the sign bit is one.
@@ -918,7 +896,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
       if (match(Cmp, m_ICmp(Pred, m_V, m_Value(A))) &&
           isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // Whatever high bits in c are zero are known to be zero.
         Known.Zero.setHighBits(RHSKnown.countMinLeadingZeros());
@@ -929,7 +907,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
       if (match(Cmp, m_ICmp(Pred, m_V, m_Value(A))) &&
           isValidAssumeForContext(I, Q.CxtI, Q.DT)) {
         KnownBits RHSKnown =
-            computeKnownBits(A, Depth+1, Query(Q, I)).anyextOrTrunc(BitWidth);
+            computeKnownBits(A, Depth+1, QueryNoAC).anyextOrTrunc(BitWidth);
 
         // If the RHS is known zero, then this assumption must be wrong (nothing
         // is unsigned less than zero). Signal a conflict and get out of here.
@@ -941,7 +919,7 @@ static void computeKnownBitsFromAssume(const Value *V, KnownBits &Known,
 
         // Whatever high bits in c are zero are known to be zero (if c is a power
         // of 2, then one more).
-        if (isKnownToBeAPowerOfTwo(A, false, Depth + 1, Query(Q, I)))
+        if (isKnownToBeAPowerOfTwo(A, false, Depth + 1, QueryNoAC))
           Known.Zero.setHighBits(RHSKnown.countMinLeadingZeros() + 1);
         else
           Known.Zero.setHighBits(RHSKnown.countMinLeadingZeros());
@@ -2535,16 +2513,21 @@ bool isKnownNonZero(const Value* V, unsigned Depth, const Query& Q) {
   return isKnownNonZero(V, DemandedElts, Depth, Q);
 }
 
-/// If the pair of operators are the same invertible function of a single
-/// operand return the index of that operand.  Otherwise, return None.  An
-/// invertible function is one that is 1-to-1 and maps every input value
-/// to exactly one output value.  This is equivalent to saying that Op1
-/// and Op2 are equal exactly when the specified pair of operands are equal,
-/// (except that Op1 and Op2 may be poison more often.)
-static Optional<unsigned> getInvertibleOperand(const Operator *Op1,
-                                               const Operator *Op2) {
+/// If the pair of operators are the same invertible function, return the
+/// the operands of the function corresponding to each input. Otherwise,
+/// return None.  An invertible function is one that is 1-to-1 and maps
+/// every input value to exactly one output value.  This is equivalent to
+/// saying that Op1 and Op2 are equal exactly when the specified pair of
+/// operands are equal, (except that Op1 and Op2 may be poison more often.)
+static Optional<std::pair<Value*, Value*>>
+getInvertibleOperands(const Operator *Op1,
+                      const Operator *Op2) {
   if (Op1->getOpcode() != Op2->getOpcode())
     return None;
+
+  auto getOperands = [&](unsigned OpNum) -> auto {
+    return std::make_pair(Op1->getOperand(OpNum), Op2->getOperand(OpNum));
+  };
 
   switch (Op1->getOpcode()) {
   default:
@@ -2552,9 +2535,9 @@ static Optional<unsigned> getInvertibleOperand(const Operator *Op1,
   case Instruction::Add:
   case Instruction::Sub:
     if (Op1->getOperand(0) == Op2->getOperand(0))
-      return 1;
+      return getOperands(1);
     if (Op1->getOperand(1) == Op2->getOperand(1))
-      return 0;
+      return getOperands(0);
     break;
   case Instruction::Mul: {
     // invertible if A * B == (A * B) mod 2^N where A, and B are integers
@@ -2570,7 +2553,7 @@ static Optional<unsigned> getInvertibleOperand(const Operator *Op1,
     if (Op1->getOperand(1) == Op2->getOperand(1) &&
         isa<ConstantInt>(Op1->getOperand(1)) &&
         !cast<ConstantInt>(Op1->getOperand(1))->isZero())
-      return 0;
+      return getOperands(0);
     break;
   }
   case Instruction::Shl: {
@@ -2583,7 +2566,7 @@ static Optional<unsigned> getInvertibleOperand(const Operator *Op1,
       break;
 
     if (Op1->getOperand(1) == Op2->getOperand(1))
-      return 0;
+      return getOperands(0);
     break;
   }
   case Instruction::AShr:
@@ -2594,14 +2577,37 @@ static Optional<unsigned> getInvertibleOperand(const Operator *Op1,
       break;
 
     if (Op1->getOperand(1) == Op2->getOperand(1))
-      return 0;
+      return getOperands(0);
     break;
   }
   case Instruction::SExt:
   case Instruction::ZExt:
     if (Op1->getOperand(0)->getType() == Op2->getOperand(0)->getType())
-      return 0;
+      return getOperands(0);
     break;
+  case Instruction::PHI: {
+    const PHINode *PN1 = cast<PHINode>(Op1);
+    const PHINode *PN2 = cast<PHINode>(Op2);
+
+    // If PN1 and PN2 are both recurrences, can we prove the entire recurrences
+    // are a single invertible function of the start values? Note that repeated
+    // application of an invertible function is also invertible
+    BinaryOperator *BO1 = nullptr;
+    Value *Start1 = nullptr, *Step1 = nullptr;
+    BinaryOperator *BO2 = nullptr;
+    Value *Start2 = nullptr, *Step2 = nullptr;
+    if (PN1->getParent() != PN2->getParent() ||
+        !matchSimpleRecurrence(PN1, BO1, Start1, Step1) ||
+        !matchSimpleRecurrence(PN2, BO2, Start2, Step2))
+      break;
+
+    auto Values = getInvertibleOperands(cast<Operator>(BO1),
+                                        cast<Operator>(BO2));
+    if (!Values)
+      break;
+    assert(Values->first == PN1 && Values->second == PN2);
+    return std::make_pair(Start1, Start2);
+  }
   }
   return None;
 }
@@ -2697,11 +2703,9 @@ static bool isKnownNonEqual(const Value *V1, const Value *V2, unsigned Depth,
   auto *O1 = dyn_cast<Operator>(V1);
   auto *O2 = dyn_cast<Operator>(V2);
   if (O1 && O2 && O1->getOpcode() == O2->getOpcode()) {
-    if (Optional<unsigned> Opt = getInvertibleOperand(O1, O2)) {
-      unsigned Idx = *Opt;
-      return isKnownNonEqual(O1->getOperand(Idx), O2->getOperand(Idx),
-                             Depth + 1, Q);
-    }
+    if (auto Values = getInvertibleOperands(O1, O2))
+      return isKnownNonEqual(Values->first, Values->second, Depth + 1, Q);
+
     if (const PHINode *PN1 = dyn_cast<PHINode>(V1)) {
       const PHINode *PN2 = cast<PHINode>(V2);
       // FIXME: This is missing a generalization to handle the case where one is

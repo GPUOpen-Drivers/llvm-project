@@ -1,11 +1,8 @@
-# Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-# Notified per clause 4(b) of the license.
 # RUN: llc -march=amdgcn -run-pass si-fold-operands -verify-machineinstrs -o - %s | FileCheck %s
 
 # CHECK: %1:vgpr_32 = V_MOV_B32_e32 0, implicit $exec
 # CHECK: %2:vgpr_32 = V_MOV_B32_e32 0, implicit $exec
 # CHECK: %4:vgpr_32 = COPY %3
-# CHECK: %5:vgpr_32 = V_MOV_B32_e32 0, implicit $exec
 # CHECK: %6:vgpr_32 = V_MOV_B32_e32 0, implicit $exec
 # CHECK: %7:vgpr_32 = COPY %3
 

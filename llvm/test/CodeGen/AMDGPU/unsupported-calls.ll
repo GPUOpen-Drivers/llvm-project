@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: not llc -march=amdgcn -mtriple=amdgcn-mesa-mesa3d -tailcallopt < %s 2>&1 | FileCheck --check-prefix=GCN %s
 ; RUN: not llc -march=amdgcn -mtriple=amdgcn--amdpal -tailcallopt < %s 2>&1 | FileCheck --check-prefix=GCN %s
 ; RUN: not llc -march=r600 -mtriple=r600-- -mcpu=cypress -tailcallopt < %s 2>&1 | FileCheck -check-prefix=R600 %s

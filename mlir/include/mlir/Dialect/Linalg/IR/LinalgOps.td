@@ -579,8 +579,9 @@ def Linalg_TiledLoopOp : Linalg_Op<"tiled_loop", [
     OpBuilder<(ins "ValueRange":$lowerBounds, "ValueRange":$upperBounds,
       "ValueRange":$steps, "ValueRange":$inputs, "ValueRange":$outputs,
       "ArrayAttr":$iteratorTypes,
-      CArg<"function_ref<void (OpBuilder &, Location, ValueRange)>",
-           "nullptr">:$bodyBuilderFn)>,
+      CArg<"function_ref<void (OpBuilder &, Location, /*ivs=*/ValueRange,"
+        "/*inputs=*/ValueRange, /*outputs=*/ValueRange)>",
+        "nullptr">:$bodyBuilderFn)>,
   ];
 
   let extraClassDeclaration = [{
@@ -588,7 +589,38 @@ def Linalg_TiledLoopOp : Linalg_Op<"tiled_loop", [
     unsigned getNumControlOperands() { return 3 * getNumLoops(); }
 
     ValueRange getInductionVars() {
-      return getBody()->getArguments();
+      return getBody()->getArguments().take_front(getNumLoops());
+    }
+    ValueRange getRegionInputArgs() {
+      return getBody()->getArguments().slice(getNumLoops(), inputs().size());
+    }
+    ValueRange getRegionOutputArgs() {
+      return getBody()->getArguments().take_back(outputs().size());
+    }
+
+
+    void setLowerBounds(ValueRange lowerBounds) {
+      unsigned numLoops = getNumLoops();
+      assert(lowerBounds.size() == numLoops &&
+             "expected lower bounds for every loop dimension");
+      for (unsigned i = 0; i < numLoops; ++i)
+        setOperand(i, lowerBounds[i]);
+    }
+
+    void setUpperBounds(ValueRange upperBounds) {
+      unsigned numLoops = getNumLoops();
+      assert(upperBounds.size() == numLoops &&
+             "expected upper bounds for every loop dimension");
+      for (unsigned i = 0, pos = numLoops; i < numLoops; ++i, ++pos)
+        setOperand(pos, upperBounds[i]);
+    }
+
+    void setSteps(ValueRange steps) {
+      unsigned numLoops = getNumLoops();
+      assert(steps.size() == numLoops &&
+             "expected upper bounds for every loop dimension");
+      for (unsigned i = 0, pos = 2 * numLoops; i < numLoops; ++i, ++pos)
+        setOperand(pos, steps[i]);
     }
 
    /// Result that corresponds to the `outputs` argument of tensor type.

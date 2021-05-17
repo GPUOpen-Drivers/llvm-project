@@ -208,6 +208,11 @@ struct LinalgLoopDistributionOptions {
   SmallVector<DistributionMethod, 0> distributionMethod = {};
 };
 
+/// Update the `lb`, `ub` and `step` to get per processor `lb`, `ub` and `step`.
+void updateBoundsForCyclicDistribution(OpBuilder &builder, Location loc,
+                                       Value procId, Value nprocs, Value &lb,
+                                       Value &ub, Value &step);
+
 //===----------------------------------------------------------------------===//
 // Generic op region utilities
 //===----------------------------------------------------------------------===//
@@ -248,7 +253,7 @@ struct GenerateLoopNest {
                                 edsc::intrinsics::MemRefIndexedValue>::type;
 
   static void
-  doit(ArrayRef<Range> loopRanges, ValueRange iterArgInitValues,
+  doit(ArrayRef<Range> loopRanges, LinalgOp linalgOp,
        ArrayRef<Attribute> iteratorTypes,
        function_ref<scf::ValueVector(ValueRange, ValueRange)> bodyBuilderFn,
        Optional<LinalgLoopDistributionOptions> = None);
