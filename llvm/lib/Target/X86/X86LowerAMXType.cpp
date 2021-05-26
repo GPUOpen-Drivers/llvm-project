@@ -62,11 +62,6 @@ using namespace PatternMatch;
 
 #define DEBUG_TYPE "lower-amx-type"
 
-// In AMX intrinsics we let Shape = {Row, Col}, but the
-// RealCol = Col / ElementSize. We may use the RealCol
-// as a new Row for other new created AMX intrinsics.
-static std::map<Value *, Value *> Col2Row;
-
 static AllocaInst *createAllocaInstAtEntry(IRBuilder<> &Builder,
                                            BasicBlock *BB) {
   Function &F = *BB->getParent();
@@ -83,7 +78,28 @@ static AllocaInst *createAllocaInstAtEntry(IRBuilder<> &Builder,
   return AllocaRes;
 }
 
-static Value *getRowFromCol(Instruction *II, Value *V, unsigned Granularity) {
+namespace {
+class X86LowerAMXType {
+  Function &Func;
+  TargetMachine *TM = nullptr;
+
+  // In AMX intrinsics we let Shape = {Row, Col}, but the
+  // RealCol = Col / ElementSize. We may use the RealCol
+  // as a new Row for other new created AMX intrinsics.
+  std::map<Value *, Value *> Col2Row;
+
+public:
+  X86LowerAMXType(Function &F, TargetMachine *TargetM) : Func(F), TM(TargetM) {}
+  bool visit();
+  void combineLoadBitcast(LoadInst *LD, BitCastInst *Bitcast);
+  void combineBitcastStore(BitCastInst *Bitcast, StoreInst *ST);
+  bool transformBitcast(BitCastInst *Bitcast);
+  std::pair<Value *, Value *> getShape(IntrinsicInst *II, unsigned OpNo);
+  Value *getRowFromCol(Instruction *II, Value *V, unsigned Granularity);
+};
+
+Value *X86LowerAMXType::getRowFromCol(Instruction *II, Value *V,
+                                      unsigned Granularity) {
   if (Col2Row.count(V))
     return Col2Row[V];
   IRBuilder<> Builder(&*II->getParent()->getFirstInsertionPt());
@@ -98,21 +114,8 @@ static Value *getRowFromCol(Instruction *II, Value *V, unsigned Granularity) {
   return RealRow;
 }
 
-namespace {
-class X86LowerAMXType {
-  Function &Func;
-  TargetMachine *TM = nullptr;
-
-public:
-  X86LowerAMXType(Function &F, TargetMachine *TargetM) : Func(F), TM(TargetM) {}
-  bool visit();
-  void combineLoadBitcast(LoadInst *LD, BitCastInst *Bitcast);
-  void combineBitcastStore(BitCastInst *Bitcast, StoreInst *ST);
-  bool transformBitcast(BitCastInst *Bitcast);
-  std::pair<Value *, Value *> getShape(IntrinsicInst *II, unsigned OpNo);
-};
-
-std::pair<Value *, Value *> X86LowerAMXType::getShape(IntrinsicInst *II, unsigned OpNo) {
+std::pair<Value *, Value *> X86LowerAMXType::getShape(IntrinsicInst *II,
+                                                      unsigned OpNo) {
   Value *Row = nullptr, *Col = nullptr;
   switch (II->getIntrinsicID()) {
   default:

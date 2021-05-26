@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //==-----------------------------------------------------------------------===//
 
@@ -120,6 +118,7 @@ static void getVGPRSpillLaneOrTempRegister(MachineFunction &MF,
 static void buildPrologSpill(const GCNSubtarget &ST, const SIRegisterInfo &TRI,
                              const SIMachineFunctionInfo &FuncInfo,
                              LivePhysRegs &LiveRegs, MachineFunction &MF,
+                             MachineBasicBlock &MBB,
                              MachineBasicBlock::iterator I, Register SpillReg,
                              int FI) {
   unsigned Opc = ST.enableFlatScratch() ? AMDGPU::SCRATCH_STORE_DWORD_SADDR
@@ -131,7 +130,7 @@ static void buildPrologSpill(const GCNSubtarget &ST, const SIRegisterInfo &TRI,
       PtrInfo, MachineMemOperand::MOStore, FrameInfo.getObjectSize(FI),
       FrameInfo.getObjectAlign(FI));
   LiveRegs.addReg(SpillReg);
-  TRI.buildSpillLoadStore(I, Opc, FI, SpillReg, true,
+  TRI.buildSpillLoadStore(MBB, I, Opc, FI, SpillReg, true,
                           FuncInfo.getStackPtrOffsetReg(), 0, MMO, nullptr,
                           &LiveRegs);
   LiveRegs.removeReg(SpillReg);
@@ -141,6 +140,7 @@ static void buildEpilogRestore(const GCNSubtarget &ST,
                                const SIRegisterInfo &TRI,
                                const SIMachineFunctionInfo &FuncInfo,
                                LivePhysRegs &LiveRegs, MachineFunction &MF,
+                               MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator I, Register SpillReg,
                                int FI) {
   unsigned Opc = ST.enableFlatScratch() ? AMDGPU::SCRATCH_LOAD_DWORD_SADDR
@@ -151,7 +151,7 @@ static void buildEpilogRestore(const GCNSubtarget &ST,
   MachineMemOperand *MMO = MF.getMachineMemOperand(
       PtrInfo, MachineMemOperand::MOLoad, FrameInfo.getObjectSize(FI),
       FrameInfo.getObjectAlign(FI));
-  TRI.buildSpillLoadStore(I, Opc, FI, SpillReg, false,
+  TRI.buildSpillLoadStore(MBB, I, Opc, FI, SpillReg, false,
                           FuncInfo.getStackPtrOffsetReg(), 0, MMO, nullptr,
                           &LiveRegs);
 }
@@ -548,15 +548,18 @@ void SIFrameLowering::emitEntryFunctionScratchRsrcRegSetup(
       .addReg(ScratchRsrcReg, RegState::ImplicitDefine)
       .addMemOperand(MMO);
 
-    // If we are in a wave32 shader we have to modify the const_index_stride to b10
-    // We can't rely on the driver setting this for us since there are often multiple
-    // shaders with different wave sizes
+    // The driver will always set the SRD for wave 64 (bits 118:117 of
+    // descriptor / bits 22:21 of third sub-reg will be 0b11)
+    // If the shader is actually wave32 we have to modify the const_index_stride
+    // field of the descriptor 3rd sub-reg (bits 22:21) to 0b10 (stride=32). The
+    // reason the driver does this is that there can be cases where it presents
+    // 2 shaders with different wave size (e.g. VsFs).
     // TODO: convert to using SCRATCH instructions or multiple SRD buffers
     if (ST.isWave32()) {
-      const MCInstrDesc &SAndB32 = TII->get(AMDGPU::S_AND_B32);
-      BuildMI(MBB, I, DL, SAndB32, Rsrc03)
-        .addReg(Rsrc03 )
-        .addImm(0xffdfffff);
+      const MCInstrDesc &SBitsetB32 = TII->get(AMDGPU::S_BITSET0_B32);
+      BuildMI(MBB, I, DL, SBitsetB32, Rsrc03)
+          .addImm(21)
+          .addReg(Rsrc03);
     }
   } else if (ST.isMesaGfxShader(Fn) || !PreloadedScratchRsrcReg) {
     assert(!ST.isAmdHsaOrMesa(Fn));
@@ -759,7 +762,8 @@ void SIFrameLowering::emitPrologue(MachineFunction &MF,
       ScratchExecCopy = buildScratchExecCopy(LiveRegs, MF, MBB, MBBI,
                                              /*IsProlog*/ true);
 
-    buildPrologSpill(ST, TRI, *FuncInfo, LiveRegs, MF, MBBI, Reg.VGPR, *Reg.FI);
+    buildPrologSpill(ST, TRI, *FuncInfo, LiveRegs, MF, MBB, MBBI, Reg.VGPR,
+                     *Reg.FI);
   }
 
   // VGPRs used for Whole Wave Mode
@@ -773,7 +777,7 @@ void SIFrameLowering::emitPrologue(MachineFunction &MF,
       ScratchExecCopy =
           buildScratchExecCopy(LiveRegs, MF, MBB, MBBI, /*IsProlog*/ true);
 
-    buildPrologSpill(ST, TRI, *FuncInfo, LiveRegs, MF, MBBI, VGPR, *FI);
+    buildPrologSpill(ST, TRI, *FuncInfo, LiveRegs, MF, MBB, MBBI, VGPR, *FI);
   }
 
   if (ScratchExecCopy) {
@@ -799,7 +803,7 @@ void SIFrameLowering::emitPrologue(MachineFunction &MF,
     BuildMI(MBB, MBBI, DL, TII->get(AMDGPU::V_MOV_B32_e32), TmpVGPR)
         .addReg(FramePtrReg);
 
-    buildPrologSpill(ST, TRI, *FuncInfo, LiveRegs, MF, MBBI, TmpVGPR,
+    buildPrologSpill(ST, TRI, *FuncInfo, LiveRegs, MF, MBB, MBBI, TmpVGPR,
                      FramePtrFI);
   }
 
@@ -817,7 +821,7 @@ void SIFrameLowering::emitPrologue(MachineFunction &MF,
     BuildMI(MBB, MBBI, DL, TII->get(AMDGPU::V_MOV_B32_e32), TmpVGPR)
         .addReg(BasePtrReg);
 
-    buildPrologSpill(ST, TRI, *FuncInfo, LiveRegs, MF, MBBI, TmpVGPR,
+    buildPrologSpill(ST, TRI, *FuncInfo, LiveRegs, MF, MBB, MBBI, TmpVGPR,
                      BasePtrFI);
   }
 
@@ -1010,7 +1014,7 @@ void SIFrameLowering::emitEpilogue(MachineFunction &MF,
           MRI, LiveRegs, AMDGPU::VGPR_32RegClass);
       if (!TmpVGPR)
         report_fatal_error("failed to find free scratch register");
-      buildEpilogRestore(ST, TRI, *FuncInfo, LiveRegs, MF, MBBI, TmpVGPR,
+      buildEpilogRestore(ST, TRI, *FuncInfo, LiveRegs, MF, MBB, MBBI, TmpVGPR,
                          FramePtrFI);
       BuildMI(MBB, MBBI, DL, TII->get(AMDGPU::V_READFIRSTLANE_B32), FramePtrReg)
           .addReg(TmpVGPR, RegState::Kill);
@@ -1036,7 +1040,7 @@ void SIFrameLowering::emitEpilogue(MachineFunction &MF,
           MRI, LiveRegs, AMDGPU::VGPR_32RegClass);
       if (!TmpVGPR)
         report_fatal_error("failed to find free scratch register");
-      buildEpilogRestore(ST, TRI, *FuncInfo, LiveRegs, MF, MBBI, TmpVGPR,
+      buildEpilogRestore(ST, TRI, *FuncInfo, LiveRegs, MF, MBB, MBBI, TmpVGPR,
                          BasePtrFI);
       BuildMI(MBB, MBBI, DL, TII->get(AMDGPU::V_READFIRSTLANE_B32), BasePtrReg)
           .addReg(TmpVGPR, RegState::Kill);
@@ -1062,7 +1066,7 @@ void SIFrameLowering::emitEpilogue(MachineFunction &MF,
       ScratchExecCopy =
           buildScratchExecCopy(LiveRegs, MF, MBB, MBBI, /*IsProlog*/ false);
 
-    buildEpilogRestore(ST, TRI, *FuncInfo, LiveRegs, MF, MBBI, Reg.VGPR,
+    buildEpilogRestore(ST, TRI, *FuncInfo, LiveRegs, MF, MBB, MBBI, Reg.VGPR,
                        *Reg.FI);
   }
 
@@ -1076,7 +1080,7 @@ void SIFrameLowering::emitEpilogue(MachineFunction &MF,
       ScratchExecCopy =
           buildScratchExecCopy(LiveRegs, MF, MBB, MBBI, /*IsProlog*/ false);
 
-    buildEpilogRestore(ST, TRI, *FuncInfo, LiveRegs, MF, MBBI, VGPR, *FI);
+    buildEpilogRestore(ST, TRI, *FuncInfo, LiveRegs, MF, MBB, MBBI, VGPR, *FI);
   }
 
   if (ScratchExecCopy) {

@@ -880,10 +880,15 @@ ASTContext::getCanonicalTemplateTemplateParmDecl(
   return CanonTTP;
 }
 
+TargetCXXABI::Kind ASTContext::getCXXABIKind() const {
+  auto Kind = getTargetInfo().getCXXABI().getKind();
+  return getLangOpts().CXXABI.getValueOr(Kind);
+}
+
 CXXABI *ASTContext::createCXXABI(const TargetInfo &T) {
   if (!LangOpts.CPlusPlus) return nullptr;
 
-  switch (T.getCXXABI().getKind()) {
+  switch (getCXXABIKind()) {
   case TargetCXXABI::AppleARM64:
   case TargetCXXABI::Fuchsia:
   case TargetCXXABI::GenericARM: // Same as Itanium at this level
@@ -11630,7 +11635,7 @@ bool ASTContext::mayExternalizeStaticVar(const Decl *D) const {
 bool ASTContext::shouldExternalizeStaticVar(const Decl *D) const {
   return mayExternalizeStaticVar(D) &&
          (D->hasAttr<HIPManagedAttr>() ||
-          CUDAStaticDeviceVarReferencedByHost.count(cast<VarDecl>(D)));
+          CUDADeviceVarODRUsedByHost.count(cast<VarDecl>(D)));
 }
 
 StringRef ASTContext::getCUIDHash() const {

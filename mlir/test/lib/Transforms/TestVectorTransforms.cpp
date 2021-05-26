@@ -140,6 +140,7 @@ struct TestVectorContractionConversion
       transposeLowering = VectorTransposeLowering::Flat;
     VectorTransformsOptions options{contractLowering, transposeLowering};
     populateVectorContractLoweringPatterns(patterns, options);
+    populateVectorTransposeLoweringPatterns(patterns, options);
     (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
   }
 };
@@ -376,16 +377,33 @@ struct TestVectorTransferLoweringPatterns
   }
 };
 
+struct TestVectorMultiReductionLoweringPatterns
+    : public PassWrapper<TestVectorMultiReductionLoweringPatterns,
+                         FunctionPass> {
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<memref::MemRefDialect>();
+  }
+  void runOnFunction() override {
+    RewritePatternSet patterns(&getContext());
+    populateVectorMultiReductionLoweringPatterns(patterns);
+    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+  }
+};
+
+template <bool Unroll>
 struct TestProgressiveVectorToSCFLoweringPatterns
-    : public PassWrapper<TestProgressiveVectorToSCFLoweringPatterns,
+    : public PassWrapper<TestProgressiveVectorToSCFLoweringPatterns<Unroll>,
                          FunctionPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<memref::MemRefDialect, scf::SCFDialect, AffineDialect>();
   }
   void runOnFunction() override {
-    RewritePatternSet patterns(&getContext());
-    populateProgressiveVectorToSCFConversionPatterns(patterns);
-    (void)applyPatternsAndFoldGreedily(getFunction(), std::move(patterns));
+    RewritePatternSet patterns(&this->getContext());
+    ProgressiveVectorTransferToSCFOptions options;
+    options.unroll = Unroll;
+    populateProgressiveVectorToSCFConversionPatterns(patterns, options);
+    (void)applyPatternsAndFoldGreedily(this->getFunction(),
+                                       std::move(patterns));
   }
 };
 
@@ -436,9 +454,24 @@ void registerTestVectorConversions() {
       "test-vector-transfer-lowering-patterns",
       "Test conversion patterns to lower transfer ops to other vector ops");
 
-  PassRegistration<TestProgressiveVectorToSCFLoweringPatterns> transferOpToSCF(
-      "test-progressive-convert-vector-to-scf",
-      "Test conversion patterns to progressively lower transfer ops to SCF");
+  PassRegistration<TestProgressiveVectorToSCFLoweringPatterns<
+      /*Unroll=*/false>>
+      transferOpToSCF("test-progressive-convert-vector-to-scf",
+                      "Test conversion patterns to progressively lower "
+                      "transfer ops to SCF");
+
+  PassRegistration<TestProgressiveVectorToSCFLoweringPatterns<
+      /*Unroll=*/true>>
+      transferOpToSCFUnrolled(
+          "test-unrolled-progressive-convert-vector-to-scf",
+          "Test conversion patterns to progressively lower transfer ops to SCF"
+          "(unrolled variant)");
+
+  PassRegistration<TestVectorMultiReductionLoweringPatterns>
+      multiDimReductionOpLoweringPass(
+          "test-vector-multi-reduction-lowering-patterns",
+          "Test conversion patterns to lower vector.multi_reduction to other "
+          "vector ops");
 }
 } // namespace test
 } // namespace mlir

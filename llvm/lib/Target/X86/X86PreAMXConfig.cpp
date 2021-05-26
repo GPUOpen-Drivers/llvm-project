@@ -199,7 +199,7 @@ bool X86PreAMXConfig::addTileConfig(Instruction *ModelStart,
 
   std::array<Value *, 1> Args = {I8Ptr};
   Instruction *Cfg =
-      Builder.CreateIntrinsic(Intrinsic::x86_ldtilecfg, None, Args);
+      Builder.CreateIntrinsic(Intrinsic::x86_ldtilecfg_internal, None, Args);
 
   Value *Val0 = Constant::getNullValue(V512Ty);
   Instruction *Init0 = new StoreInst(Val0, Addr, false, Alignment, Cfg);

@@ -25,7 +25,6 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = bitcast <256 x i32>* %{{[0-9]+}} to i8*
 ; CHECK-NEXT:   %tobool.not = icmp eq i32 %cond, 0
 ; CHECK-NEXT:   br i1 %tobool.not, label %if.else, label %if.then
-
 ; CHECK:     if.then:
 ; CHECK-NEXT:   %{{[0-9]+}} = bitcast <16 x i32>* %{{[0-9]+}} to i8*
 ; CHECK-NEXT:   store <16 x i32> zeroinitializer, <16 x i32>* %{{[0-9]+}}, align 4
@@ -37,7 +36,7 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = trunc i16 %row to i8
 ; CHECK-NEXT:   store i8 %{{[0-9]+}}, i8* %amx.tmm.0.shape.row{{.*}}, align 1
 ; CHECK-NEXT:   store i16 8, i16* %amx.tmm.0.shape.col{{.*}}, align 2
-; CHECK-NEXT:   call void @llvm.x86.ldtilecfg(i8* %{{[0-9]+}})
+; CHECK-NEXT:   call void @llvm.x86.ldtilecfg.internal(i8* %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = tail call x86_amx @llvm.x86.tileloadd64.internal(i16 %row, i16 8, i8* getelementptr inbounds ([1024 x i8], [1024 x i8]* @buf, i64 0, i64 0), i64 32)
 ; CHECK-NEXT:   call void @llvm.x86.tilestored64.internal(i16 %row, i16 8, i8* %{{[0-9]+}}, i64 64, x86_amx %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = bitcast <16 x i32>* %{{[0-9]+}} to i8*
@@ -50,7 +49,7 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = trunc i16 8 to i8
 ; CHECK-NEXT:   store i8 %{{[0-9]+}}, i8* %amx.tmm.0.shape.row{{.*}}, align 1
 ; CHECK-NEXT:   store i16 %col, i16* %amx.tmm.0.shape.col{{.*}}, align 2
-; CHECK-NEXT:   call void @llvm.x86.ldtilecfg(i8* %{{[0-9]+}})
+; CHECK-NEXT:   call void @llvm.x86.ldtilecfg.internal(i8* %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = tail call x86_amx @llvm.x86.tileloadd64.internal(i16 8, i16 %col, i8* getelementptr inbounds ([1024 x i8], [1024 x i8]* @buf, i64 0, i64 0), i64 32)
 ; CHECK-NEXT:   call void @llvm.x86.tilestored64.internal(i16 8, i16 %col, i8* %{{[0-9]+}}, i64 64, x86_amx %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = bitcast <16 x i32>* %{{[0-9]+}} to i8*
@@ -63,11 +62,10 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = trunc i16 %row to i8
 ; CHECK-NEXT:   store i8 %{{[0-9]+}}, i8* %amx.tmm.0.shape.row{{.*}}, align 1
 ; CHECK-NEXT:   store i16 %col, i16* %amx.tmm.0.shape.col{{.*}}, align 2
-; CHECK-NEXT:   call void @llvm.x86.ldtilecfg(i8* %{{[0-9]+}})
+; CHECK-NEXT:   call void @llvm.x86.ldtilecfg.internal(i8* %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = tail call x86_amx @llvm.x86.tileloadd64.internal(i16 %row, i16 %col, i8* getelementptr inbounds ([1024 x i8], [1024 x i8]* @buf, i64 0, i64 0), i64 32)
 ; CHECK-NEXT:   call void @llvm.x86.tilestored64.internal(i16 %row, i16 %col, i8* %{{[0-9]+}}, i64 64, x86_amx %{{[0-9]+}})
 ; CHECK-NEXT:   br label %if.end
-
 ; CHECK:     if.else:
 ; CHECK-NEXT:   %{{[0-9]+}} = bitcast <16 x i32>* %{{[0-9]+}} to i8*
 ; CHECK-NEXT:   store <16 x i32> zeroinitializer, <16 x i32>* %{{[0-9]+}}, align 4
@@ -79,7 +77,7 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = trunc i16 %row to i8
 ; CHECK-NEXT:   store i8 %{{[0-9]+}}, i8* %amx.tmm.0.shape.row{{.*}}, align 1
 ; CHECK-NEXT:   store i16 8, i16* %amx.tmm.0.shape.col{{.*}}, align 2
-; CHECK-NEXT:   call void @llvm.x86.ldtilecfg(i8* %{{[0-9]+}})
+; CHECK-NEXT:   call void @llvm.x86.ldtilecfg.internal(i8* %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = tail call x86_amx @llvm.x86.tileloadd64.internal(i16 %row, i16 8, i8* getelementptr inbounds ([1024 x i8], [1024 x i8]* @buf2, i64 0, i64 0), i64 32)
 ; CHECK-NEXT:   call void @llvm.x86.tilestored64.internal(i16 %row, i16 8, i8* %{{[0-9]+}}, i64 64, x86_amx %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = bitcast <16 x i32>* %{{[0-9]+}} to i8*
@@ -92,7 +90,7 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = trunc i16 8 to i8
 ; CHECK-NEXT:   store i8 %{{[0-9]+}}, i8* %amx.tmm.0.shape.row{{.*}}, align 1
 ; CHECK-NEXT:   store i16 %col, i16* %amx.tmm.0.shape.col{{.*}}, align 2
-; CHECK-NEXT:   call void @llvm.x86.ldtilecfg(i8* %{{[0-9]+}})
+; CHECK-NEXT:   call void @llvm.x86.ldtilecfg.internal(i8* %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = tail call x86_amx @llvm.x86.tileloadd64.internal(i16 8, i16 %col, i8* getelementptr inbounds ([1024 x i8], [1024 x i8]* @buf2, i64 0, i64 0), i64 32)
 ; CHECK-NEXT:   call void @llvm.x86.tilestored64.internal(i16 8, i16 %col, i8* %{{[0-9]+}}, i64 64, x86_amx %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = bitcast <16 x i32>* %{{[0-9]+}} to i8*
@@ -105,7 +103,7 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = trunc i16 %row to i8
 ; CHECK-NEXT:   store i8 %{{[0-9]+}}, i8* %amx.tmm.0.shape.row{{.*}}, align 1
 ; CHECK-NEXT:   store i16 %col, i16* %amx.tmm.0.shape.col{{.*}}, align 2
-; CHECK-NEXT:   call void @llvm.x86.ldtilecfg(i8* %{{[0-9]+}})
+; CHECK-NEXT:   call void @llvm.x86.ldtilecfg.internal(i8* %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = tail call x86_amx @llvm.x86.tileloadd64.internal(i16 %row, i16 %col, i8* getelementptr inbounds ([1024 x i8], [1024 x i8]* @buf2, i64 0, i64 0), i64 32)
 ; CHECK-NEXT:   call void @llvm.x86.tilestored64.internal(i16 %row, i16 %col, i8* %{{[0-9]+}}, i64 64, x86_amx %{{[0-9]+}})
 ; CHECK-NEXT:   br label %if.end
@@ -138,7 +136,7 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = trunc i16 %row to i8
 ; CHECK-NEXT:   store i8 %{{[0-9]+}}, i8* %amx.tmm.3.shape.row{{.*}}, align 1
 ; CHECK-NEXT:   store i16 %col, i16* %amx.tmm.3.shape.col{{.*}}, align 2
-; CHECK-NEXT:   call void @llvm.x86.ldtilecfg(i8* %{{[0-9]+}})
+; CHECK-NEXT:   call void @llvm.x86.ldtilecfg.internal(i8* %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = call x86_amx @llvm.x86.tileloadd64.internal(i16 %row, i16 8, i8* %{{[0-9]+}}, i64 64)
 ; CHECK-NEXT:   %{{[0-9]+}} = call x86_amx @llvm.x86.tileloadd64.internal(i16 8, i16 %col, i8* %{{[0-9]+}}, i64 64)
 ; CHECK-NEXT:   %{{[0-9]+}} = call x86_amx @llvm.x86.tileloadd64.internal(i16 %row, i16 %col, i8* %{{[0-9]+}}, i64 64)
@@ -154,11 +152,10 @@ define dso_local void @test_api(i32 %cond, i16 signext %row, i16 signext %col) l
 ; CHECK-NEXT:   %{{[0-9]+}} = trunc i16 %row to i8
 ; CHECK-NEXT:   store i8 %{{[0-9]+}}, i8* %amx.tmm.0.shape.row{{.*}}, align 1
 ; CHECK-NEXT:   store i16 %col, i16* %amx.tmm.0.shape.col{{.*}}, align 2
-; CHECK-NEXT:   call void @llvm.x86.ldtilecfg(i8* %{{[0-9]+}})
+; CHECK-NEXT:   call void @llvm.x86.ldtilecfg.internal(i8* %{{[0-9]+}})
 ; CHECK-NEXT:   %{{[0-9]+}} = call x86_amx @llvm.x86.tileloadd64.internal(i16 %row, i16 %col, i8* %{{[0-9]+}}, i64 64)
 ; CHECK-NEXT:   tail call void @llvm.x86.tilestored64.internal(i16 %row, i16 %col, i8* getelementptr inbounds ([1024 x i8], [1024 x i8]* @buf, i64 0, i64 0), i64 32, x86_amx %{{[0-9]+}})
 ; CHECK-NEXT:   ret void
-
 entry:
   %0 = alloca <256 x i32>, align 1024
   %1 = bitcast <256 x i32>* %0 to i8*

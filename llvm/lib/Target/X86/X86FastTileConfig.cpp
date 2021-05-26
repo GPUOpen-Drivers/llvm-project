@@ -129,7 +129,7 @@ bool X86FastTileConfig::isTileStore(MachineInstr &MI) {
 }
 bool X86FastTileConfig::isAMXInstr(MachineInstr &MI) {
   // TODO: May need to handle some special nontile amx instrucion.
-  if (MI.getOpcode() == X86::LDTILECFG || MI.isDebugInstr())
+  if (MI.getOpcode() == X86::PLDTILECFGV || MI.isDebugInstr())
     return false;
 
   for (MachineOperand &MO : MI.operands())
@@ -281,7 +281,7 @@ bool X86FastTileConfig::fastTileConfig() {
   for (MachineBasicBlock &MBB : *MF) {
     SmallVector<MachineInstr *, 2> CFGs;
     for (MachineInstr &MI : MBB)
-      if (MI.getOpcode() == X86::LDTILECFG)
+      if (MI.getOpcode() == X86::PLDTILECFGV)
         CFGs.push_back(&MI);
     for (auto *MI : CFGs)
       materializeTileCfg(MI);

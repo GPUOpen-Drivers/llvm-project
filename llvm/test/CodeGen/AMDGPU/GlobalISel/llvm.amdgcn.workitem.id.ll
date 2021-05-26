@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -global-isel -mtriple=amdgcn-unknown-amdhsa --amdhsa-code-object-version=2 -mcpu=kaveri -verify-machineinstrs < %s | FileCheck --check-prefixes=ALL,HSA,CO-V2  %s
 ; RUN: llc -global-isel -mtriple=amdgcn-unknown-amdhsa --amdhsa-code-object-version=2 -mcpu=carrizo -verify-machineinstrs < %s | FileCheck --check-prefixes=ALL,HSA,CO-V2  %s
 ; RUN: llc -global-isel -mtriple=amdgcn-- -mcpu=hawaii -mattr=+flat-for-global -verify-machineinstrs < %s | FileCheck --check-prefixes=ALL,MESA %s
@@ -103,7 +101,7 @@ bb2:
 
 ; ALL-LABEL: {{^}}test_workitem_id_x_func:
 ; ALL: s_waitcnt
-; HSA-NEXT: v_and_b32_e32 v2, 0x3ff, v31
+; HSA-NEXT: v_and_b32_e32 v2, 0x3ff, v2
 ; MESA-NEXT: v_and_b32_e32 v2, 0x3ff, v2
 define void @test_workitem_id_x_func(i32 addrspace(1)* %out) #1 {
   %id = call i32 @llvm.amdgcn.workitem.id.x()
@@ -112,7 +110,7 @@ define void @test_workitem_id_x_func(i32 addrspace(1)* %out) #1 {
 }
 
 ; ALL-LABEL: {{^}}test_workitem_id_y_func:
-; HSA: v_lshrrev_b32_e32 v2, 10, v31
+; HSA: v_lshrrev_b32_e32 v2, 10, v2
 ; MESA: v_lshrrev_b32_e32 v2, 10, v2
 define void @test_workitem_id_y_func(i32 addrspace(1)* %out) #1 {
   %id = call i32 @llvm.amdgcn.workitem.id.y()
@@ -121,7 +119,7 @@ define void @test_workitem_id_y_func(i32 addrspace(1)* %out) #1 {
 }
 
 ; ALL-LABEL: {{^}}test_workitem_id_z_func:
-; HSA: v_lshrrev_b32_e32 v2, 20, v31
+; HSA: v_lshrrev_b32_e32 v2, 20, v2
 ; MESA: v_lshrrev_b32_e32 v2, 20, v2
 define void @test_workitem_id_z_func(i32 addrspace(1)* %out) #1 {
   %id = call i32 @llvm.amdgcn.workitem.id.z()

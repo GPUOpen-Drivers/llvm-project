@@ -145,11 +145,14 @@ public:
       MCSymbolXCOFF *TCSym =
           cast<MCSectionXCOFF>(Streamer.getCurrentSectionOnly())
               ->getQualNameSymbol();
-      // If the variant kind is TLSGD the entry represents the region handle for
-      // the symbol, we prefix the name with a dot and we add the @m
-      // relocation specifier.
-      if (Kind == MCSymbolRefExpr::VariantKind::VK_PPC_TLSGD)
-        OS << "\t.tc ." << TCSym->getName() << "," << XSym->getName() << "@m\n";
+      // If the variant kind is VK_PPC_AIX_TLSGDM the entry represents the
+      // region handle for the symbol, we add the relocation specifier @m.
+      // If the variant kind is VK_PPC_AIX_TLSGD the entry represents the
+      // variable offset for the symbol, we add the relocation specifier @gd.
+      if (Kind == MCSymbolRefExpr::VariantKind::VK_PPC_AIX_TLSGD ||
+          Kind == MCSymbolRefExpr::VariantKind::VK_PPC_AIX_TLSGDM)
+        OS << "\t.tc " << TCSym->getName() << "," << XSym->getName() << "@"
+           << MCSymbolRefExpr::getVariantKindName(Kind) << '\n';
       else
         OS << "\t.tc " << TCSym->getName() << "," << XSym->getName() << '\n';
 
@@ -321,7 +324,8 @@ public:
     const MCAsmInfo *MAI = Streamer.getContext().getAsmInfo();
     const unsigned PointerSize = MAI->getCodePointerSize();
     Streamer.emitValueToAlignment(PointerSize);
-    Streamer.emitSymbolValue(&S, PointerSize);
+    Streamer.emitValue(MCSymbolRefExpr::create(&S, Kind, Streamer.getContext()),
+                       PointerSize);
   }
 
   void emitMachine(StringRef CPU) override {

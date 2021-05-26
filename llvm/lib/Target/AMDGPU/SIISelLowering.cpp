@@ -533,8 +533,8 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::FP_TO_FP16, MVT::i16, Promote);
     AddPromotedToType(ISD::FP_TO_FP16, MVT::i16, MVT::i32);
 
-    setOperationAction(ISD::FP_TO_SINT, MVT::i16, Promote);
-    setOperationAction(ISD::FP_TO_UINT, MVT::i16, Promote);
+    setOperationAction(ISD::FP_TO_SINT, MVT::i16, Custom);
+    setOperationAction(ISD::FP_TO_UINT, MVT::i16, Custom);
 
     // F16 - Constant Actions.
     setOperationAction(ISD::ConstantFP, MVT::f16, Legal);
@@ -1571,8 +1571,8 @@ bool SITargetLowering::isMemOpUniform(const SDNode *N) const {
 
 TargetLoweringBase::LegalizeTypeAction
 SITargetLowering::getPreferredVectorAction(MVT VT) const {
-  int NumElts = VT.getVectorNumElements();
-  if (NumElts != 1 && VT.getScalarType().bitsLE(MVT::i16))
+  if (!VT.isScalableVector() && VT.getVectorNumElements() != 1 &&
+      VT.getScalarType().bitsLE(MVT::i16))
     return VT.isPow2VectorType() ? TypeSplitVector : TypeWidenVector;
   return TargetLoweringBase::getPreferredVectorAction(VT);
 }
@@ -2965,12 +2965,6 @@ SDValue SITargetLowering::LowerCall(CallLoweringInfo &CLI,
 
   if (!CLI.CB)
     report_fatal_error("unsupported libcall legalization");
-
-  if (!AMDGPUTargetMachine::EnableFixedFunctionABI &&
-      !CLI.CB->getCalledFunction() && CallConv != CallingConv::AMDGPU_Gfx) {
-    return lowerUnhandledCall(CLI, InVals,
-                              "unsupported indirect call to function ");
-  }
 
   if (IsTailCall && MF.getTarget().Options.GuaranteedTailCallOpt) {
     return lowerUnhandledCall(CLI, InVals,
@@ -4536,6 +4530,9 @@ SDValue SITargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     return lowerFMINNUM_FMAXNUM(Op, DAG);
   case ISD::FMA:
     return splitTernaryVectorOp(Op, DAG);
+  case ISD::FP_TO_SINT:
+  case ISD::FP_TO_UINT:
+    return LowerFP_TO_INT(Op, DAG);
   case ISD::SHL:
   case ISD::SRA:
   case ISD::SRL:
@@ -6703,6 +6700,9 @@ SDValue SITargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op,
   case Intrinsic::amdgcn_alignbit:
     return DAG.getNode(ISD::FSHR, DL, VT,
                        Op.getOperand(1), Op.getOperand(2), Op.getOperand(3));
+  case Intrinsic::amdgcn_perm:
+    return DAG.getNode(AMDGPUISD::PERM, DL, MVT::i32, Op.getOperand(1),
+                       Op.getOperand(2), Op.getOperand(3));
   case Intrinsic::amdgcn_reloc_constant: {
     Module *M = const_cast<Module *>(MF.getFunction().getParent());
     const MDNode *Metadata = cast<MDNodeSDNode>(Op.getOperand(1))->getMD();
@@ -9636,19 +9636,18 @@ bool SITargetLowering::isCanonicalized(SelectionDAG &DAG, SDValue Op,
     // Could be anything.
     return false;
 
-  case ISD::BITCAST: {
+  case ISD::BITCAST:
+    return isCanonicalized(DAG, Op.getOperand(0), MaxDepth - 1);
+  case ISD::TRUNCATE: {
     // Hack round the mess we make when legalizing extract_vector_elt
-    SDValue Src = Op.getOperand(0);
-    if (Src.getValueType() == MVT::i16 &&
-        Src.getOpcode() == ISD::TRUNCATE) {
-      SDValue TruncSrc = Src.getOperand(0);
+    if (Op.getValueType() == MVT::i16) {
+      SDValue TruncSrc = Op.getOperand(0);
       if (TruncSrc.getValueType() == MVT::i32 &&
           TruncSrc.getOpcode() == ISD::BITCAST &&
           TruncSrc.getOperand(0).getValueType() == MVT::v2f16) {
         return isCanonicalized(DAG, TruncSrc.getOperand(0), MaxDepth - 1);
       }
     }
-
     return false;
   }
   case ISD::INTRINSIC_WO_CHAIN: {
@@ -12139,7 +12138,6 @@ SITargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *RMW) const {
     if (!Ty->isFloatTy() && (!Subtarget->hasGFX90AInsts() || !Ty->isDoubleTy()))
       return AtomicExpansionKind::CmpXChg;
 
-    // TODO: Do have these for flat. Older targets also had them for buffers.
     unsigned AS = RMW->getPointerAddressSpace();
 
     if ((AS == AMDGPUAS::GLOBAL_ADDRESS || AS == AMDGPUAS::FLAT_ADDRESS) &&
@@ -12155,20 +12153,22 @@ SITargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *RMW) const {
         return AtomicExpansionKind::CmpXChg;
 
       if (Subtarget->hasGFX90AInsts()) {
+        if (Ty->isFloatTy() && AS == AMDGPUAS::FLAT_ADDRESS)
+          return AtomicExpansionKind::CmpXChg;
+
         auto SSID = RMW->getSyncScopeID();
         if (SSID == SyncScope::System ||
             SSID == RMW->getContext().getOrInsertSyncScopeID("one-as"))
           return AtomicExpansionKind::CmpXChg;
 
-        return (Ty->isFloatTy() && AS == AMDGPUAS::FLAT_ADDRESS) ?
-          AtomicExpansionKind::CmpXChg : AtomicExpansionKind::None;
+        return AtomicExpansionKind::None;
       }
 
-      if (!Subtarget->hasGFX90AInsts() && AS != AMDGPUAS::GLOBAL_ADDRESS)
+      if (AS == AMDGPUAS::FLAT_ADDRESS)
         return AtomicExpansionKind::CmpXChg;
 
-      return RMW->use_empty() ? AtomicExpansionKind::None :
-                                AtomicExpansionKind::CmpXChg;
+      return RMW->use_empty() ? AtomicExpansionKind::None
+                              : AtomicExpansionKind::CmpXChg;
     }
 
     // DS FP atomics do repect the denormal mode, but the rounding mode is fixed
@@ -12289,10 +12289,11 @@ bool SITargetLowering::requiresUniformRegister(MachineFunction &MF,
   return hasCFUser(V, Visited, Subtarget->getWavefrontSize());
 }
 
-std::pair<int, MVT>
+std::pair<InstructionCost, MVT>
 SITargetLowering::getTypeLegalizationCost(const DataLayout &DL,
                                           Type *Ty) const {
-  auto Cost = TargetLoweringBase::getTypeLegalizationCost(DL, Ty);
+  std::pair<InstructionCost, MVT> Cost =
+      TargetLoweringBase::getTypeLegalizationCost(DL, Ty);
   auto Size = DL.getTypeSizeInBits(Ty);
   // Maximum load or store can handle 8 dwords for scalar and 4 for
   // vector ALU. Let's assume anything above 8 dwords is expensive
