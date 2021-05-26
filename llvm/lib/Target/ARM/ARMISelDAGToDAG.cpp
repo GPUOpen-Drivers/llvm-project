@@ -2549,6 +2549,7 @@ void ARMDAGToDAGISel::SelectMVE_WB(SDNode *N, const uint16_t *Opcodes,
   ReplaceUses(SDValue(N, 0), SDValue(New, 1));
   ReplaceUses(SDValue(N, 1), SDValue(New, 0));
   ReplaceUses(SDValue(N, 2), SDValue(New, 2));
+  transferMemOperands(N, New);
   CurDAG->RemoveDeadNode(N);
 }
 
@@ -2764,6 +2765,7 @@ void ARMDAGToDAGISel::SelectMVE_VLD(SDNode *N, unsigned NumVecs,
         CurDAG->getMachineNode(OurOpcodes[Stage], Loc, ResultTys, Ops);
     Data = SDValue(LoadInst, 0);
     Chain = SDValue(LoadInst, 1);
+    transferMemOperands(N, LoadInst);
   }
   // The last may need a writeback on it
   if (HasWriteback)
@@ -2771,6 +2773,7 @@ void ARMDAGToDAGISel::SelectMVE_VLD(SDNode *N, unsigned NumVecs,
   SDValue Ops[] = {Data, N->getOperand(PtrOperand), Chain};
   auto LoadInst =
       CurDAG->getMachineNode(OurOpcodes[NumVecs - 1], Loc, ResultTys, Ops);
+  transferMemOperands(N, LoadInst);
 
   unsigned i;
   for (i = 0; i < NumVecs; i++)
@@ -3296,9 +3299,9 @@ void ARMDAGToDAGISel::SelectCMP_SWAP(SDNode *N) {
   unsigned Opcode;
   EVT MemTy = cast<MemSDNode>(N)->getMemoryVT();
   if (MemTy == MVT::i8)
-    Opcode = ARM::CMP_SWAP_8;
+    Opcode = Subtarget->isThumb() ? ARM::tCMP_SWAP_8 : ARM::CMP_SWAP_8;
   else if (MemTy == MVT::i16)
-    Opcode = ARM::CMP_SWAP_16;
+    Opcode = Subtarget->isThumb() ? ARM::tCMP_SWAP_16 : ARM::CMP_SWAP_16;
   else if (MemTy == MVT::i32)
     Opcode = ARM::CMP_SWAP_32;
   else

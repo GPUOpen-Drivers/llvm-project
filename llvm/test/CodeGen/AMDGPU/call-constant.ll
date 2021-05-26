@@ -1,13 +1,11 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -global-isel=0 -amdgpu-fixed-function-abi=0 -mtriple=amdgcn-amd-amdhsa < %s | FileCheck -check-prefixes=GCN,SDAG %s
 ; RUN: llc -global-isel=1 -amdgpu-fixed-function-abi=1 -mtriple=amdgcn-amd-amdhsa < %s | FileCheck -check-prefixes=GCN,GISEL %s
 
 ; FIXME: Emitting unnecessary flat_scratch setup
 
 ; GCN-LABEL: {{^}}test_call_undef:
-; SDAG: s_mov_b32 flat_scratch_lo, s5
-; SDAG: s_add_u32 s4, s4, s7
+; SDAG: s_mov_b32 flat_scratch_lo, s13
+; SDAG: s_add_u32 s12, s12, s17
 ; SDAG: s_lshr_b32
 ; GCN: s_endpgm
 define amdgpu_kernel void @test_call_undef() #0 {
@@ -28,8 +26,8 @@ define i32 @test_tail_call_undef() #0 {
 }
 
 ; GCN-LABEL: {{^}}test_call_null:
-; SDAG: s_mov_b32 flat_scratch_lo, s5
-; SDAG: s_add_u32 s4, s4, s7
+; SDAG: s_mov_b32 flat_scratch_lo, s13
+; SDAG: s_add_u32 s12, s12, s17
 ; SDAG: s_lshr_b32
 
 ; GISEL: s_swappc_b64 s{{\[[0-9]+:[0-9]+\]}}, 0{{$}}

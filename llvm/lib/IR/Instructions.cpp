@@ -1558,9 +1558,6 @@ void AtomicCmpXchgInst::Init(Value *Ptr, Value *Cmp, Value *NewVal,
          "AtomicCmpXchg instructions must be atomic!");
   assert(FailureOrdering != AtomicOrdering::NotAtomic &&
          "AtomicCmpXchg instructions must be atomic!");
-  assert(!isStrongerThan(FailureOrdering, SuccessOrdering) &&
-         "AtomicCmpXchg failure argument shall be no stronger than the success "
-         "argument");
   assert(FailureOrdering != AtomicOrdering::Release &&
          FailureOrdering != AtomicOrdering::AcquireRelease &&
          "AtomicCmpXchg failure ordering cannot include release semantics");
@@ -1804,15 +1801,6 @@ bool GetElementPtrInst::accumulateConstantOffset(const DataLayout &DL,
                                                  APInt &Offset) const {
   // Delegate to the generic GEPOperator implementation.
   return cast<GEPOperator>(this)->accumulateConstantOffset(DL, Offset);
-}
-
-bool GetElementPtrInst::collectOffset(
-    const DataLayout &DL, unsigned BitWidth,
-    SmallDenseMap<Value *, APInt, 8> &VariableOffsets,
-    APInt &ConstantOffset) const {
-  // Delegate to the generic GEPOperator implementation.
-  return cast<GEPOperator>(this)->collectOffset(DL, BitWidth, VariableOffsets,
-                                                ConstantOffset);
 }
 
 //===----------------------------------------------------------------------===//

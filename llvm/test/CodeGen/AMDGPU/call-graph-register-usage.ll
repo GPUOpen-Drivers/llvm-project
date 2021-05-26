@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -mtriple=amdgcn-amd-amdhsa --amdhsa-code-object-version=2 -enable-ipra=0 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,CI %s
 ; RUN: llc -mtriple=amdgcn-amd-amdhsa --amdhsa-code-object-version=2 -mcpu=fiji -enable-ipra=0 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,VI,VI-NOBUG %s
 ; RUN: llc -mtriple=amdgcn-amd-amdhsa --amdhsa-code-object-version=2 -mcpu=iceland -enable-ipra=0 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,VI,VI-BUG %s
@@ -232,7 +230,7 @@ define amdgpu_kernel void @usage_direct_recursion(i32 %n) #0 {
 ; CI: NumSgprs: 48
 ; VI-NOBUG: NumSgprs: 48
 ; VI-BUG: NumSgprs: 96
-; GCN: NumVgprs: 32
+; GCN: NumVgprs: 24
 define amdgpu_kernel void @count_use_sgpr96_external_call()  {
 entry:
   tail call void asm sideeffect "; sgpr96 $0", "s"(<3 x i32> <i32 10, i32 11, i32 12>) #1
@@ -246,7 +244,7 @@ entry:
 ; CI: NumSgprs: 48
 ; VI-NOBUG: NumSgprs: 48
 ; VI-BUG: NumSgprs: 96
-; GCN: NumVgprs: 32
+; GCN: NumVgprs: 24
 define amdgpu_kernel void @count_use_sgpr160_external_call()  {
 entry:
   tail call void asm sideeffect "; sgpr160 $0", "s"(<5 x i32> <i32 10, i32 11, i32 12, i32 13, i32 14>) #1
@@ -260,7 +258,7 @@ entry:
 ; CI: NumSgprs: 48
 ; VI-NOBUG: NumSgprs: 48
 ; VI-BUG: NumSgprs: 96
-; GCN: NumVgprs: 32
+; GCN: NumVgprs: 24
 define amdgpu_kernel void @count_use_vgpr160_external_call()  {
 entry:
   tail call void asm sideeffect "; vgpr160 $0", "v"(<5 x i32> <i32 10, i32 11, i32 12, i32 13, i32 14>) #1

@@ -61,12 +61,22 @@ Changes to the LLVM IR
 * The ``inalloca`` attribute now has a mandatory type field, similar
   to ``byval`` and ``sret``.
 
-
 Changes to building LLVM
 ------------------------
 
+* The build system now supports building multiple distributions, so that you can
+  e.g. have one distribution containing just tools and another for libraries (to
+  enable development). See :ref:`Multi-distribution configurations` for details.
+
 Changes to TableGen
 -------------------
+
+Changes to Backend Code Generation
+----------------------------------
+
+* When lowering calls, only ABI attributes on the call itself are checked, not
+  the caller. Frontends need to make sure to properly set ABI attributes on
+  calls (and always should have).
 
 Changes to the ARM Backend
 --------------------------
@@ -140,6 +150,10 @@ Changes to the LLVM tools
 
 * Support for in-order processors has been added to ``llvm-mca``.
   (`D94928 <https://reviews.llvm.org/D94928>`_)
+
+* llvm-objdump supports ``-M {att,intel}`` now.
+  ``--x86-asm-syntax`` is a deprecated internal option which will be removed in LLVM 14.0.0.
+  (`D101695 <https://reviews.llvm.org/D101695>`_)
 
 Changes to LLDB
 ---------------------------------
