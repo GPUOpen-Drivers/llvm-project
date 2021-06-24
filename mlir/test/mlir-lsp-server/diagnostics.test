@@ -15,7 +15,7 @@
 // CHECK-NEXT:         "message": "custom op 'func' expected valid '@'-identifier for symbol name",
 // CHECK-NEXT:         "range": {
 // CHECK-NEXT:           "end": {
-// CHECK-NEXT:             "character": 6,
+// CHECK-NEXT:             "character": 7,
 // CHECK-NEXT:             "line": 0
 // CHECK-NEXT:           },
 // CHECK-NEXT:           "start": {
@@ -27,7 +27,8 @@
 // CHECK-NEXT:         "source": "mlir"
 // CHECK-NEXT:       }
 // CHECK-NEXT:     ],
-// CHECK-NEXT:     "uri": "test:///foo.mlir"
+// CHECK-NEXT:     "uri": "test:///foo.mlir",
+// CHECK-NEXT:     "version": 1
 // CHECK-NEXT:   }
 // -----
 {"jsonrpc":"2.0","id":3,"method":"shutdown"}

@@ -7,11 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "SyntheticSections.h"
+#include "ConcatOutputSection.h"
 #include "Config.h"
 #include "ExportTrie.h"
 #include "InputFiles.h"
 #include "MachOStructs.h"
-#include "MergedOutputSection.h"
 #include "OutputSegment.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
@@ -20,7 +20,7 @@
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Config/config.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/LEB128.h"
@@ -31,7 +31,7 @@
 #include <sys/mman.h>
 #endif
 
-#ifdef HAVE_LIBXAR
+#ifdef LLVM_HAVE_LIBXAR
 #include <fcntl.h>
 #include <xar/xar.h>
 #endif
@@ -312,9 +312,10 @@ static void encodeBinding(const Symbol *sym, const OutputSection *osec,
 
 // Non-weak bindings need to have their dylib ordinal encoded as well.
 static int16_t ordinalForDylibSymbol(const DylibSymbol &dysym) {
-  return config->namespaceKind == NamespaceKind::flat || dysym.isDynamicLookup()
-             ? static_cast<int16_t>(BIND_SPECIAL_DYLIB_FLAT_LOOKUP)
-             : dysym.getFile()->ordinal;
+  if (config->namespaceKind == NamespaceKind::flat || dysym.isDynamicLookup())
+    return static_cast<int16_t>(BIND_SPECIAL_DYLIB_FLAT_LOOKUP);
+  assert(dysym.getFile()->isReferenced());
+  return dysym.getFile()->ordinal;
 }
 
 static void encodeDylibOrdinal(int16_t ordinal, raw_svector_ostream &os) {
@@ -464,15 +465,19 @@ void StubHelperSection::setup() {
           "Needed to perform lazy binding.");
     return;
   }
-  stubBinder->refState = RefState::Strong;
+  stubBinder->reference(RefState::Strong);
   in.got->addEntry(stubBinder);
 
   inputSections.push_back(in.imageLoaderCache);
+  // Since this isn't in the symbol table or in any input file, the noDeadStrip
+  // argument doesn't matter. It's kept alive by ImageLoaderCacheSection()
+  // setting `live` to true on the backing InputSection.
   dyldPrivate =
       make<Defined>("__dyld_private", nullptr, in.imageLoaderCache, 0, 0,
                     /*isWeakDef=*/false,
                     /*isExternal=*/false, /*isPrivateExtern=*/false,
-                    /*isThumb=*/false, /*isReferencedDynamically=*/false);
+                    /*isThumb=*/false, /*isReferencedDynamically=*/false,
+                    /*noDeadStrip=*/false);
 }
 
 ImageLoaderCacheSection::ImageLoaderCacheSection() {
@@ -482,6 +487,7 @@ ImageLoaderCacheSection::ImageLoaderCacheSection() {
   memset(arr, 0, target->wordSize);
   data = {arr, target->wordSize};
   align = target->wordSize;
+  live = true;
 }
 
 LazyPointerSection::LazyPointerSection()
@@ -570,7 +576,7 @@ void ExportSection::finalizeContents() {
   trieBuilder.setImageBase(in.header->addr);
   for (const Symbol *sym : symtab->getSymbols()) {
     if (const auto *defined = dyn_cast<Defined>(sym)) {
-      if (defined->privateExtern)
+      if (defined->privateExtern || !defined->isLive())
         continue;
       trieBuilder.addSymbol(*defined);
       hasWeakSymbol = hasWeakSymbol || sym->isWeakDef();
@@ -589,7 +595,7 @@ void FunctionStartsSection::finalizeContents() {
   uint64_t addr = in.header->addr;
   for (const Symbol *sym : symtab->getSymbols()) {
     if (const auto *defined = dyn_cast<Defined>(sym)) {
-      if (!defined->isec || !isCodeSection(defined->isec))
+      if (!defined->isec || !isCodeSection(defined->isec) || !defined->isLive())
         continue;
       // TODO: Add support for thumbs, in that case
       // the lowest bit of nextAddr needs to be set to 1.
@@ -666,6 +672,8 @@ void SymtabSection::emitStabs() {
   for (const SymtabEntry &entry :
        concat<SymtabEntry>(localSymbols, externalSymbols)) {
     Symbol *sym = entry.sym;
+    assert(sym->isLive() &&
+           "dead symbols should not be in localSymbols, externalSymbols");
     if (auto *defined = dyn_cast<Defined>(sym)) {
       if (defined->isAbsolute())
         continue;
@@ -728,12 +736,8 @@ void SymtabSection::finalizeContents() {
   for (const InputFile *file : inputFiles) {
     if (auto *objFile = dyn_cast<ObjFile>(file)) {
       for (Symbol *sym : objFile->symbols) {
-        if (sym == nullptr)
-          continue;
-        // TODO: when we implement -dead_strip, we should filter out symbols
-        // that belong to dead sections.
-        if (auto *defined = dyn_cast<Defined>(sym)) {
-          if (!defined->isExternal()) {
+        if (auto *defined = dyn_cast_or_null<Defined>(sym)) {
+          if (!defined->isExternal() && defined->isLive()) {
             StringRef name = defined->getName();
             if (!name.startswith("l") && !name.startswith("L"))
               addSymbol(localSymbols, sym);
@@ -749,11 +753,16 @@ void SymtabSection::finalizeContents() {
     addSymbol(localSymbols, dyldPrivate);
 
   for (Symbol *sym : symtab->getSymbols()) {
+    if (!sym->isLive())
+      continue;
     if (auto *defined = dyn_cast<Defined>(sym)) {
       if (!defined->includeInSymtab)
         continue;
       assert(defined->isExternal());
-      addSymbol(externalSymbols, defined);
+      if (defined->privateExtern)
+        addSymbol(localSymbols, defined);
+      else
+        addSymbol(externalSymbols, defined);
     } else if (auto *dysym = dyn_cast<DylibSymbol>(sym)) {
       if (dysym->isReferenced())
         addSymbol(undefinedSymbols, sym);
@@ -922,6 +931,9 @@ void StringTableSection::writeTo(uint8_t *buf) const {
   }
 }
 
+static_assert((CodeSignatureSection::blobHeadersSize % 8) == 0, "");
+static_assert((CodeSignatureSection::fixedHeadersSize % 8) == 0, "");
+
 CodeSignatureSection::CodeSignatureSection()
     : LinkEditSection(segment_names::linkEdit, section_names::codeSignature) {
   align = 16; // required by libstuff
@@ -1033,7 +1045,7 @@ private:
   } while (0);
 
 void BitcodeBundleSection::finalize() {
-#ifdef HAVE_LIBXAR
+#ifdef LLVM_HAVE_LIBXAR
   using namespace llvm::sys::fs;
   CHECK_EC(createTemporaryFile("bitcode-bundle", "xar", xarPath));
 
@@ -1045,7 +1057,7 @@ void BitcodeBundleSection::finalize() {
   CHECK_EC(xar_close(xar));
 
   file_size(xarPath, xarSize);
-#endif // defined(HAVE_LIBXAR)
+#endif // defined(LLVM_HAVE_LIBXAR)
 }
 
 void BitcodeBundleSection::writeTo(uint8_t *buf) const {

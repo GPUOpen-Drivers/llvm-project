@@ -15,6 +15,7 @@
 #define LLVM_CODEGEN_PASSES_H
 
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Discriminator.h"
 #include <functional>
 #include <string>
 
@@ -164,6 +165,9 @@ namespace llvm {
 
   /// This pass perform post-ra machine sink for COPY instructions.
   extern char &PostRAMachineSinkingID;
+
+  /// This pass adds flow sensitive discriminators.
+  extern char &MIRAddFSDiscriminatorsID;
 
   /// FastRegisterAllocation Pass - This pass register allocates as fast as
   /// possible. It is best suited for debug code where live ranges are short.
@@ -486,6 +490,11 @@ namespace llvm {
 
   /// Create IR Type Promotion pass. \see TypePromotion.cpp
   FunctionPass *createTypePromotionPass();
+
+  /// Add Flow Sensitive Discriminators. PassNum specifies the
+  /// sequence number of this pass (starting from 1).
+  FunctionPass *
+  createMIRAddFSDiscriminatorsPass(sampleprof::FSDiscriminatorPass P);
 
   /// Creates MIR Debugify pass. \see MachineDebugify.cpp
   ModulePass *createDebugifyMachineModulePass();

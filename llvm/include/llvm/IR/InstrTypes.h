@@ -1442,8 +1442,7 @@ public:
   /// type.
   void setCalledFunction(FunctionType *FTy, Value *Fn) {
     this->FTy = FTy;
-    assert(FTy == cast<FunctionType>(
-                      cast<PointerType>(Fn->getType())->getElementType()));
+    assert(cast<PointerType>(Fn->getType())->isOpaqueOrPointeeTypeMatches(FTy));
     // This function doesn't mutate the return type, only the function
     // type. Seems broken, but I'm just gonna stick an assert in for now.
     assert(getType() == FTy->getReturnType());
@@ -1552,6 +1551,13 @@ public:
     assert(ArgNo < getNumArgOperands() && "Out of bounds");
     AttributeList PAL = getAttributes();
     PAL = PAL.removeParamAttribute(getContext(), ArgNo, Kind);
+    setAttributes(PAL);
+  }
+
+  /// Removes the attributes from the given argument
+  void removeParamAttrs(unsigned ArgNo, const AttrBuilder &Attrs) {
+    AttributeList PAL = getAttributes();
+    PAL = PAL.removeParamAttributes(getContext(), ArgNo, Attrs);
     setAttributes(PAL);
   }
 

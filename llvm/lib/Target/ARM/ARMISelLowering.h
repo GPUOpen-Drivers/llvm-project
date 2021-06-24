@@ -330,6 +330,9 @@ class VectorType;
     VLD2DUP_UPD,
     VLD3DUP_UPD,
     VLD4DUP_UPD,
+    VLD1x2_UPD,
+    VLD1x3_UPD,
+    VLD1x4_UPD,
 
     // NEON stores with post-increment base updates:
     VST1_UPD,
@@ -339,6 +342,9 @@ class VectorType;
     VST2LN_UPD,
     VST3LN_UPD,
     VST4LN_UPD,
+    VST1x2_UPD,
+    VST1x3_UPD,
+    VST1x4_UPD,
 
     // Load/Store of dual registers
     LDRD,
@@ -750,7 +756,8 @@ class VectorType;
                           CCValAssign &VA, CCValAssign &NextVA,
                           SDValue &StackPtr,
                           SmallVectorImpl<SDValue> &MemOpChains,
-                          ISD::ArgFlagsTy Flags) const;
+                          bool IsTailCall,
+                          int SPDiff) const;
     SDValue GetF64FormalArgument(CCValAssign &VA, CCValAssign &NextVA,
                                  SDValue &Root, SelectionDAG &DAG,
                                  const SDLoc &dl) const;
@@ -759,10 +766,10 @@ class VectorType;
                                             bool isVarArg) const;
     CCAssignFn *CCAssignFnForNode(CallingConv::ID CC, bool Return,
                                   bool isVarArg) const;
-    SDValue LowerMemOpCallTo(SDValue Chain, SDValue StackPtr, SDValue Arg,
-                             const SDLoc &dl, SelectionDAG &DAG,
-                             const CCValAssign &VA,
-                             ISD::ArgFlagsTy Flags) const;
+    std::pair<SDValue, MachinePointerInfo>
+    computeAddrForCallArg(const SDLoc &dl, SelectionDAG &DAG,
+                          const CCValAssign &VA, SDValue StackPtr,
+                          bool IsTailCall, int SPDiff) const;
     SDValue LowerEH_SJLJ_SETJMP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_SJLJ_LONGJMP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_SJLJ_SETUP_DISPATCH(SDValue Op, SelectionDAG &DAG) const;
