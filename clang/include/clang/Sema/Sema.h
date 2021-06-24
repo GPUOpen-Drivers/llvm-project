@@ -911,6 +911,10 @@ public:
     OpaqueParser = P;
   }
 
+  // Does the work necessary to deal with a SYCL kernel lambda. At the moment,
+  // this just marks the list of lambdas required to name the kernel.
+  void AddSYCLKernelLambda(const FunctionDecl *FD);
+
   class DelayedDiagnostics;
 
   class DelayedDiagnosticsState {
@@ -1514,6 +1518,11 @@ public:
 
   bool WarnedStackExhausted = false;
 
+  /// Increment when we find a reference; decrement when we find an ignored
+  /// assignment.  Ultimately the value is 0 if every reference is an ignored
+  /// assignment.
+  llvm::DenseMap<const VarDecl *, int> RefsMinusAssignments;
+
 public:
   Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
        TranslationUnitKind TUKind = TU_Complete,
@@ -1786,7 +1795,7 @@ public:
   private:
     /// Function or variable declarations to be checked for whether the deferred
     /// diagnostics should be emitted.
-    SmallVector<Decl *, 4> DeclsToCheckForDeferredDiags;
+    llvm::SmallSetVector<Decl *, 4> DeclsToCheckForDeferredDiags;
 
   public:
   // Emit all deferred diagnostics.
@@ -1881,6 +1890,10 @@ public:
 
   /// Retrieve the current captured region, if any.
   sema::CapturedRegionScopeInfo *getCurCapturedRegion();
+
+  /// Retrieve the current function, if any, that should be analyzed for
+  /// potential availability violations.
+  sema::FunctionScopeInfo *getCurFunctionAvailabilityContext();
 
   /// WeakTopLevelDeclDecls - access to \#pragma weak-generated Decls
   SmallVectorImpl<Decl *> &WeakTopLevelDecls() { return WeakTopLevelDecl; }
@@ -3139,6 +3152,7 @@ public:
   void ActOnStartCXXMemberDeclarations(Scope *S, Decl *TagDecl,
                                        SourceLocation FinalLoc,
                                        bool IsFinalSpelledSealed,
+                                       bool IsAbstract,
                                        SourceLocation LBraceLoc);
 
   /// ActOnTagFinishDefinition - Invoked once we have finished parsing
@@ -3255,6 +3269,9 @@ public:
     /// Merge availability attributes for an implementation of
     /// a protocol requirement.
     AMK_ProtocolImplementation,
+    /// Merge availability attributes for an implementation of
+    /// an optional protocol requirement.
+    AMK_OptionalProtocolImplementation
   };
 
   /// Describes the kind of priority given to an availability attribute.
@@ -4858,6 +4875,10 @@ public:
   void DiagnoseUnusedNestedTypedefs(const RecordDecl *D);
   void DiagnoseUnusedDecl(const NamedDecl *ND);
 
+  /// If VD is set but not otherwise used, diagnose, for a parameter or a
+  /// variable.
+  void DiagnoseUnusedButSetDecl(const VarDecl *VD);
+
   /// Emit \p DiagID if statement located on \p StmtLoc has a suspicious null
   /// statement as a \p Body, and it is located on the same line.
   ///
@@ -5182,6 +5203,15 @@ public:
                                  PredefinedExpr::IdentKind IK);
   ExprResult ActOnPredefinedExpr(SourceLocation Loc, tok::TokenKind Kind);
   ExprResult ActOnIntegerConstant(SourceLocation Loc, uint64_t Val);
+
+  ExprResult BuildSYCLUniqueStableNameExpr(SourceLocation OpLoc,
+                                           SourceLocation LParen,
+                                           SourceLocation RParen,
+                                           TypeSourceInfo *TSI);
+  ExprResult ActOnSYCLUniqueStableNameExpr(SourceLocation OpLoc,
+                                           SourceLocation LParen,
+                                           SourceLocation RParen,
+                                           ParsedType ParsedTy);
 
   bool CheckLoopHintExpr(Expr *E, SourceLocation Loc);
 
@@ -5690,11 +5720,14 @@ public:
                                const DeclarationNameInfo &NameInfo,
                                SourceLocation NameLoc);
 
-  NamedDecl *BuildUsingDeclaration(
-      Scope *S, AccessSpecifier AS, SourceLocation UsingLoc,
-      bool HasTypenameKeyword, SourceLocation TypenameLoc, CXXScopeSpec &SS,
-      DeclarationNameInfo NameInfo, SourceLocation EllipsisLoc,
-      const ParsedAttributesView &AttrList, bool IsInstantiation);
+  NamedDecl *BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
+                                   SourceLocation UsingLoc,
+                                   bool HasTypenameKeyword,
+                                   SourceLocation TypenameLoc, CXXScopeSpec &SS,
+                                   DeclarationNameInfo NameInfo,
+                                   SourceLocation EllipsisLoc,
+                                   const ParsedAttributesView &AttrList,
+                                   bool IsInstantiation, bool IsUsingIfExists);
   NamedDecl *BuildUsingPackDecl(NamedDecl *InstantiatedFrom,
                                 ArrayRef<NamedDecl *> Expansions);
 
@@ -12062,6 +12095,15 @@ public:
   CUDAFunctionTarget IdentifyCUDATarget(const FunctionDecl *D,
                                         bool IgnoreImplicitHDAttr = false);
   CUDAFunctionTarget IdentifyCUDATarget(const ParsedAttributesView &Attrs);
+
+  enum CUDAVariableTarget {
+    CVT_Device,  /// Emitted on device side with a shadow variable on host side
+    CVT_Host,    /// Emitted on host side only
+    CVT_Both,    /// Emitted on both sides with different addresses
+    CVT_Unified, /// Emitted as a unified address, e.g. managed variables
+  };
+  /// Determines whether the given variable is emitted on host or device side.
+  CUDAVariableTarget IdentifyCUDATarget(const VarDecl *D);
 
   /// Gets the CUDA target for the current context.
   CUDAFunctionTarget CurrentCUDATarget() {

@@ -590,6 +590,18 @@ public:
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
+  static bool isValidSuccessOrdering(AtomicOrdering Ordering) {
+    return Ordering != AtomicOrdering::NotAtomic &&
+           Ordering != AtomicOrdering::Unordered;
+  }
+
+  static bool isValidFailureOrdering(AtomicOrdering Ordering) {
+    return Ordering != AtomicOrdering::NotAtomic &&
+           Ordering != AtomicOrdering::Unordered &&
+           Ordering != AtomicOrdering::AcquireRelease &&
+           Ordering != AtomicOrdering::Release;
+  }
+
   /// Returns the success ordering constraint of this cmpxchg instruction.
   AtomicOrdering getSuccessOrdering() const {
     return getSubclassData<SuccessOrderingField>();
@@ -597,8 +609,8 @@ public:
 
   /// Sets the success ordering constraint of this cmpxchg instruction.
   void setSuccessOrdering(AtomicOrdering Ordering) {
-    assert(Ordering != AtomicOrdering::NotAtomic &&
-           "CmpXchg instructions can only be atomic.");
+    assert(isValidSuccessOrdering(Ordering) &&
+           "invalid CmpXchg success ordering");
     setSubclassData<SuccessOrderingField>(Ordering);
   }
 
@@ -609,8 +621,8 @@ public:
 
   /// Sets the failure ordering constraint of this cmpxchg instruction.
   void setFailureOrdering(AtomicOrdering Ordering) {
-    assert(Ordering != AtomicOrdering::NotAtomic &&
-           "CmpXchg instructions can only be atomic.");
+    assert(isValidFailureOrdering(Ordering) &&
+           "invalid CmpXchg failure ordering");
     setSubclassData<FailureOrderingField>(Ordering);
   }
 
@@ -933,13 +945,13 @@ public:
                                    const Twine &NameStr = "",
                                    Instruction *InsertBefore = nullptr) {
     unsigned Values = 1 + unsigned(IdxList.size());
-    if (!PointeeType)
+    if (!PointeeType) {
       PointeeType =
           cast<PointerType>(Ptr->getType()->getScalarType())->getElementType();
-    else
-      assert(
-          PointeeType ==
-          cast<PointerType>(Ptr->getType()->getScalarType())->getElementType());
+    } else {
+      assert(cast<PointerType>(Ptr->getType()->getScalarType())
+                 ->isOpaqueOrPointeeTypeMatches(PointeeType));
+    }
     return new (Values) GetElementPtrInst(PointeeType, Ptr, IdxList, Values,
                                           NameStr, InsertBefore);
   }
@@ -949,13 +961,13 @@ public:
                                    const Twine &NameStr,
                                    BasicBlock *InsertAtEnd) {
     unsigned Values = 1 + unsigned(IdxList.size());
-    if (!PointeeType)
+    if (!PointeeType) {
       PointeeType =
           cast<PointerType>(Ptr->getType()->getScalarType())->getElementType();
-    else
-      assert(
-          PointeeType ==
-          cast<PointerType>(Ptr->getType()->getScalarType())->getElementType());
+    } else {
+      assert(cast<PointerType>(Ptr->getType()->getScalarType())
+                 ->isOpaqueOrPointeeTypeMatches(PointeeType));
+    }
     return new (Values) GetElementPtrInst(PointeeType, Ptr, IdxList, Values,
                                           NameStr, InsertAtEnd);
   }
@@ -1005,8 +1017,8 @@ public:
   void setResultElementType(Type *Ty) { ResultElementType = Ty; }
 
   Type *getResultElementType() const {
-    assert(ResultElementType ==
-           cast<PointerType>(getType()->getScalarType())->getElementType());
+    assert(cast<PointerType>(getType()->getScalarType())
+               ->isOpaqueOrPointeeTypeMatches(ResultElementType));
     return ResultElementType;
   }
 
@@ -1122,7 +1134,9 @@ public:
   /// must be at least as wide as the IntPtr type for the address space of
   /// the base GEP pointer.
   bool accumulateConstantOffset(const DataLayout &DL, APInt &Offset) const;
-
+  bool collectOffset(const DataLayout &DL, unsigned BitWidth,
+                     SmallDenseMap<Value *, APInt, 8> &VariableOffsets,
+                     APInt &ConstantOffset) const;
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const Instruction *I) {
     return (I->getOpcode() == Instruction::GetElementPtr);
@@ -1146,8 +1160,8 @@ GetElementPtrInst::GetElementPtrInst(Type *PointeeType, Value *Ptr,
                   Values, InsertBefore),
       SourceElementType(PointeeType),
       ResultElementType(getIndexedType(PointeeType, IdxList)) {
-  assert(ResultElementType ==
-         cast<PointerType>(getType()->getScalarType())->getElementType());
+  assert(cast<PointerType>(getType()->getScalarType())
+             ->isOpaqueOrPointeeTypeMatches(ResultElementType));
   init(Ptr, IdxList, NameStr);
 }
 
@@ -1160,8 +1174,8 @@ GetElementPtrInst::GetElementPtrInst(Type *PointeeType, Value *Ptr,
                   Values, InsertAtEnd),
       SourceElementType(PointeeType),
       ResultElementType(getIndexedType(PointeeType, IdxList)) {
-  assert(ResultElementType ==
-         cast<PointerType>(getType()->getScalarType())->getElementType());
+  assert(cast<PointerType>(getType()->getScalarType())
+             ->isOpaqueOrPointeeTypeMatches(ResultElementType));
   init(Ptr, IdxList, NameStr);
 }
 

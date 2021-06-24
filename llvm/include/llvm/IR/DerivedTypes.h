@@ -660,6 +660,18 @@ public:
     return PointerType::get(C, 0);
   }
 
+  /// This constructs a pointer type with the same pointee type as input
+  /// PointerType (or opaque pointer is the input PointerType is opaque) and the
+  /// given address space. This is only useful during the opaque pointer
+  /// transition.
+  /// TODO: remove after opaque pointer transition is complete.
+  static PointerType *getWithSamePointeeType(PointerType *PT,
+                                             unsigned AddressSpace) {
+    if (PT->isOpaque())
+      return get(PT->getContext(), AddressSpace);
+    return get(PT->getElementType(), AddressSpace);
+  }
+
   Type *getElementType() const {
     assert(!isOpaque() && "Attempting to get element type of opaque pointer");
     return PointeeTy;
@@ -675,6 +687,14 @@ public:
 
   /// Return the address space of the Pointer type.
   inline unsigned getAddressSpace() const { return getSubclassData(); }
+
+  /// Return true if either this is an opaque pointer type or if this pointee
+  /// type matches Ty. Primarily used for checking if an instruction's pointer
+  /// operands are valid types. Will be useless after non-opaque pointers are
+  /// removed.
+  bool isOpaqueOrPointeeTypeMatches(Type *Ty) {
+    return isOpaque() || PointeeTy == Ty;
+  }
 
   /// Implement support type inquiry through isa, cast, and dyn_cast.
   static bool classof(const Type *T) {

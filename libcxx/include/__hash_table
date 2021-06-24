@@ -10,16 +10,16 @@
 #ifndef _LIBCPP__HASH_TABLE
 #define _LIBCPP__HASH_TABLE
 
+#include <__bits> // __libcpp_clz
 #include <__config>
-#include <initializer_list>
-#include <memory>
-#include <iterator>
+#include <__debug>
 #include <algorithm>
 #include <cmath>
-#include <utility>
+#include <initializer_list>
+#include <iterator>
+#include <memory>
 #include <type_traits>
-
-#include <__debug>
+#include <utility>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #pragma GCC system_header
@@ -89,7 +89,7 @@ struct __hash_node_base
 };
 
 template <class _Tp, class _VoidPtr>
-struct __hash_node
+struct _LIBCPP_STANDALONE_DEBUG __hash_node
     : public __hash_node_base
              <
                  typename __rebind_pointer<_VoidPtr, __hash_node<_Tp, _VoidPtr> >::type

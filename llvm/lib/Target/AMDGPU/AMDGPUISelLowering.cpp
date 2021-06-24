@@ -1322,7 +1322,8 @@ SDValue AMDGPUTargetLowering::LowerGlobalAddress(AMDGPUMachineFunction* MFI,
 
   if (G->getAddressSpace() == AMDGPUAS::LOCAL_ADDRESS ||
       G->getAddressSpace() == AMDGPUAS::REGION_ADDRESS) {
-    if (!MFI->isModuleEntryFunction()) {
+    if (!MFI->isModuleEntryFunction() &&
+        !GV->getName().equals("llvm.amdgcn.module.lds")) {
       SDLoc DL(Op);
       const Function &Fn = DAG.getMachineFunction().getFunction();
       DiagnosticInfoUnsupported BadLDSDecl(
@@ -4172,8 +4173,13 @@ SDValue AMDGPUTargetLowering::storeStackInputValue(SelectionDAG &DAG,
                                                    int64_t Offset) const {
   MachineFunction &MF = DAG.getMachineFunction();
   MachinePointerInfo DstInfo = MachinePointerInfo::getStack(MF, Offset);
+  const SIMachineFunctionInfo *Info = MF.getInfo<SIMachineFunctionInfo>();
 
   SDValue Ptr = DAG.getConstant(Offset, SL, MVT::i32);
+  // Stores to the argument stack area are relative to the stack pointer.
+  SDValue SP =
+      DAG.getCopyFromReg(Chain, SL, Info->getStackPtrOffsetReg(), MVT::i32);
+  Ptr = DAG.getNode(ISD::ADD, SL, MVT::i32, SP, Ptr);
   SDValue Store = DAG.getStore(Chain, SL, ArgVal, Ptr, DstInfo, Align(4),
                                MachineMemOperand::MODereferenceable);
   return Store;
