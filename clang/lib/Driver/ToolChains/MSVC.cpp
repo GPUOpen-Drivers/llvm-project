@@ -1243,23 +1243,35 @@ void MSVCToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   for (const auto &Path : DriverArgs.getAllArgValues(options::OPT__SLASH_imsvc))
     addSystemInclude(DriverArgs, CC1Args, Path);
 
+  auto AddSystemIncludesFromEnv = [&](StringRef Var) -> bool {
+    if (auto Val = llvm::sys::Process::GetEnv(Var)) {
+      SmallVector<StringRef, 8> Dirs;
+      StringRef(*Val).split(Dirs, ";", /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+      if (!Dirs.empty()) {
+        addSystemIncludes(DriverArgs, CC1Args, Dirs);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Add %INCLUDE%-like dirs via /external:env: flags.
+  for (const auto &Var :
+       DriverArgs.getAllArgValues(options::OPT__SLASH_external_env)) {
+    AddSystemIncludesFromEnv(Var);
+  }
+
   if (DriverArgs.hasArg(options::OPT_nostdlibinc))
     return;
 
-  // Honor %INCLUDE%. It should know essential search paths with vcvarsall.bat.
-  // Skip if the user expressly set a vctoolsdir
+  // Honor %INCLUDE% and %EXTERNAL_INCLUDE%. It should have essential search
+  // paths set by vcvarsall.bat. Skip if the user expressly set a vctoolsdir.
   if (!DriverArgs.getLastArg(options::OPT__SLASH_vctoolsdir,
                              options::OPT__SLASH_winsysroot)) {
-    if (llvm::Optional<std::string> cl_include_dir =
-            llvm::sys::Process::GetEnv("INCLUDE")) {
-      SmallVector<StringRef, 8> Dirs;
-      StringRef(*cl_include_dir)
-          .split(Dirs, ";", /*MaxSplit=*/-1, /*KeepEmpty=*/false);
-      for (StringRef Dir : Dirs)
-        addSystemInclude(DriverArgs, CC1Args, Dir);
-      if (!Dirs.empty())
-        return;
-    }
+    bool Found = AddSystemIncludesFromEnv("INCLUDE");
+    Found |= AddSystemIncludesFromEnv("EXTERNAL_INCLUDE");
+    if (Found)
+      return;
   }
 
   // When built with access to the proper Windows APIs, try to actually find
@@ -1281,7 +1293,7 @@ void MSVCToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
     }
 
     std::string WindowsSDKDir;
-    int major;
+    int major = 0;
     std::string windowsSDKIncludeVersion;
     std::string windowsSDKLibVersion;
     if (getWindowsSDKDir(getVFS(), DriverArgs, WindowsSDKDir, major,
@@ -1489,6 +1501,18 @@ static void TranslateDArg(Arg *A, llvm::opt::DerivedArgList &DAL,
   DAL.AddJoinedArg(A, Opts.getOption(options::OPT_D), NewVal);
 }
 
+static void TranslatePermissive(Arg *A, llvm::opt::DerivedArgList &DAL,
+                                const OptTable &Opts) {
+  DAL.AddFlagArg(A, Opts.getOption(options::OPT__SLASH_Zc_twoPhase_));
+  DAL.AddFlagArg(A, Opts.getOption(options::OPT_fno_operator_names));
+}
+
+static void TranslatePermissiveMinus(Arg *A, llvm::opt::DerivedArgList &DAL,
+                                     const OptTable &Opts) {
+  DAL.AddFlagArg(A, Opts.getOption(options::OPT__SLASH_Zc_twoPhase));
+  DAL.AddFlagArg(A, Opts.getOption(options::OPT_foperator_names));
+}
+
 llvm::opt::DerivedArgList *
 MSVCToolChain::TranslateArgs(const llvm::opt::DerivedArgList &Args,
                              StringRef BoundArch,
@@ -1531,6 +1555,12 @@ MSVCToolChain::TranslateArgs(const llvm::opt::DerivedArgList &Args,
     } else if (A->getOption().matches(options::OPT_D)) {
       // Translate -Dfoo#bar into -Dfoo=bar.
       TranslateDArg(A, *DAL, Opts);
+    } else if (A->getOption().matches(options::OPT__SLASH_permissive)) {
+      // Expand /permissive
+      TranslatePermissive(A, *DAL, Opts);
+    } else if (A->getOption().matches(options::OPT__SLASH_permissive_)) {
+      // Expand /permissive-
+      TranslatePermissiveMinus(A, *DAL, Opts);
     } else if (OFK != Action::OFK_HIP) {
       // HIP Toolchain translates input args by itself.
       DAL->append(A);
@@ -1538,4 +1568,14 @@ MSVCToolChain::TranslateArgs(const llvm::opt::DerivedArgList &Args,
   }
 
   return DAL;
+}
+
+void MSVCToolChain::addClangTargetOptions(
+    const ArgList &DriverArgs, ArgStringList &CC1Args,
+    Action::OffloadKind DeviceOffloadKind) const {
+  // MSVC STL kindly allows removing all usages of typeid by defining
+  // _HAS_STATIC_RTTI to 0. Do so, when compiling with -fno-rtti
+  if (DriverArgs.hasArg(options::OPT_fno_rtti, options::OPT_frtti,
+                        /*Default=*/false))
+    CC1Args.push_back("-D_HAS_STATIC_RTTI=0");
 }

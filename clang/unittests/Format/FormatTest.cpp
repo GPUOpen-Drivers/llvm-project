@@ -525,6 +525,7 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatement) {
                "}");
 
   FormatStyle AllowsMergedIf = getLLVMStyle();
+  AllowsMergedIf.IfMacros.push_back("MYIF");
   AllowsMergedIf.AlignEscapedNewlines = FormatStyle::ENAS_Left;
   AllowsMergedIf.AllowShortIfStatementsOnASingleLine =
       FormatStyle::SIS_WithoutElse;
@@ -564,17 +565,62 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatement) {
                "  f();\n"
                "}",
                AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  // comment\n"
+               "  f();",
+               AllowsMergedIf);
+  verifyFormat("{\n"
+               "  MYIF (a)\n"
+               "  label:\n"
+               "    f();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("#define A  \\\n"
+               "  MYIF (a) \\\n"
+               "  label:   \\\n"
+               "    f()",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  ;",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  MYIF (b) return;",
+               AllowsMergedIf);
+
+  verifyFormat("MYIF (a) // Can't merge this\n"
+               "  f();\n",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) /* still don't merge */\n"
+               "  f();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) { // Never merge this\n"
+               "  f();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) { /* Never merge this */\n"
+               "  f();\n"
+               "}",
+               AllowsMergedIf);
 
   AllowsMergedIf.ColumnLimit = 14;
+  // Where line-lengths matter, a 2-letter synonym that maintains line length.
+  // Not IF to avoid any confusion that IF is somehow special.
+  AllowsMergedIf.IfMacros.push_back("FI");
   verifyFormat("if (a) return;", AllowsMergedIf);
   verifyFormat("if (aaaaaaaaa)\n"
+               "  return;",
+               AllowsMergedIf);
+  verifyFormat("FI (a) return;", AllowsMergedIf);
+  verifyFormat("FI (aaaaaaaaa)\n"
                "  return;",
                AllowsMergedIf);
 
   AllowsMergedIf.ColumnLimit = 13;
   verifyFormat("if (a)\n  return;", AllowsMergedIf);
+  verifyFormat("FI (a)\n  return;", AllowsMergedIf);
 
   FormatStyle AllowsMergedIfElse = getLLVMStyle();
+  AllowsMergedIfElse.IfMacros.push_back("MYIF");
   AllowsMergedIfElse.AllowShortIfStatementsOnASingleLine =
       FormatStyle::SIS_AllIfsAndElse;
   verifyFormat("if (a)\n"
@@ -626,10 +672,60 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatement) {
                "  else if constexpr (c) return;\n"
                "  else return;",
                AllowsMergedIfElse);
+  verifyFormat("MYIF (a)\n"
+               "  // comment\n"
+               "  f();\n"
+               "else\n"
+               "  // comment\n"
+               "  f();",
+               AllowsMergedIfElse);
+  verifyFormat("{\n"
+               "  MYIF (a)\n"
+               "  label:\n"
+               "    f();\n"
+               "  else\n"
+               "  label:\n"
+               "    f();\n"
+               "}",
+               AllowsMergedIfElse);
+  verifyFormat("MYIF (a)\n"
+               "  ;\n"
+               "else\n"
+               "  ;",
+               AllowsMergedIfElse);
+  verifyFormat("MYIF (a) {\n"
+               "} else {\n"
+               "}",
+               AllowsMergedIfElse);
+  verifyFormat("MYIF (a) return;\n"
+               "else MYIF (b) return;\n"
+               "else return;",
+               AllowsMergedIfElse);
+  verifyFormat("MYIF (a) {\n"
+               "} else return;",
+               AllowsMergedIfElse);
+  verifyFormat("MYIF (a) {\n"
+               "} else MYIF (b) return;\n"
+               "else return;",
+               AllowsMergedIfElse);
+  verifyFormat("MYIF (a) return;\n"
+               "else MYIF (b) {\n"
+               "} else return;",
+               AllowsMergedIfElse);
+  verifyFormat("MYIF (a)\n"
+               "  MYIF (b) return;\n"
+               "  else return;",
+               AllowsMergedIfElse);
+  verifyFormat("MYIF constexpr (a)\n"
+               "  MYIF constexpr (b) return;\n"
+               "  else MYIF constexpr (c) return;\n"
+               "  else return;",
+               AllowsMergedIfElse);
 }
 
 TEST_F(FormatTest, FormatIfWithoutCompoundStatementButElseWith) {
   FormatStyle AllowsMergedIf = getLLVMStyle();
+  AllowsMergedIf.IfMacros.push_back("MYIF");
   AllowsMergedIf.AlignEscapedNewlines = FormatStyle::ENAS_Left;
   AllowsMergedIf.AllowShortIfStatementsOnASingleLine =
       FormatStyle::SIS_WithoutElse;
@@ -710,6 +806,135 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatementButElseWith) {
                "}",
                AllowsMergedIf);
   verifyFormat("if (a) {\n"
+               "  g();\n"
+               "} else if (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  f();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  f();\n"
+               "else\n"
+               "  g();\n",
+               AllowsMergedIf);
+
+  verifyFormat("MYIF (a) g();", AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g()\n"
+               "};",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else MYIF (b)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else if (b)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else MYIF (b)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else if (b)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else MYIF (b) {\n"
+               "  g();\n"
+               "} else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else if (b) {\n"
+               "  g();\n"
+               "} else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else MYIF (b)\n"
+               "  g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else if (b)\n"
+               "  g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else MYIF (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a)\n"
+               "  g();\n"
+               "else if (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else MYIF (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
                "  g();\n"
                "} else if (b) {\n"
                "  g();\n"
@@ -802,6 +1027,128 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatementButElseWith) {
                "  g();\n"
                "}",
                AllowsMergedIf);
+  verifyFormat("MYIF (a) f();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) f();\n"
+               "else {\n"
+               "  if (a) f();\n"
+               "  else {\n"
+               "    g();\n"
+               "  }\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+
+  verifyFormat("MYIF (a) g();", AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g()\n"
+               "};",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else MYIF (b)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else if (b)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else MYIF (b)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else if (b)\n"
+               "  g();\n"
+               "else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else MYIF (b) {\n"
+               "  g();\n"
+               "} else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else if (b) {\n"
+               "  g();\n"
+               "} else\n"
+               "  g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else MYIF (b)\n"
+               "  g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else if (b)\n"
+               "  g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else MYIF (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else if (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else MYIF (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else if (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
 
   AllowsMergedIf.AllowShortIfStatementsOnASingleLine =
       FormatStyle::SIS_AllIfsAndElse;
@@ -879,6 +1226,114 @@ TEST_F(FormatTest, FormatIfWithoutCompoundStatementButElseWith) {
                "  g();\n"
                "}",
                AllowsMergedIf);
+  verifyFormat("MYIF (a) f();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) f();\n"
+               "else {\n"
+               "  if (a) f();\n"
+               "  else {\n"
+               "    g();\n"
+               "  }\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+
+  verifyFormat("MYIF (a) g();", AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g()\n"
+               "};",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else MYIF (b) g();\n"
+               "else g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else if (b) g();\n"
+               "else g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else MYIF (b) g();\n"
+               "else g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else if (b) g();\n"
+               "else g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else MYIF (b) {\n"
+               "  g();\n"
+               "} else g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else if (b) {\n"
+               "  g();\n"
+               "} else g();",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else MYIF (b) g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else if (b) g();\n"
+               "else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else MYIF (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) g();\n"
+               "else if (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else MYIF (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
+  verifyFormat("MYIF (a) {\n"
+               "  g();\n"
+               "} else if (b) {\n"
+               "  g();\n"
+               "} else {\n"
+               "  g();\n"
+               "}",
+               AllowsMergedIf);
 }
 
 TEST_F(FormatTest, FormatLoopsWithoutCompoundStatement) {
@@ -930,6 +1385,10 @@ TEST_F(FormatTest, FormatLoopsWithoutCompoundStatement) {
 
 TEST_F(FormatTest, FormatShortBracedStatements) {
   FormatStyle AllowSimpleBracedStatements = getLLVMStyle();
+  AllowSimpleBracedStatements.IfMacros.push_back("MYIF");
+  // Where line-lengths matter, a 2-letter synonym that maintains line length.
+  // Not IF to avoid any confusion that IF is somehow special.
+  AllowSimpleBracedStatements.IfMacros.push_back("FI");
   AllowSimpleBracedStatements.ColumnLimit = 40;
   AllowSimpleBracedStatements.AllowShortBlocksOnASingleLine =
       FormatStyle::SBS_Always;
@@ -945,11 +1404,17 @@ TEST_F(FormatTest, FormatShortBracedStatements) {
   verifyFormat("if (true) {}", AllowSimpleBracedStatements);
   verifyFormat("if constexpr (true) {}", AllowSimpleBracedStatements);
   verifyFormat("if CONSTEXPR (true) {}", AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {}", AllowSimpleBracedStatements);
+  verifyFormat("MYIF constexpr (true) {}", AllowSimpleBracedStatements);
+  verifyFormat("MYIF CONSTEXPR (true) {}", AllowSimpleBracedStatements);
   verifyFormat("while (true) {}", AllowSimpleBracedStatements);
   verifyFormat("for (;;) {}", AllowSimpleBracedStatements);
   verifyFormat("if (true) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("if constexpr (true) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("if CONSTEXPR (true) { f(); }", AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) { f(); }", AllowSimpleBracedStatements);
+  verifyFormat("MYIF constexpr (true) { f(); }", AllowSimpleBracedStatements);
+  verifyFormat("MYIF CONSTEXPR (true) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("while (true) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("for (;;) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("if (true) { fffffffffffffffffffffff(); }",
@@ -972,6 +1437,31 @@ TEST_F(FormatTest, FormatShortBracedStatements) {
                "}",
                AllowSimpleBracedStatements);
   verifyFormat("if (true) {\n"
+               "  f();\n"
+               "} else {\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("FI (true) { fffffffffffffffffffffff(); }",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {\n"
+               "  ffffffffffffffffffffffff();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {\n"
+               "  ffffffffffffffffffffffffffffffffffffffffffffffffffffff();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) { //\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {\n"
+               "  f();\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {\n"
                "  f();\n"
                "} else {\n"
                "  f();\n"
@@ -1004,6 +1494,17 @@ TEST_F(FormatTest, FormatShortBracedStatements) {
                "  f();\n"
                "}",
                AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {}", AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {\n"
+               "  f();\n"
+               "} else {\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
 
   AllowSimpleBracedStatements.AllowShortLoopsOnASingleLine = false;
   verifyFormat("while (true) {}", AllowSimpleBracedStatements);
@@ -1026,11 +1527,17 @@ TEST_F(FormatTest, FormatShortBracedStatements) {
   verifyFormat("if (true) {}", AllowSimpleBracedStatements);
   verifyFormat("if constexpr (true) {}", AllowSimpleBracedStatements);
   verifyFormat("if CONSTEXPR (true) {}", AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {}", AllowSimpleBracedStatements);
+  verifyFormat("MYIF constexpr (true) {}", AllowSimpleBracedStatements);
+  verifyFormat("MYIF CONSTEXPR (true) {}", AllowSimpleBracedStatements);
   verifyFormat("while (true) {}", AllowSimpleBracedStatements);
   verifyFormat("for (;;) {}", AllowSimpleBracedStatements);
   verifyFormat("if (true) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("if constexpr (true) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("if CONSTEXPR (true) { f(); }", AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) { f(); }", AllowSimpleBracedStatements);
+  verifyFormat("MYIF constexpr (true) { f(); }", AllowSimpleBracedStatements);
+  verifyFormat("MYIF CONSTEXPR (true) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("while (true) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("for (;;) { f(); }", AllowSimpleBracedStatements);
   verifyFormat("if (true) { fffffffffffffffffffffff(); }",
@@ -1064,6 +1571,37 @@ TEST_F(FormatTest, FormatShortBracedStatements) {
                "  f();\n"
                "}",
                AllowSimpleBracedStatements);
+  verifyFormat("FI (true) { fffffffffffffffffffffff(); }",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true)\n"
+               "{\n"
+               "  ffffffffffffffffffffffff();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true)\n"
+               "{\n"
+               "  ffffffffffffffffffffffffffffffffffffffffffffffffffffff();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true)\n"
+               "{ //\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true)\n"
+               "{\n"
+               "  f();\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true)\n"
+               "{\n"
+               "  f();\n"
+               "} else\n"
+               "{\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
 
   AllowSimpleBracedStatements.AllowShortIfStatementsOnASingleLine =
       FormatStyle::SIS_Never;
@@ -1074,6 +1612,20 @@ TEST_F(FormatTest, FormatShortBracedStatements) {
                "}",
                AllowSimpleBracedStatements);
   verifyFormat("if (true)\n"
+               "{\n"
+               "  f();\n"
+               "} else\n"
+               "{\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true) {}", AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true)\n"
+               "{\n"
+               "  f();\n"
+               "}",
+               AllowSimpleBracedStatements);
+  verifyFormat("MYIF (true)\n"
                "{\n"
                "  f();\n"
                "} else\n"
@@ -1181,6 +1733,13 @@ TEST_F(FormatTest, ElseIf) {
                "  g();\n"
                "else\n"
                "  h();");
+  verifyFormat("if (a)\n"
+               "  f();\n"
+               "else // comment\n"
+               "  if (b) {\n"
+               "    g();\n"
+               "    h();\n"
+               "  }");
   verifyFormat("if constexpr (a)\n"
                "  f();\n"
                "else if constexpr (b)\n"
@@ -1335,7 +1894,7 @@ TEST_F(FormatTest, ForEachLoops) {
 
   FormatStyle Style = getLLVMStyle();
   Style.SpaceBeforeParens =
-      FormatStyle::SBPO_ControlStatementsExceptForEachMacros;
+      FormatStyle::SBPO_ControlStatementsExceptControlMacros;
   verifyFormat("void f() {\n"
                "  foreach(Item *item, itemlist) {}\n"
                "  Q_FOREACH(Item *item, itemlist) {}\n"
@@ -3451,6 +4010,48 @@ TEST_F(FormatTest, DoesntRemoveUnknownTokens) {
   verifyFormat("a\r\\");
   verifyFormat("a\v\\");
   verifyFormat("a\f\\");
+}
+
+TEST_F(FormatTest, IndentsPPDirectiveWithPPIndentWidth) {
+  FormatStyle style = getChromiumStyle(FormatStyle::LK_Cpp);
+  style.IndentWidth = 4;
+  style.PPIndentWidth = 1;
+
+  style.IndentPPDirectives = FormatStyle::PPDIS_None;
+  verifyFormat("#ifdef __linux__\n"
+               "void foo() {\n"
+               "    int x = 0;\n"
+               "}\n"
+               "#define FOO\n"
+               "#endif\n"
+               "void bar() {\n"
+               "    int y = 0;\n"
+               "}\n",
+               style);
+
+  style.IndentPPDirectives = FormatStyle::PPDIS_AfterHash;
+  verifyFormat("#ifdef __linux__\n"
+               "void foo() {\n"
+               "    int x = 0;\n"
+               "}\n"
+               "# define FOO foo\n"
+               "#endif\n"
+               "void bar() {\n"
+               "    int y = 0;\n"
+               "}\n",
+               style);
+
+  style.IndentPPDirectives = FormatStyle::PPDIS_BeforeHash;
+  verifyFormat("#ifdef __linux__\n"
+               "void foo() {\n"
+               "    int x = 0;\n"
+               "}\n"
+               " #define FOO foo\n"
+               "#endif\n"
+               "void bar() {\n"
+               "    int y = 0;\n"
+               "}\n",
+               style);
 }
 
 TEST_F(FormatTest, IndentsPPDirectiveInReducedSpace) {
@@ -8232,6 +8833,16 @@ TEST_F(FormatTest, UnderstandsOverloadedOperators) {
   verifyFormat("using A::operator+;");
   verifyFormat("inline A operator^(const A &lhs, const A &rhs) {}\n"
                "int i;");
+
+  // Calling an operator as a member function.
+  verifyFormat("void f() { a.operator*(); }");
+  verifyFormat("void f() { a.operator*(b & b); }");
+  verifyFormat("void f() { a->operator&(a * b); }");
+  verifyFormat("void f() { NS::a.operator+(*b * *b); }");
+  // TODO: Calling an operator as a non-member function is hard to distinguish.
+  // https://llvm.org/PR50629
+  // verifyFormat("void f() { operator*(a & a); }");
+  // verifyFormat("void f() { operator&(a, b * b); }");
 }
 
 TEST_F(FormatTest, UnderstandsFunctionRefQualification) {
@@ -8664,6 +9275,12 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
 
   verifyIndependentOfContext("MACRO('0' <= c && c <= '9');");
   verifyFormat("void f() { f(float{1}, a * a); }");
+  verifyFormat("void f() { f(float(1), a * a); }");
+
+  verifyFormat("f((void (*)(int))g);");
+  verifyFormat("f((void (&)(int))g);");
+  verifyFormat("f((void (^)(int))g);");
+
   // FIXME: Is there a way to make this work?
   // verifyIndependentOfContext("MACRO(A *a);");
   verifyFormat("MACRO(A &B);");
@@ -8718,6 +9335,13 @@ TEST_F(FormatTest, UnderstandsUsesOfStarAndAmp) {
                "operator()() && {}");
   verifyGoogleFormat("template <typename T>\n"
                      "auto x() & -> int {}");
+
+  // Should be binary operators when used as an argument expression (overloaded
+  // operator invoked as a member function).
+  verifyFormat("void f() { a.operator()(a * a); }");
+  verifyFormat("void f() { a->operator()(a & a); }");
+  verifyFormat("void f() { a.operator()(*a & *a); }");
+  verifyFormat("void f() { a->operator()(*a * *a); }");
 }
 
 TEST_F(FormatTest, UnderstandsAttributes) {
@@ -14915,6 +15539,7 @@ TEST_F(FormatTest, AlignConsecutiveDeclarations) {
   FormatStyle Alignment = getLLVMStyle();
   Alignment.AlignConsecutiveMacros = FormatStyle::ACS_Consecutive;
   Alignment.AlignConsecutiveDeclarations = FormatStyle::ACS_None;
+  Alignment.PointerAlignment = FormatStyle::PAS_Right;
   verifyFormat("float const a = 5;\n"
                "int oneTwoThree = 123;",
                Alignment);
@@ -14950,8 +15575,8 @@ TEST_F(FormatTest, AlignConsecutiveDeclarations) {
   verifyFormat("int      oneTwoThree{0}; // comment\n"
                "unsigned oneTwo;         // comment",
                Alignment);
-  verifyFormat("unsigned int *      a;\n"
-               "int *               b;\n"
+  verifyFormat("unsigned int       *a;\n"
+               "int                *b;\n"
                "unsigned int Const *c;\n"
                "unsigned int const *d;\n"
                "unsigned int Const &e;\n"
@@ -15073,6 +15698,129 @@ TEST_F(FormatTest, AlignConsecutiveDeclarations) {
                "  double        bar();\n"
                "};\n",
                Alignment);
+
+  // PAS_Right
+  EXPECT_EQ("void SomeFunction(int parameter = 0) {\n"
+            "  int const i   = 1;\n"
+            "  int      *j   = 2;\n"
+            "  int       big = 10000;\n"
+            "\n"
+            "  unsigned oneTwoThree = 123;\n"
+            "  int      oneTwo      = 12;\n"
+            "  method();\n"
+            "  float k  = 2;\n"
+            "  int   ll = 10000;\n"
+            "}",
+            format("void SomeFunction(int parameter= 0) {\n"
+                   " int const  i= 1;\n"
+                   "  int *j=2;\n"
+                   " int big  =  10000;\n"
+                   "\n"
+                   "unsigned oneTwoThree  =123;\n"
+                   "int oneTwo = 12;\n"
+                   "  method();\n"
+                   "float k= 2;\n"
+                   "int ll=10000;\n"
+                   "}",
+                   Alignment));
+  EXPECT_EQ("void SomeFunction(int parameter = 0) {\n"
+            "  int const i   = 1;\n"
+            "  int     **j   = 2, ***k;\n"
+            "  int      &k   = i;\n"
+            "  int     &&l   = i + j;\n"
+            "  int       big = 10000;\n"
+            "\n"
+            "  unsigned oneTwoThree = 123;\n"
+            "  int      oneTwo      = 12;\n"
+            "  method();\n"
+            "  float k  = 2;\n"
+            "  int   ll = 10000;\n"
+            "}",
+            format("void SomeFunction(int parameter= 0) {\n"
+                   " int const  i= 1;\n"
+                   "  int **j=2,***k;\n"
+                   "int &k=i;\n"
+                   "int &&l=i+j;\n"
+                   " int big  =  10000;\n"
+                   "\n"
+                   "unsigned oneTwoThree  =123;\n"
+                   "int oneTwo = 12;\n"
+                   "  method();\n"
+                   "float k= 2;\n"
+                   "int ll=10000;\n"
+                   "}",
+                   Alignment));
+  // variables are aligned at their name, pointers are at the right most
+  // position
+  verifyFormat("int   *a;\n"
+               "int  **b;\n"
+               "int ***c;\n"
+               "int    foobar;\n",
+               Alignment);
+
+  // PAS_Left
+  FormatStyle AlignmentLeft = Alignment;
+  AlignmentLeft.PointerAlignment = FormatStyle::PAS_Left;
+  EXPECT_EQ("void SomeFunction(int parameter = 0) {\n"
+            "  int const i   = 1;\n"
+            "  int*      j   = 2;\n"
+            "  int       big = 10000;\n"
+            "\n"
+            "  unsigned oneTwoThree = 123;\n"
+            "  int      oneTwo      = 12;\n"
+            "  method();\n"
+            "  float k  = 2;\n"
+            "  int   ll = 10000;\n"
+            "}",
+            format("void SomeFunction(int parameter= 0) {\n"
+                   " int const  i= 1;\n"
+                   "  int *j=2;\n"
+                   " int big  =  10000;\n"
+                   "\n"
+                   "unsigned oneTwoThree  =123;\n"
+                   "int oneTwo = 12;\n"
+                   "  method();\n"
+                   "float k= 2;\n"
+                   "int ll=10000;\n"
+                   "}",
+                   AlignmentLeft));
+  EXPECT_EQ("void SomeFunction(int parameter = 0) {\n"
+            "  int const i   = 1;\n"
+            "  int**     j   = 2;\n"
+            "  int&      k   = i;\n"
+            "  int&&     l   = i + j;\n"
+            "  int       big = 10000;\n"
+            "\n"
+            "  unsigned oneTwoThree = 123;\n"
+            "  int      oneTwo      = 12;\n"
+            "  method();\n"
+            "  float k  = 2;\n"
+            "  int   ll = 10000;\n"
+            "}",
+            format("void SomeFunction(int parameter= 0) {\n"
+                   " int const  i= 1;\n"
+                   "  int **j=2;\n"
+                   "int &k=i;\n"
+                   "int &&l=i+j;\n"
+                   " int big  =  10000;\n"
+                   "\n"
+                   "unsigned oneTwoThree  =123;\n"
+                   "int oneTwo = 12;\n"
+                   "  method();\n"
+                   "float k= 2;\n"
+                   "int ll=10000;\n"
+                   "}",
+                   AlignmentLeft));
+  // variables are aligned at their name, pointers are at the left most position
+  verifyFormat("int*   a;\n"
+               "int**  b;\n"
+               "int*** c;\n"
+               "int    foobar;\n",
+               AlignmentLeft);
+
+  // PAS_Middle
+  FormatStyle AlignmentMiddle = Alignment;
+  AlignmentMiddle.PointerAlignment = FormatStyle::PAS_Middle;
   EXPECT_EQ("void SomeFunction(int parameter = 0) {\n"
             "  int const i   = 1;\n"
             "  int *     j   = 2;\n"
@@ -15095,7 +15843,41 @@ TEST_F(FormatTest, AlignConsecutiveDeclarations) {
                    "float k= 2;\n"
                    "int ll=10000;\n"
                    "}",
-                   Alignment));
+                   AlignmentMiddle));
+  EXPECT_EQ("void SomeFunction(int parameter = 0) {\n"
+            "  int const i   = 1;\n"
+            "  int **    j   = 2, ***k;\n"
+            "  int &     k   = i;\n"
+            "  int &&    l   = i + j;\n"
+            "  int       big = 10000;\n"
+            "\n"
+            "  unsigned oneTwoThree = 123;\n"
+            "  int      oneTwo      = 12;\n"
+            "  method();\n"
+            "  float k  = 2;\n"
+            "  int   ll = 10000;\n"
+            "}",
+            format("void SomeFunction(int parameter= 0) {\n"
+                   " int const  i= 1;\n"
+                   "  int **j=2,***k;\n"
+                   "int &k=i;\n"
+                   "int &&l=i+j;\n"
+                   " int big  =  10000;\n"
+                   "\n"
+                   "unsigned oneTwoThree  =123;\n"
+                   "int oneTwo = 12;\n"
+                   "  method();\n"
+                   "float k= 2;\n"
+                   "int ll=10000;\n"
+                   "}",
+                   AlignmentMiddle));
+  // variables are aligned at their name, pointers are in the middle
+  verifyFormat("int *   a;\n"
+               "int *   b;\n"
+               "int *** c;\n"
+               "int     foobar;\n",
+               AlignmentMiddle);
+
   Alignment.AlignConsecutiveAssignments = FormatStyle::ACS_None;
   Alignment.AlignEscapedNewlines = FormatStyle::ENAS_DontAlign;
   verifyFormat("#define A \\\n"
@@ -15129,7 +15911,7 @@ TEST_F(FormatTest, AlignConsecutiveDeclarations) {
                Alignment);
   verifyFormat("void SomeFunction(int parameter = 0) {\n"
                "  int const i = 1;\n"
-               "  int *     j = 2;\n"
+               "  int      *j = 2;\n"
                "  int       big = 10000;\n"
                "}",
                Alignment);
@@ -15232,7 +16014,7 @@ TEST_F(FormatTest, AlignConsecutiveDeclarations) {
                "         float     b,\n"
                "         int       c,\n"
                "         uint32_t *d) {\n"
-               "  int *  e = 0;\n"
+               "  int   *e = 0;\n"
                "  float  f = 0;\n"
                "  double g = 0;\n"
                "}\n"
@@ -16401,6 +17183,407 @@ TEST_F(FormatTest, CatchExceptionReferenceBinding) {
                getLLVMStyle());
 }
 
+TEST_F(FormatTest, CatchAlignArrayOfStructuresRightAlignment) {
+  auto Style = getLLVMStyle();
+  Style.AlignArrayOfStructures = FormatStyle::AIAS_Right;
+  Style.AlignConsecutiveAssignments =
+      FormatStyle::AlignConsecutiveStyle::ACS_Consecutive;
+  Style.AlignConsecutiveDeclarations =
+      FormatStyle::AlignConsecutiveStyle::ACS_Consecutive;
+  verifyFormat("struct test demo[] = {\n"
+               "    {56,    23, \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    { 7,     5,    \"!!\"}\n"
+               "};\n",
+               Style);
+
+  verifyFormat("struct test demo[] = {\n"
+               "    {56,    23, \"hello\"}, // first line\n"
+               "    {-1, 93463, \"world\"}, // second line\n"
+               "    { 7,     5,    \"!!\"}  // third line\n"
+               "};\n",
+               Style);
+
+  verifyFormat("struct test demo[4] = {\n"
+               "    { 56,    23, 21,       \"oh\"}, // first line\n"
+               "    { -1, 93463, 22,       \"my\"}, // second line\n"
+               "    {  7,     5,  1, \"goodness\"}  // third line\n"
+               "    {234,     5,  1, \"gracious\"}  // fourth line\n"
+               "};\n",
+               Style);
+
+  verifyFormat("struct test demo[3] = {\n"
+               "    {56,    23, \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    { 7,     5,    \"!!\"}\n"
+               "};\n",
+               Style);
+
+  verifyFormat("struct test demo[3] = {\n"
+               "    {int{56},    23, \"hello\"},\n"
+               "    {int{-1}, 93463, \"world\"},\n"
+               "    { int{7},     5,    \"!!\"}\n"
+               "};\n",
+               Style);
+
+  verifyFormat("struct test demo[] = {\n"
+               "    {56,    23, \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    { 7,     5,    \"!!\"},\n"
+               "};\n",
+               Style);
+
+  verifyFormat("test demo[] = {\n"
+               "    {56,    23, \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    { 7,     5,    \"!!\"},\n"
+               "};\n",
+               Style);
+
+  verifyFormat("demo = std::array<struct test, 3>{\n"
+               "    test{56,    23, \"hello\"},\n"
+               "    test{-1, 93463, \"world\"},\n"
+               "    test{ 7,     5,    \"!!\"},\n"
+               "};\n",
+               Style);
+
+  verifyFormat("test demo[] = {\n"
+               "    {56,    23, \"hello\"},\n"
+               "#if X\n"
+               "    {-1, 93463, \"world\"},\n"
+               "#endif\n"
+               "    { 7,     5,    \"!!\"}\n"
+               "};\n",
+               Style);
+
+  verifyFormat(
+      "test demo[] = {\n"
+      "    { 7,    23,\n"
+      "     \"hello world i am a very long line that really, in any\"\n"
+      "     \"just world, ought to be split over multiple lines\"},\n"
+      "    {-1, 93463,                                  \"world\"},\n"
+      "    {56,     5,                                     \"!!\"}\n"
+      "};\n",
+      Style);
+
+  verifyFormat("return GradForUnaryCwise(g, {\n"
+               "                                {{\"sign\"}, \"Sign\",  "
+               "  {\"x\", \"dy\"}},\n"
+               "                                {  {\"dx\"},  \"Mul\", {\"dy\""
+               ", \"sign\"}},\n"
+               "});\n",
+               Style);
+
+  Style.ColumnLimit = 0;
+  EXPECT_EQ(
+      "test demo[] = {\n"
+      "    {56,    23, \"hello world i am a very long line that really, "
+      "in any just world, ought to be split over multiple lines\"},\n"
+      "    {-1, 93463,                                                  "
+      "                                                 \"world\"},\n"
+      "    { 7,     5,                                                  "
+      "                                                    \"!!\"},\n"
+      "};",
+      format("test demo[] = {{56, 23, \"hello world i am a very long line "
+             "that really, in any just world, ought to be split over multiple "
+             "lines\"},{-1, 93463, \"world\"},{7, 5, \"!!\"},};",
+             Style));
+
+  Style.ColumnLimit = 80;
+  verifyFormat("test demo[] = {\n"
+               "    {56,    23, /* a comment */ \"hello\"},\n"
+               "    {-1, 93463,                 \"world\"},\n"
+               "    { 7,     5,                    \"!!\"}\n"
+               "};\n",
+               Style);
+
+  verifyFormat("test demo[] = {\n"
+               "    {56,    23,                    \"hello\"},\n"
+               "    {-1, 93463, \"world\" /* comment here */},\n"
+               "    { 7,     5,                       \"!!\"}\n"
+               "};\n",
+               Style);
+
+  verifyFormat("test demo[] = {\n"
+               "    {56, /* a comment */ 23, \"hello\"},\n"
+               "    {-1,              93463, \"world\"},\n"
+               "    { 7,                  5,    \"!!\"}\n"
+               "};\n",
+               Style);
+
+  Style.ColumnLimit = 20;
+  EXPECT_EQ(
+      "demo = std::array<\n"
+      "    struct test, 3>{\n"
+      "    test{\n"
+      "         56,    23,\n"
+      "         \"hello \"\n"
+      "         \"world i \"\n"
+      "         \"am a very \"\n"
+      "         \"long line \"\n"
+      "         \"that \"\n"
+      "         \"really, \"\n"
+      "         \"in any \"\n"
+      "         \"just \"\n"
+      "         \"world, \"\n"
+      "         \"ought to \"\n"
+      "         \"be split \"\n"
+      "         \"over \"\n"
+      "         \"multiple \"\n"
+      "         \"lines\"},\n"
+      "    test{-1, 93463,\n"
+      "         \"world\"},\n"
+      "    test{ 7,     5,\n"
+      "         \"!!\"   },\n"
+      "};",
+      format("demo = std::array<struct test, 3>{test{56, 23, \"hello world "
+             "i am a very long line that really, in any just world, ought "
+             "to be split over multiple lines\"},test{-1, 93463, \"world\"},"
+             "test{7, 5, \"!!\"},};",
+             Style));
+  // This caused a core dump by enabling Alignment in the LLVMStyle globally
+  Style = getLLVMStyleWithColumns(50);
+  Style.AlignArrayOfStructures = FormatStyle::AIAS_Right;
+  verifyFormat("static A x = {\n"
+               "    {{init1, init2, init3, init4},\n"
+               "     {init1, init2, init3, init4}}\n"
+               "};",
+               Style);
+  Style.ColumnLimit = 100;
+  EXPECT_EQ(
+      "test demo[] = {\n"
+      "    {56,    23,\n"
+      "     \"hello world i am a very long line that really, in any just world"
+      ", ought to be split over \"\n"
+      "     \"multiple lines\"  },\n"
+      "    {-1, 93463, \"world\"},\n"
+      "    { 7,     5,    \"!!\"},\n"
+      "};",
+      format("test demo[] = {{56, 23, \"hello world i am a very long line "
+             "that really, in any just world, ought to be split over multiple "
+             "lines\"},{-1, 93463, \"world\"},{7, 5, \"!!\"},};",
+             Style));
+
+  Style = getLLVMStyleWithColumns(50);
+  Style.AlignArrayOfStructures = FormatStyle::AIAS_Right;
+  Style.AlignConsecutiveAssignments =
+      FormatStyle::AlignConsecutiveStyle::ACS_Consecutive;
+  Style.AlignConsecutiveDeclarations =
+      FormatStyle::AlignConsecutiveStyle::ACS_Consecutive;
+  verifyFormat("struct test demo[] = {\n"
+               "    {56,    23, \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    { 7,     5,    \"!!\"}\n"
+               "};\n"
+               "static A x = {\n"
+               "    {{init1, init2, init3, init4},\n"
+               "     {init1, init2, init3, init4}}\n"
+               "};",
+               Style);
+  Style.ColumnLimit = 100;
+  Style.AlignConsecutiveAssignments =
+      FormatStyle::AlignConsecutiveStyle::ACS_AcrossComments;
+  Style.AlignConsecutiveDeclarations =
+      FormatStyle::AlignConsecutiveStyle::ACS_AcrossComments;
+  verifyFormat("struct test demo[] = {\n"
+               "    {56,    23, \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    { 7,     5,    \"!!\"}\n"
+               "};\n"
+               "struct test demo[4] = {\n"
+               "    { 56,    23, 21,       \"oh\"}, // first line\n"
+               "    { -1, 93463, 22,       \"my\"}, // second line\n"
+               "    {  7,     5,  1, \"goodness\"}  // third line\n"
+               "    {234,     5,  1, \"gracious\"}  // fourth line\n"
+               "};\n",
+               Style);
+  EXPECT_EQ(
+      "test demo[] = {\n"
+      "    {56,\n"
+      "     \"hello world i am a very long line that really, in any just world"
+      ", ought to be split over \"\n"
+      "     \"multiple lines\",    23},\n"
+      "    {-1,      \"world\", 93463},\n"
+      "    { 7,         \"!!\",     5},\n"
+      "};",
+      format("test demo[] = {{56, \"hello world i am a very long line "
+             "that really, in any just world, ought to be split over multiple "
+             "lines\", 23},{-1, \"world\", 93463},{7, \"!!\", 5},};",
+             Style));
+}
+
+TEST_F(FormatTest, CatchAlignArrayOfStructuresLeftAlignment) {
+  auto Style = getLLVMStyle();
+  Style.AlignArrayOfStructures = FormatStyle::AIAS_Left;
+  verifyFormat("struct test demo[] = {\n"
+               "    {56, 23,    \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    {7,  5,     \"!!\"   }\n"
+               "};\n",
+               Style);
+
+  verifyFormat("struct test demo[] = {\n"
+               "    {56, 23,    \"hello\"}, // first line\n"
+               "    {-1, 93463, \"world\"}, // second line\n"
+               "    {7,  5,     \"!!\"   }  // third line\n"
+               "};\n",
+               Style);
+  verifyFormat("struct test demo[4] = {\n"
+               "    {56,  23,    21, \"oh\"      }, // first line\n"
+               "    {-1,  93463, 22, \"my\"      }, // second line\n"
+               "    {7,   5,     1,  \"goodness\"}  // third line\n"
+               "    {234, 5,     1,  \"gracious\"}  // fourth line\n"
+               "};\n",
+               Style);
+  verifyFormat("struct test demo[3] = {\n"
+               "    {56, 23,    \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    {7,  5,     \"!!\"   }\n"
+               "};\n",
+               Style);
+
+  verifyFormat("struct test demo[3] = {\n"
+               "    {int{56}, 23,    \"hello\"},\n"
+               "    {int{-1}, 93463, \"world\"},\n"
+               "    {int{7},  5,     \"!!\"   }\n"
+               "};\n",
+               Style);
+  verifyFormat("struct test demo[] = {\n"
+               "    {56, 23,    \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    {7,  5,     \"!!\"   },\n"
+               "};\n",
+               Style);
+  verifyFormat("test demo[] = {\n"
+               "    {56, 23,    \"hello\"},\n"
+               "    {-1, 93463, \"world\"},\n"
+               "    {7,  5,     \"!!\"   },\n"
+               "};\n",
+               Style);
+  verifyFormat("demo = std::array<struct test, 3>{\n"
+               "    test{56, 23,    \"hello\"},\n"
+               "    test{-1, 93463, \"world\"},\n"
+               "    test{7,  5,     \"!!\"   },\n"
+               "};\n",
+               Style);
+  verifyFormat("test demo[] = {\n"
+               "    {56, 23,    \"hello\"},\n"
+               "#if X\n"
+               "    {-1, 93463, \"world\"},\n"
+               "#endif\n"
+               "    {7,  5,     \"!!\"   }\n"
+               "};\n",
+               Style);
+  verifyFormat(
+      "test demo[] = {\n"
+      "    {7,  23,\n"
+      "     \"hello world i am a very long line that really, in any\"\n"
+      "     \"just world, ought to be split over multiple lines\"},\n"
+      "    {-1, 93463, \"world\"                                 },\n"
+      "    {56, 5,     \"!!\"                                    }\n"
+      "};\n",
+      Style);
+
+  verifyFormat("return GradForUnaryCwise(g, {\n"
+               "                                {{\"sign\"}, \"Sign\", {\"x\", "
+               "\"dy\"}   },\n"
+               "                                {{\"dx\"},   \"Mul\",  "
+               "{\"dy\", \"sign\"}},\n"
+               "});\n",
+               Style);
+
+  Style.ColumnLimit = 0;
+  EXPECT_EQ(
+      "test demo[] = {\n"
+      "    {56, 23,    \"hello world i am a very long line that really, in any "
+      "just world, ought to be split over multiple lines\"},\n"
+      "    {-1, 93463, \"world\"                                               "
+      "                                                   },\n"
+      "    {7,  5,     \"!!\"                                                  "
+      "                                                   },\n"
+      "};",
+      format("test demo[] = {{56, 23, \"hello world i am a very long line "
+             "that really, in any just world, ought to be split over multiple "
+             "lines\"},{-1, 93463, \"world\"},{7, 5, \"!!\"},};",
+             Style));
+
+  Style.ColumnLimit = 80;
+  verifyFormat("test demo[] = {\n"
+               "    {56, 23,    /* a comment */ \"hello\"},\n"
+               "    {-1, 93463, \"world\"                },\n"
+               "    {7,  5,     \"!!\"                   }\n"
+               "};\n",
+               Style);
+
+  verifyFormat("test demo[] = {\n"
+               "    {56, 23,    \"hello\"                   },\n"
+               "    {-1, 93463, \"world\" /* comment here */},\n"
+               "    {7,  5,     \"!!\"                      }\n"
+               "};\n",
+               Style);
+
+  verifyFormat("test demo[] = {\n"
+               "    {56, /* a comment */ 23, \"hello\"},\n"
+               "    {-1, 93463,              \"world\"},\n"
+               "    {7,  5,                  \"!!\"   }\n"
+               "};\n",
+               Style);
+
+  Style.ColumnLimit = 20;
+  EXPECT_EQ(
+      "demo = std::array<\n"
+      "    struct test, 3>{\n"
+      "    test{\n"
+      "         56, 23,\n"
+      "         \"hello \"\n"
+      "         \"world i \"\n"
+      "         \"am a very \"\n"
+      "         \"long line \"\n"
+      "         \"that \"\n"
+      "         \"really, \"\n"
+      "         \"in any \"\n"
+      "         \"just \"\n"
+      "         \"world, \"\n"
+      "         \"ought to \"\n"
+      "         \"be split \"\n"
+      "         \"over \"\n"
+      "         \"multiple \"\n"
+      "         \"lines\"},\n"
+      "    test{-1, 93463,\n"
+      "         \"world\"},\n"
+      "    test{7,  5,\n"
+      "         \"!!\"   },\n"
+      "};",
+      format("demo = std::array<struct test, 3>{test{56, 23, \"hello world "
+             "i am a very long line that really, in any just world, ought "
+             "to be split over multiple lines\"},test{-1, 93463, \"world\"},"
+             "test{7, 5, \"!!\"},};",
+             Style));
+
+  // This caused a core dump by enabling Alignment in the LLVMStyle globally
+  Style = getLLVMStyleWithColumns(50);
+  Style.AlignArrayOfStructures = FormatStyle::AIAS_Left;
+  verifyFormat("static A x = {\n"
+               "    {{init1, init2, init3, init4},\n"
+               "     {init1, init2, init3, init4}}\n"
+               "};",
+               Style);
+  Style.ColumnLimit = 100;
+  EXPECT_EQ(
+      "test demo[] = {\n"
+      "    {56, 23,\n"
+      "     \"hello world i am a very long line that really, in any just world"
+      ", ought to be split over \"\n"
+      "     \"multiple lines\"  },\n"
+      "    {-1, 93463, \"world\"},\n"
+      "    {7,  5,     \"!!\"   },\n"
+      "};",
+      format("test demo[] = {{56, 23, \"hello world i am a very long line "
+             "that really, in any just world, ought to be split over multiple "
+             "lines\"},{-1, 93463, \"world\"},{7, 5, \"!!\"},};",
+             Style));
+}
+
 TEST_F(FormatTest, UnderstandsPragmas) {
   verifyFormat("#pragma omp reduction(| : var)");
   verifyFormat("#pragma omp reduction(+ : var)");
@@ -16993,6 +18176,9 @@ TEST_F(FormatTest, ParsesConfiguration) {
               FormatStyle::SBPO_Always);
   CHECK_PARSE("SpaceBeforeParens: ControlStatements", SpaceBeforeParens,
               FormatStyle::SBPO_ControlStatements);
+  CHECK_PARSE("SpaceBeforeParens: ControlStatementsExceptControlMacros",
+              SpaceBeforeParens,
+              FormatStyle::SBPO_ControlStatementsExceptControlMacros);
   CHECK_PARSE("SpaceBeforeParens: NonEmptyParentheses", SpaceBeforeParens,
               FormatStyle::SBPO_NonEmptyParentheses);
   // For backward compatibility:
@@ -17000,6 +18186,9 @@ TEST_F(FormatTest, ParsesConfiguration) {
               FormatStyle::SBPO_Never);
   CHECK_PARSE("SpaceAfterControlStatementKeyword: true", SpaceBeforeParens,
               FormatStyle::SBPO_ControlStatements);
+  CHECK_PARSE("SpaceBeforeParens: ControlStatementsExceptForEachMacros",
+              SpaceBeforeParens,
+              FormatStyle::SBPO_ControlStatementsExceptControlMacros);
 
   Style.ColumnLimit = 123;
   FormatStyle BaseStyle = getLLVMStyle();
@@ -17146,6 +18335,11 @@ TEST_F(FormatTest, ParsesConfiguration) {
   BoostAndQForeach.push_back("Q_FOREACH");
   CHECK_PARSE("ForEachMacros: [BOOST_FOREACH, Q_FOREACH]", ForEachMacros,
               BoostAndQForeach);
+
+  Style.IfMacros.clear();
+  std::vector<std::string> CustomIfs;
+  CustomIfs.push_back("MYIF");
+  CHECK_PARSE("IfMacros: [MYIF]", IfMacros, CustomIfs);
 
   Style.AttributeMacros.clear();
   CHECK_PARSE("BasedOnStyle: LLVM", AttributeMacros,
@@ -17907,6 +19101,7 @@ TEST_F(FormatTest, FormatsLambdas) {
                "             aaaaaaaaaaaaaaaaaaaaaaa;\n"
                "    });",
                getLLVMStyleWithColumns(60));
+
   verifyFormat("SomeFunction({[&] {\n"
                "                // comment\n"
                "              },\n"
@@ -18459,6 +19654,117 @@ TEST_F(FormatTest, FormatsLambdas) {
                "          });\n"
                "    });",
                LLVMWithBeforeLambdaBody);
+
+  // Lambdas with different indentation styles.
+  Style = getLLVMStyleWithColumns(100);
+  EXPECT_EQ("SomeResult doSomething(SomeObject promise) {\n"
+            "  return promise.then(\n"
+            "      [this, &someVariable, someObject = "
+            "std::mv(s)](std::vector<int> evaluated) mutable {\n"
+            "        return someObject.startAsyncAction().then(\n"
+            "            [this, &someVariable](AsyncActionResult result) "
+            "mutable { result.processMore(); });\n"
+            "      });\n"
+            "}\n",
+            format("SomeResult doSomething(SomeObject promise) {\n"
+                   "  return promise.then([this, &someVariable, someObject = "
+                   "std::mv(s)](std::vector<int> evaluated) mutable {\n"
+                   "    return someObject.startAsyncAction().then([this, "
+                   "&someVariable](AsyncActionResult result) mutable {\n"
+                   "      result.processMore();\n"
+                   "    });\n"
+                   "  });\n"
+                   "}\n",
+                   Style));
+  Style.LambdaBodyIndentation = FormatStyle::LBI_OuterScope;
+  verifyFormat("test() {\n"
+               "  ([]() -> {\n"
+               "    int b = 32;\n"
+               "    return 3;\n"
+               "  }).foo();\n"
+               "}",
+               Style);
+  verifyFormat("test() {\n"
+               "  []() -> {\n"
+               "    int b = 32;\n"
+               "    return 3;\n"
+               "  }\n"
+               "}",
+               Style);
+  verifyFormat("std::sort(v.begin(), v.end(),\n"
+               "          [](const auto &someLongArgumentName, const auto "
+               "&someOtherLongArgumentName) {\n"
+               "  return someLongArgumentName.someMemberVariable < "
+               "someOtherLongArgumentName.someMemberVariable;\n"
+               "});",
+               Style);
+  verifyFormat("test() {\n"
+               "  (\n"
+               "      []() -> {\n"
+               "        int b = 32;\n"
+               "        return 3;\n"
+               "      },\n"
+               "      foo, bar)\n"
+               "      .foo();\n"
+               "}",
+               Style);
+  verifyFormat("test() {\n"
+               "  ([]() -> {\n"
+               "    int b = 32;\n"
+               "    return 3;\n"
+               "  })\n"
+               "      .foo()\n"
+               "      .bar();\n"
+               "}",
+               Style);
+  EXPECT_EQ("SomeResult doSomething(SomeObject promise) {\n"
+            "  return promise.then(\n"
+            "      [this, &someVariable, someObject = "
+            "std::mv(s)](std::vector<int> evaluated) mutable {\n"
+            "    return someObject.startAsyncAction().then(\n"
+            "        [this, &someVariable](AsyncActionResult result) mutable { "
+            "result.processMore(); });\n"
+            "  });\n"
+            "}\n",
+            format("SomeResult doSomething(SomeObject promise) {\n"
+                   "  return promise.then([this, &someVariable, someObject = "
+                   "std::mv(s)](std::vector<int> evaluated) mutable {\n"
+                   "    return someObject.startAsyncAction().then([this, "
+                   "&someVariable](AsyncActionResult result) mutable {\n"
+                   "      result.processMore();\n"
+                   "    });\n"
+                   "  });\n"
+                   "}\n",
+                   Style));
+  EXPECT_EQ("SomeResult doSomething(SomeObject promise) {\n"
+            "  return promise.then([this, &someVariable] {\n"
+            "    return someObject.startAsyncAction().then(\n"
+            "        [this, &someVariable](AsyncActionResult result) mutable { "
+            "result.processMore(); });\n"
+            "  });\n"
+            "}\n",
+            format("SomeResult doSomething(SomeObject promise) {\n"
+                   "  return promise.then([this, &someVariable] {\n"
+                   "    return someObject.startAsyncAction().then([this, "
+                   "&someVariable](AsyncActionResult result) mutable {\n"
+                   "      result.processMore();\n"
+                   "    });\n"
+                   "  });\n"
+                   "}\n",
+                   Style));
+  Style = getGoogleStyle();
+  Style.LambdaBodyIndentation = FormatStyle::LBI_OuterScope;
+  EXPECT_EQ("#define A                                       \\\n"
+            "  [] {                                          \\\n"
+            "    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx(        \\\n"
+            "        xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx); \\\n"
+            "      }",
+            format("#define A [] { xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx( \\\n"
+                   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx); }",
+                   Style));
+  // TODO: The current formatting has a minor issue that's not worth fixing
+  // right now whereby the closing brace is indented relative to the signature
+  // instead of being aligned. This only happens with macros.
 }
 
 TEST_F(FormatTest, LambdaWithLineComments) {
@@ -19720,11 +21026,16 @@ TEST_F(FormatTest, AmbersandInLamda) {
 
 TEST_F(FormatTest, SpacesInConditionalStatement) {
   FormatStyle Spaces = getLLVMStyle();
+  Spaces.IfMacros.clear();
+  Spaces.IfMacros.push_back("MYIF");
   Spaces.SpacesInConditionalStatement = true;
   verifyFormat("for ( int i = 0; i; i++ )\n  continue;", Spaces);
   verifyFormat("if ( !a )\n  return;", Spaces);
   verifyFormat("if ( a )\n  return;", Spaces);
   verifyFormat("if constexpr ( a )\n  return;", Spaces);
+  verifyFormat("MYIF ( a )\n  return;", Spaces);
+  verifyFormat("MYIF ( a )\n  return;\nelse MYIF ( b )\n  return;", Spaces);
+  verifyFormat("MYIF ( a )\n  return;\nelse\n  return;", Spaces);
   verifyFormat("switch ( a )\ncase 1:\n  return;", Spaces);
   verifyFormat("while ( a )\n  return;", Spaces);
   verifyFormat("while ( (a && b) )\n  return;", Spaces);
@@ -19733,6 +21044,13 @@ TEST_F(FormatTest, SpacesInConditionalStatement) {
   // Check that space on the left of "::" is inserted as expected at beginning
   // of condition.
   verifyFormat("while ( ::func() )\n  return;", Spaces);
+
+  // Check impact of ControlStatementsExceptControlMacros is honored.
+  Spaces.SpaceBeforeParens =
+      FormatStyle::SBPO_ControlStatementsExceptControlMacros;
+  verifyFormat("MYIF( a )\n  return;", Spaces);
+  verifyFormat("MYIF( a )\n  return;\nelse MYIF( b )\n  return;", Spaces);
+  verifyFormat("MYIF( a )\n  return;\nelse\n  return;", Spaces);
 }
 
 TEST_F(FormatTest, AlternativeOperators) {

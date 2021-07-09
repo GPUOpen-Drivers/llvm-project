@@ -748,8 +748,8 @@ static std::string getVarName(InstrProfIncrementInst *Inc, StringRef Prefix) {
   return (Prefix + Name + "." + Twine(FuncHash)).str();
 }
 
-static uint64_t getIntModuleFlagOrZero(Module *M, StringRef Flag) {
-  auto *MD = dyn_cast_or_null<ConstantAsMetadata>(M->getModuleFlag(Flag));
+static uint64_t getIntModuleFlagOrZero(const Module &M, StringRef Flag) {
+  auto *MD = dyn_cast_or_null<ConstantAsMetadata>(M.getModuleFlag(Flag));
   if (!MD)
     return 0;
 
@@ -758,15 +758,23 @@ static uint64_t getIntModuleFlagOrZero(Module *M, StringRef Flag) {
   return cast<ConstantInt>(MD->getValue())->getZExtValue();
 }
 
+static bool enablesValueProfiling(const Module &M) {
+  return isIRPGOFlagSet(&M) ||
+         getIntModuleFlagOrZero(M, "EnableValueProfiling") != 0;
+}
+
+// Conservatively returns true if data variables may be referenced by code.
+static bool profDataReferencedByCode(const Module &M) {
+  return enablesValueProfiling(M);
+}
+
 static inline bool shouldRecordFunctionAddr(Function *F) {
   // Only record function addresses if IR PGO is enabled or if clang value
   // profiling is enabled. Recording function addresses greatly increases object
   // file size, because it prevents the inliner from deleting functions that
   // have been inlined everywhere.
-  if (!isIRPGOFlagSet(F->getParent()) &&
-      getIntModuleFlagOrZero(F->getParent(), "EnableValueProfiling") == 0) {
+  if (!profDataReferencedByCode(*F->getParent()))
     return false;
-  }
 
   // Check the linkage
   bool HasAvailableExternallyLinkage = F->hasAvailableExternallyLinkage();
@@ -834,21 +842,25 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   // of the parent function, that will result in relocations against discarded
   // sections.
   //
-  // For COFF, put the counters, data, and values each into their own
-  // comdats. We can't use a group because the Visual C++ linker will
-  // report duplicate symbol errors if there are multiple external symbols
-  // with the same name marked IMAGE_COMDAT_SELECT_ASSOCIATIVE.
+  // If the data variable is referenced by code,  counters and data have to be
+  // in different comdats for COFF because the Visual C++ linker will report
+  // duplicate symbol errors if there are multiple external symbols with the
+  // same name marked IMAGE_COMDAT_SELECT_ASSOCIATIVE.
   //
   // For ELF, when not using COMDAT, put counters, data and values into a
   // noduplicates COMDAT which is lowered to a zero-flag section group. This
   // allows -z start-stop-gc to discard the entire group when the function is
   // discarded.
+  bool DataReferencedByCode = profDataReferencedByCode(*M);
   bool NeedComdat = needsComdatForCounter(*Fn, *M);
+  std::string CntsVarName = getVarName(Inc, getInstrProfCountersVarPrefix());
   std::string DataVarName = getVarName(Inc, getInstrProfDataVarPrefix());
-  auto MaybeSetComdat = [=](GlobalVariable *GV) {
+  auto MaybeSetComdat = [&](GlobalVariable *GV) {
     bool UseComdat = (NeedComdat || TT.isOSBinFormatELF());
     if (UseComdat) {
-      auto GroupName = TT.isOSBinFormatCOFF() ? GV->getName() : DataVarName;
+      StringRef GroupName = TT.isOSBinFormatCOFF() && DataReferencedByCode
+                                ? GV->getName()
+                                : CntsVarName;
       Comdat *C = M->getOrInsertComdat(GroupName);
       if (!NeedComdat)
         C->setSelectionKind(Comdat::NoDuplicates);
@@ -863,8 +875,7 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   // Create the counters variable.
   auto *CounterPtr =
       new GlobalVariable(*M, CounterTy, false, Linkage,
-                         Constant::getNullValue(CounterTy),
-                         getVarName(Inc, getInstrProfCountersVarPrefix()));
+                         Constant::getNullValue(CounterTy), CntsVarName);
   CounterPtr->setVisibility(Visibility);
   CounterPtr->setSection(
       getInstrProfSectionName(IPSK_cnts, TT.getObjectFormat()));
@@ -876,25 +887,22 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   // Allocate statically the array of pointers to value profile nodes for
   // the current function.
   Constant *ValuesPtrExpr = ConstantPointerNull::get(Int8PtrTy);
-  if (ValueProfileStaticAlloc && !needsRuntimeRegistrationOfSectionRange(TT)) {
-    uint64_t NS = 0;
-    for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
-      NS += PD.NumValueSites[Kind];
-    if (NS) {
-      ArrayType *ValuesTy = ArrayType::get(Type::getInt64Ty(Ctx), NS);
-
-      auto *ValuesVar =
-          new GlobalVariable(*M, ValuesTy, false, Linkage,
-                             Constant::getNullValue(ValuesTy),
-                             getVarName(Inc, getInstrProfValuesVarPrefix()));
-      ValuesVar->setVisibility(Visibility);
-      ValuesVar->setSection(
-          getInstrProfSectionName(IPSK_vals, TT.getObjectFormat()));
-      ValuesVar->setAlignment(Align(8));
-      MaybeSetComdat(ValuesVar);
-      ValuesPtrExpr =
-          ConstantExpr::getBitCast(ValuesVar, Type::getInt8PtrTy(Ctx));
-    }
+  uint64_t NS = 0;
+  for (uint32_t Kind = IPVK_First; Kind <= IPVK_Last; ++Kind)
+    NS += PD.NumValueSites[Kind];
+  if (NS > 0 && ValueProfileStaticAlloc &&
+      !needsRuntimeRegistrationOfSectionRange(TT)) {
+    ArrayType *ValuesTy = ArrayType::get(Type::getInt64Ty(Ctx), NS);
+    auto *ValuesVar = new GlobalVariable(
+        *M, ValuesTy, false, Linkage, Constant::getNullValue(ValuesTy),
+        getVarName(Inc, getInstrProfValuesVarPrefix()));
+    ValuesVar->setVisibility(Visibility);
+    ValuesVar->setSection(
+        getInstrProfSectionName(IPSK_vals, TT.getObjectFormat()));
+    ValuesVar->setAlignment(Align(8));
+    MaybeSetComdat(ValuesVar);
+    ValuesPtrExpr =
+        ConstantExpr::getBitCast(ValuesVar, Type::getInt8PtrTy(Ctx));
   }
 
   // Create data variable.
@@ -918,6 +926,18 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
 #define INSTR_PROF_DATA(Type, LLVMType, Name, Init) Init,
 #include "llvm/ProfileData/InstrProfData.inc"
   };
+  // If the data variable is not referenced by code (if we don't emit
+  // @llvm.instrprof.value.profile, NS will be 0), and the counter keeps the
+  // data variable live under linker GC, the data variable can be private. This
+  // optimization applies to ELF.
+  //
+  // On COFF, a comdat leader cannot be local so we require DataReferencedByCode
+  // to be false.
+  if (NS == 0 && (TT.isOSBinFormatELF() ||
+                  (!DataReferencedByCode && TT.isOSBinFormatCOFF()))) {
+    Linkage = GlobalValue::PrivateLinkage;
+    Visibility = GlobalValue::DefaultVisibility;
+  }
   auto *Data =
       new GlobalVariable(*M, DataTy, false, Linkage,
                          ConstantStruct::get(DataTy, DataVals), DataVarName);
@@ -1109,9 +1129,12 @@ void InstrProfiling::emitUses() {
   // we conservatively retain all unconditionally in the compiler.
   //
   // On ELF, the linker can guarantee the associated sections will be retained
-  // or discarded as a unit, so llvm.compiler.used is sufficient. Otherwise,
-  // conservatively make all of them retained by the linker.
-  if (TT.isOSBinFormatELF())
+  // or discarded as a unit, so llvm.compiler.used is sufficient. Similarly on
+  // COFF, if prof data is not referenced by code we use one comdat and ensure
+  // this GC property as well. Otherwise, we have to conservatively make all of
+  // the sections retained by the linker.
+  if (TT.isOSBinFormatELF() ||
+      (TT.isOSBinFormatCOFF() && !profDataReferencedByCode(*M)))
     appendToCompilerUsed(*M, CompilerUsedVars);
   else
     appendToUsed(*M, CompilerUsedVars);

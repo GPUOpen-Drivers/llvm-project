@@ -50,6 +50,7 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -2493,14 +2494,14 @@ static bool hasStackGuardSlotTLS(const Triple &TargetTriple) {
          (TargetTriple.isAndroid() && !TargetTriple.isAndroidVersionLT(17));
 }
 
-static Constant* SegmentOffset(IRBuilder<> &IRB,
+static Constant* SegmentOffset(IRBuilderBase &IRB,
                                int Offset, unsigned AddressSpace) {
   return ConstantExpr::getIntToPtr(
       ConstantInt::get(Type::getInt32Ty(IRB.getContext()), Offset),
       Type::getInt8PtrTy(IRB.getContext())->getPointerTo(AddressSpace));
 }
 
-Value *X86TargetLowering::getIRStackGuard(IRBuilder<> &IRB) const {
+Value *X86TargetLowering::getIRStackGuard(IRBuilderBase &IRB) const {
   // glibc, bionic, and Fuchsia have a special slot for the stack guard in
   // tcbhead_t; use it instead of the usual global variable (see
   // sysdeps/{i386,x86_64}/nptl/tls.h)
@@ -2576,7 +2577,8 @@ Function *X86TargetLowering::getSSPStackGuardCheck(const Module &M) const {
   return TargetLowering::getSSPStackGuardCheck(M);
 }
 
-Value *X86TargetLowering::getSafeStackPointerLocation(IRBuilder<> &IRB) const {
+Value *
+X86TargetLowering::getSafeStackPointerLocation(IRBuilderBase &IRB) const {
   if (Subtarget.getTargetTriple().isOSContiki())
     return getDefaultSafeStackPointerLocation(IRB, false);
 
@@ -3375,12 +3377,8 @@ static ArrayRef<MCPhysReg> get64BitArgumentXMMs(MachineFunction &MF,
     return None;
   }
 
-  const Function &F = MF.getFunction();
-  bool NoImplicitFloatOps = F.hasFnAttribute(Attribute::NoImplicitFloat);
   bool isSoftFloat = Subtarget.useSoftFloat();
-  assert(!(isSoftFloat && NoImplicitFloatOps) &&
-         "SSE register cannot be used when SSE is disabled!");
-  if (isSoftFloat || NoImplicitFloatOps || !Subtarget.hasSSE1())
+  if (isSoftFloat || !Subtarget.hasSSE1())
     // Kernel mode asks for SSE to be disabled, so there are no XMM argument
     // registers.
     return None;
@@ -3451,11 +3449,6 @@ void VarArgsLoweringHelper::createVarArgAreaAndStoreRegisters(
     FuncInfo->setVarArgsFrameIndex(
         FrameInfo.CreateFixedObject(1, StackSize, true));
   }
-
-  // Figure out if XMM registers are in use.
-  assert(!(Subtarget.useSoftFloat() &&
-           TheFunction.hasFnAttribute(Attribute::NoImplicitFloat)) &&
-         "SSE register cannot be used when SSE is disabled!");
 
   // 64-bit calling conventions support varargs and register parameters, so we
   // have to do extra work to spill them in the prologue.
@@ -18442,7 +18435,7 @@ static SDValue lowerVECTOR_SHUFFLE(SDValue Op, const X86Subtarget &Subtarget,
 
   // Try to collapse shuffles into using a vector type with fewer elements but
   // wider element types. We cap this to not form integers or floating point
-  // elements wider than 64 bits, but it might be interesting to form i128
+  // elements wider than 64 bits. It does not seem beneficial to form i128
   // integers to handle flipping the low and high halves of AVX 256-bit vectors.
   SmallVector<int, 16> WidenedMask;
   if (VT.getScalarSizeInBits() < 64 && !Is1BitVector &&
@@ -21343,7 +21336,7 @@ SDValue X86TargetLowering::LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG) const {
       return Res;
     }
 
-    if (VT == MVT::v2i64 && SrcVT  == MVT::v2f32) {
+    if (VT == MVT::v2i64 && SrcVT == MVT::v2f32) {
       if (!Subtarget.hasVLX()) {
         // Non-strict nodes without VLX can we widened to v4f32->v4i64 by type
         // legalizer and then widened again by vector op legalization.
@@ -21358,9 +21351,7 @@ SDValue X86TargetLowering::LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG) const {
         SDValue Chain = Tmp.getValue(1);
         Tmp = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, MVT::v2i64, Tmp,
                           DAG.getIntPtrConstant(0, dl));
-        if (IsStrict)
-          return DAG.getMergeValues({Tmp, Chain}, dl);
-        return Tmp;
+        return DAG.getMergeValues({Tmp, Chain}, dl);
       }
 
       assert(Subtarget.hasDQI() && Subtarget.hasVLX() && "Requires AVX512DQVL");
@@ -29734,7 +29725,7 @@ static SDValue lowerAtomicArith(SDValue N, SelectionDAG &DAG,
     // during codegen and then dropped. Note that we expect (but don't assume),
     // that orderings other than seq_cst and acq_rel have been canonicalized to
     // a store or load.
-    if (AN->getOrdering() == AtomicOrdering::SequentiallyConsistent &&
+    if (AN->getSuccessOrdering() == AtomicOrdering::SequentiallyConsistent &&
         AN->getSyncScopeID() == SyncScope::System) {
       // Prefer a locked operation against a stack location to minimize cache
       // traffic.  This assumes that stack locations are very likely to be
@@ -29767,7 +29758,8 @@ static SDValue LowerATOMIC_STORE(SDValue Op, SelectionDAG &DAG,
   SDLoc dl(Node);
   EVT VT = Node->getMemoryVT();
 
-  bool IsSeqCst = Node->getOrdering() == AtomicOrdering::SequentiallyConsistent;
+  bool IsSeqCst =
+      Node->getSuccessOrdering() == AtomicOrdering::SequentiallyConsistent;
   bool IsTypeLegal = DAG.getTargetLoweringInfo().isTypeLegal(VT);
 
   // If this store is not sequentially consistent and the type is legal
@@ -41805,41 +41797,44 @@ static SDValue combineSelect(SDNode *N, SelectionDAG &DAG,
   if (SDValue V = combineSelectOfTwoConstants(N, DAG))
     return V;
 
-  // Canonicalize min/max:
-  // (x > 0) ? x : 0 -> (x >= 0) ? x : 0
-  // (x < -1) ? x : -1 -> (x <= -1) ? x : -1
-  // This allows use of COND_S / COND_NS (see TranslateX86CC) which eliminates
-  // the need for an extra compare against zero. e.g.
-  // (a - b) > 0 : (a - b) ? 0 -> (a - b) >= 0 : (a - b) ? 0
-  // subl   %esi, %edi
-  // testl  %edi, %edi
-  // movl   $0, %eax
-  // cmovgl %edi, %eax
-  // =>
-  // xorl   %eax, %eax
-  // subl   %esi, $edi
-  // cmovsl %eax, %edi
-  //
-  // We can also canonicalize
-  //  (x s> 1) ? x : 1 -> (x s>= 1) ? x : 1 -> (x s> 0) ? x : 1
-  //  (x u> 1) ? x : 1 -> (x u>= 1) ? x : 1 -> (x != 0) ? x : 1
-  // This allows the use of a test instruction for the compare.
   if (N->getOpcode() == ISD::SELECT && Cond.getOpcode() == ISD::SETCC &&
-      Cond.hasOneUse() &&
-      LHS == Cond.getOperand(0) && RHS == Cond.getOperand(1)) {
+      Cond.hasOneUse()) {
+    EVT CondVT = Cond.getValueType();
+    SDValue Cond0 = Cond.getOperand(0);
+    SDValue Cond1 = Cond.getOperand(1);
     ISD::CondCode CC = cast<CondCodeSDNode>(Cond.getOperand(2))->get();
-    if ((CC == ISD::SETGT && (isNullConstant(RHS) || isOneConstant(RHS))) ||
-        (CC == ISD::SETLT && isAllOnesConstant(RHS))) {
-      ISD::CondCode NewCC = CC == ISD::SETGT ? ISD::SETGE : ISD::SETLE;
-      Cond = DAG.getSetCC(SDLoc(Cond), Cond.getValueType(),
-                          Cond.getOperand(0), Cond.getOperand(1), NewCC);
-      return DAG.getSelect(DL, VT, Cond, LHS, RHS);
-    }
-    if (CC == ISD::SETUGT && isOneConstant(RHS)) {
-      ISD::CondCode NewCC = ISD::SETUGE;
-      Cond = DAG.getSetCC(SDLoc(Cond), Cond.getValueType(),
-                          Cond.getOperand(0), Cond.getOperand(1), NewCC);
-      return DAG.getSelect(DL, VT, Cond, LHS, RHS);
+
+    // Canonicalize min/max:
+    // (x > 0) ? x : 0 -> (x >= 0) ? x : 0
+    // (x < -1) ? x : -1 -> (x <= -1) ? x : -1
+    // This allows use of COND_S / COND_NS (see TranslateX86CC) which eliminates
+    // the need for an extra compare against zero. e.g.
+    // (a - b) > 0 : (a - b) ? 0 -> (a - b) >= 0 : (a - b) ? 0
+    // subl   %esi, %edi
+    // testl  %edi, %edi
+    // movl   $0, %eax
+    // cmovgl %edi, %eax
+    // =>
+    // xorl   %eax, %eax
+    // subl   %esi, $edi
+    // cmovsl %eax, %edi
+    //
+    // We can also canonicalize
+    //  (x s> 1) ? x : 1 -> (x s>= 1) ? x : 1 -> (x s> 0) ? x : 1
+    //  (x u> 1) ? x : 1 -> (x u>= 1) ? x : 1 -> (x != 0) ? x : 1
+    // This allows the use of a test instruction for the compare.
+    if (LHS == Cond0 && RHS == Cond1) {
+      if ((CC == ISD::SETGT && (isNullConstant(RHS) || isOneConstant(RHS))) ||
+          (CC == ISD::SETLT && isAllOnesConstant(RHS))) {
+        ISD::CondCode NewCC = CC == ISD::SETGT ? ISD::SETGE : ISD::SETLE;
+        Cond = DAG.getSetCC(SDLoc(Cond), CondVT, Cond0, Cond1, NewCC);
+        return DAG.getSelect(DL, VT, Cond, LHS, RHS);
+      }
+      if (CC == ISD::SETUGT && isOneConstant(RHS)) {
+        ISD::CondCode NewCC = ISD::SETUGE;
+        Cond = DAG.getSetCC(SDLoc(Cond), CondVT, Cond0, Cond1, NewCC);
+        return DAG.getSelect(DL, VT, Cond, LHS, RHS);
+      }
     }
   }
 
@@ -42902,7 +42897,7 @@ static SDValue reduceVMULWidth(SDNode *N, SelectionDAG &DAG,
   if ((NumElts % 2) != 0)
     return SDValue();
 
-  EVT ReducedVT = VT.changeVectorElementType(MVT::i16);
+  EVT ReducedVT = EVT::getVectorVT(*DAG.getContext(), MVT::i16, NumElts);
 
   // Shrink the operands of mul.
   SDValue NewN0 = DAG.getNode(ISD::TRUNCATE, DL, ReducedVT, N0);
@@ -45273,7 +45268,8 @@ static SDValue combineTruncateWithSat(SDValue In, EVT VT, const SDLoc &DL,
 
   const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   if (TLI.isTypeLegal(InVT) && InVT.isVector() && SVT != MVT::i1 &&
-      Subtarget.hasAVX512() && (InSVT != MVT::i16 || Subtarget.hasBWI())) {
+      Subtarget.hasAVX512() && (InSVT != MVT::i16 || Subtarget.hasBWI()) &&
+      (SVT == MVT::i32 || SVT == MVT::i16 || SVT == MVT::i8)) {
     unsigned TruncOpc = 0;
     SDValue SatVal;
     if (auto SSatVal = detectSSatPattern(In, VT)) {
@@ -46544,9 +46540,7 @@ static SDValue combineVectorTruncation(SDNode *N, SelectionDAG &DAG,
     return SDValue();
 
   // SSSE3's pshufb results in less instructions in the cases below.
-  if (Subtarget.hasSSSE3() && NumElems == 8 &&
-      ((OutSVT == MVT::i8 && InSVT != MVT::i64) ||
-       (InSVT == MVT::i32 && OutSVT == MVT::i16)))
+  if (Subtarget.hasSSSE3() && NumElems == 8 && InSVT != MVT::i64)
     return SDValue();
 
   SDLoc DL(N);

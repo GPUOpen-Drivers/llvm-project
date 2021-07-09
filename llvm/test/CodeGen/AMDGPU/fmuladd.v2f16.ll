@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=gfx900 -denormal-fp-math=preserve-sign -fp-contract=on -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GFX9-FLUSH %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=gfx900 -denormal-fp-math=preserve-sign -fp-contract=on -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GFX9-FLUSH %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=gfx900 -denormal-fp-math=preserve-sign -fp-contract=fast -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GFX9-FLUSH %s

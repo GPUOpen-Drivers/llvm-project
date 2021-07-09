@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -verify-machineinstrs -O3 -mcpu=pwr7 < %s | FileCheck  %s -check-prefix=CHECK -check-prefix=CHECK-PWR
 ; RUN: llc -verify-machineinstrs -O3 -mcpu=pwr9 < %s | FileCheck  %s -check-prefix=FIXPOINT
 target datalayout = "E-m:e-i64:64-n32:64"

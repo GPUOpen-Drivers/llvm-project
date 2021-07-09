@@ -1342,6 +1342,8 @@ static unsigned getSGPRSpillSaveOpcode(unsigned Size) {
     return AMDGPU::SI_SPILL_S160_SAVE;
   case 24:
     return AMDGPU::SI_SPILL_S192_SAVE;
+  case 28:
+    return AMDGPU::SI_SPILL_S224_SAVE;
   case 32:
     return AMDGPU::SI_SPILL_S256_SAVE;
   case 64:
@@ -1367,6 +1369,8 @@ static unsigned getVGPRSpillSaveOpcode(unsigned Size) {
     return AMDGPU::SI_SPILL_V160_SAVE;
   case 24:
     return AMDGPU::SI_SPILL_V192_SAVE;
+  case 28:
+    return AMDGPU::SI_SPILL_V224_SAVE;
   case 32:
     return AMDGPU::SI_SPILL_V256_SAVE;
   case 64:
@@ -1475,6 +1479,8 @@ static unsigned getSGPRSpillRestoreOpcode(unsigned Size) {
     return AMDGPU::SI_SPILL_S160_RESTORE;
   case 24:
     return AMDGPU::SI_SPILL_S192_RESTORE;
+  case 28:
+    return AMDGPU::SI_SPILL_S224_RESTORE;
   case 32:
     return AMDGPU::SI_SPILL_S256_RESTORE;
   case 64:
@@ -1500,6 +1506,8 @@ static unsigned getVGPRSpillRestoreOpcode(unsigned Size) {
     return AMDGPU::SI_SPILL_V160_RESTORE;
   case 24:
     return AMDGPU::SI_SPILL_V192_RESTORE;
+  case 28:
+    return AMDGPU::SI_SPILL_V224_RESTORE;
   case 32:
     return AMDGPU::SI_SPILL_V256_RESTORE;
   case 64:
@@ -4239,12 +4247,8 @@ bool SIInstrInfo::verifyInstruction(const MachineInstr &MI,
         VAddrWords = MRI.getTargetRegisterInfo()->getRegSizeInBits(*RC) / 32;
         if (AddrWords > 8)
           AddrWords = 16;
-        else if (AddrWords > 4)
+        else if (AddrWords > 5)
           AddrWords = 8;
-        else if (AddrWords == 4)
-          AddrWords = 4;
-        else if (AddrWords == 3)
-          AddrWords = 3;
       }
 
       if (VAddrWords != AddrWords) {

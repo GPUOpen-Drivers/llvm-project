@@ -285,7 +285,6 @@ TEST(ParameterHints, DependentCalls) {
       void bar(A<T> a, T t) {
         nonmember($par1[[t]]);
         a.member($par2[[t]]);
-        // FIXME: This one does not work yet.
         A<T>::static_member($par3[[t]]);
         // We don't want to arbitrarily pick between
         // "anInt" or "aDouble", so just show no hint.
@@ -294,7 +293,8 @@ TEST(ParameterHints, DependentCalls) {
     };
   )cpp",
                        ExpectedHint{"par1: ", "par1"},
-                       ExpectedHint{"par2: ", "par2"});
+                       ExpectedHint{"par2: ", "par2"},
+                       ExpectedHint{"par3: ", "par3"});
 }
 
 TEST(ParameterHints, VariadicFunction) {
@@ -478,14 +478,31 @@ TEST(TypeHints, StructuredBindings) {
 }
 
 TEST(TypeHints, ReturnTypeDeduction) {
-  // FIXME: Not handled yet.
-  // This test is currently here mostly because a naive implementation
-  // might have us print something not super helpful like the function type.
-  assertTypeHints(R"cpp(
-    auto func(int x) {
-      return x + 1;
-    }
-  )cpp");
+  assertTypeHints(
+      R"cpp(
+    auto f1(int x$ret1a[[)]];  // Hint forward declaration too
+    auto f1(int x$ret1b[[)]] { return x + 1; }
+
+    // Include pointer operators in hint
+    int s;
+    auto& f2($ret2[[)]] { return s; }
+
+    // Do not hint `auto` for trailing return type.
+    auto f3() -> int;
+
+    // `auto` conversion operator
+    struct A {
+      operator auto($retConv[[)]] { return 42; }
+    };
+
+    // FIXME: Dependent types do not work yet.
+    template <typename T>
+    struct S {
+      auto method() { return T(); }
+    };
+  )cpp",
+      ExpectedHint{"-> int", "ret1a"}, ExpectedHint{"-> int", "ret1b"},
+      ExpectedHint{"-> int &", "ret2"}, ExpectedHint{"-> int", "retConv"});
 }
 
 TEST(TypeHints, DependentType) {

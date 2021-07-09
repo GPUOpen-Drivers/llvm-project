@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -amdgpu-scalarize-global-loads=false -verify-machineinstrs -mcpu=tahiti -denormal-fp-math-f32=preserve-sign -mattr=+fast-fmaf -fp-contract=on < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GCN-FLUSH,GCN-FLUSH-MAD,SI %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -verify-machineinstrs -mcpu=tahiti -denormal-fp-math-f32=ieee -mattr=+fast-fmaf -fp-contract=on < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GCN-DENORM-STRICT,SI-DENORM,GCN-DENORM-FASTFMA,SI %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -verify-machineinstrs -mcpu=verde -denormal-fp-math-f32=preserve-sign -mattr=-fast-fmaf -fp-contract=on < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GCN-FLUSH,GCN-FLUSH-MAD,SI-FLUSH,SI %s
