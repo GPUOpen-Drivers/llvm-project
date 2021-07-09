@@ -55,11 +55,15 @@ class VSETVLIInfo {
   // Fields from VTYPE.
   RISCVII::VLMUL VLMul = RISCVII::LMUL_1;
   uint8_t SEW = 0;
-  bool TailAgnostic = false;
-  bool MaskAgnostic = false;
+  uint8_t TailAgnostic : 1;
+  uint8_t MaskAgnostic : 1;
+  uint8_t MaskRegOp : 1;
+  uint8_t SEWLMULRatioOnly : 1;
 
 public:
-  VSETVLIInfo() : AVLImm(0) {}
+  VSETVLIInfo()
+      : AVLImm(0), TailAgnostic(false), MaskAgnostic(false), MaskRegOp(false),
+        SEWLMULRatioOnly(false) {}
 
   static VSETVLIInfo getUnknown() {
     VSETVLIInfo Info;
@@ -114,26 +118,31 @@ public:
     TailAgnostic = RISCVVType::isTailAgnostic(VType);
     MaskAgnostic = RISCVVType::isMaskAgnostic(VType);
   }
-  void setVTYPE(RISCVII::VLMUL L, unsigned S, bool TA, bool MA) {
+  void setVTYPE(RISCVII::VLMUL L, unsigned S, bool TA, bool MA, bool MRO) {
     assert(isValid() && !isUnknown() &&
            "Can't set VTYPE for uninitialized or unknown");
     VLMul = L;
     SEW = S;
     TailAgnostic = TA;
     MaskAgnostic = MA;
+    MaskRegOp = MRO;
   }
 
   unsigned encodeVTYPE() const {
-    assert(isValid() && !isUnknown() &&
+    assert(isValid() && !isUnknown() && !SEWLMULRatioOnly &&
            "Can't encode VTYPE for uninitialized or unknown");
     return RISCVVType::encodeVTYPE(VLMul, SEW, TailAgnostic, MaskAgnostic);
   }
+
+  bool hasSEWLMULRatioOnly() const { return SEWLMULRatioOnly; }
 
   bool hasSameVTYPE(const VSETVLIInfo &Other) const {
     assert(isValid() && Other.isValid() &&
            "Can't compare invalid VSETVLIInfos");
     assert(!isUnknown() && !Other.isUnknown() &&
            "Can't compare VTYPE in unknown state");
+    assert(!SEWLMULRatioOnly && !Other.SEWLMULRatioOnly &&
+           "Can't compare when only LMUL/SEW ratio is valid.");
     return std::tie(VLMul, SEW, TailAgnostic, MaskAgnostic) ==
            std::tie(Other.VLMul, Other.SEW, Other.TailAgnostic,
                     Other.MaskAgnostic);
@@ -163,31 +172,40 @@ public:
     return getSEWLMULRatio() == Other.getSEWLMULRatio();
   }
 
-  bool isCompatible(const VSETVLIInfo &Other) const {
-    assert(isValid() && Other.isValid() &&
+  // Determine whether the vector instructions requirements represented by
+  // InstrInfo are compatible with the previous vsetvli instruction represented
+  // by this.
+  bool isCompatible(const VSETVLIInfo &InstrInfo) const {
+    assert(isValid() && InstrInfo.isValid() &&
            "Can't compare invalid VSETVLIInfos");
+    assert(!InstrInfo.SEWLMULRatioOnly &&
+           "Expected a valid VTYPE for instruction!");
     // Nothing is compatible with Unknown.
-    if (isUnknown() || Other.isUnknown())
+    if (isUnknown() || InstrInfo.isUnknown())
       return false;
 
-    // If other doesn't need an AVLReg and the SEW matches, consider it
-    // compatible.
-    if (Other.hasAVLReg() && Other.AVLReg == RISCV::NoRegister) {
-      if (SEW == Other.SEW)
+    // If only our VLMAX ratio is valid, then this isn't compatible.
+    if (SEWLMULRatioOnly)
+      return false;
+
+    // If the instruction doesn't need an AVLReg and the SEW matches, consider
+    // it compatible.
+    if (InstrInfo.hasAVLReg() && InstrInfo.AVLReg == RISCV::NoRegister) {
+      if (SEW == InstrInfo.SEW)
         return true;
     }
 
-    // VTypes must match.
-    if (!hasSameVTYPE(Other))
+    // VTypes must match unless the instruction is a mask reg operation, then it
+    // only care about VLMAX.
+    // FIXME: Mask reg operations are probably ok if "this" VLMAX is larger
+    // than "InstrInfo".
+    if (!hasSameVTYPE(InstrInfo) &&
+        !(InstrInfo.MaskRegOp && hasSameVLMAX(InstrInfo) &&
+          TailAgnostic == InstrInfo.TailAgnostic &&
+          MaskAgnostic == InstrInfo.MaskAgnostic))
       return false;
 
-    if (hasAVLImm() != Other.hasAVLImm())
-      return false;
-
-    if (hasAVLImm())
-      return getAVLImm() == Other.getAVLImm();
-
-    return getAVLReg() == Other.getAVLReg();
+    return hasSameAVL(InstrInfo);
   }
 
   bool operator==(const VSETVLIInfo &Other) const {
@@ -203,11 +221,20 @@ public:
     if (Other.isUnknown())
       return isUnknown();
 
-    // Otherwise compare the VTYPE and AVL.
-    return hasSameVTYPE(Other) && hasSameAVL(Other);
-  }
+    if (!hasSameAVL(Other))
+      return false;
 
-  bool operator!=(const VSETVLIInfo &Other) const { return !(*this == Other); }
+    // If only the VLMAX is valid, check that it is the same.
+    if (SEWLMULRatioOnly && Other.SEWLMULRatioOnly)
+      return hasSameVLMAX(Other);
+
+    // If the full VTYPE is valid, check that it is the same.
+    if (!SEWLMULRatioOnly && !Other.SEWLMULRatioOnly)
+      return hasSameVTYPE(Other);
+
+    // If the SEWLMULRatioOnly bits are different, then they aren't equal.
+    return false;
+  }
 
   // Calculate the VSETVLIInfo visible to a block assuming this and Other are
   // both predecessors.
@@ -220,10 +247,23 @@ public:
     if (!isValid())
       return Other;
 
+    // If either is unknown, the result is unknown.
+    if (isUnknown() || Other.isUnknown())
+      return VSETVLIInfo::getUnknown();
+
+    // If we have an exact, match return this.
     if (*this == Other)
       return *this;
 
-    // If the configurations don't match, assume unknown.
+    // Not an exact match, but maybe the AVL and VLMAX are the same. If so,
+    // return an SEW/LMUL ratio only value.
+    if (hasSameAVL(Other) && hasSameVLMAX(Other)) {
+      VSETVLIInfo MergeInfo = *this;
+      MergeInfo.SEWLMULRatioOnly = true;
+      return MergeInfo;
+    }
+
+    // Otherwise the result is unknown.
     return VSETVLIInfo::getUnknown();
   }
 
@@ -326,7 +366,9 @@ static VSETVLIInfo computeInfoForInstr(const MachineInstr &MI, uint64_t TSFlags,
   RISCVII::VLMUL VLMul = RISCVII::getLMul(TSFlags);
 
   unsigned Log2SEW = MI.getOperand(NumOperands - 1).getImm();
-  unsigned SEW = 1 << Log2SEW;
+  // A Log2SEW of 0 is an operation on mask registers only.
+  bool MaskRegOp = Log2SEW == 0;
+  unsigned SEW = Log2SEW ? 1 << Log2SEW : 8;
   assert(RISCVVType::isValidSEW(SEW) && "Unexpected SEW");
 
   // Default to tail agnostic unless the destination is tied to a source.
@@ -360,7 +402,7 @@ static VSETVLIInfo computeInfoForInstr(const MachineInstr &MI, uint64_t TSFlags,
   } else
     InstrInfo.setAVLReg(RISCV::NoRegister);
   InstrInfo.setVTYPE(VLMul, SEW, /*TailAgnostic*/ TailAgnostic,
-                     /*MaskAgnostic*/ false);
+                     /*MaskAgnostic*/ false, MaskRegOp);
 
   return InstrInfo;
 }
@@ -438,7 +480,8 @@ bool RISCVInsertVSETVLI::needVSETVLI(const VSETVLIInfo &Require,
   // and the last VL/VTYPE we observed is the same, we don't need a
   // VSETVLI here.
   if (!CurInfo.isUnknown() && Require.hasAVLReg() &&
-      Require.getAVLReg().isVirtual() && Require.hasSameVTYPE(CurInfo)) {
+      Require.getAVLReg().isVirtual() && !CurInfo.hasSEWLMULRatioOnly() &&
+      Require.hasSameVTYPE(CurInfo)) {
     if (MachineInstr *DefMI = MRI->getVRegDef(Require.getAVLReg())) {
       if (DefMI->getOpcode() == RISCV::PseudoVSETVLI ||
           DefMI->getOpcode() == RISCV::PseudoVSETIVLI) {

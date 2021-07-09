@@ -57,7 +57,9 @@ public:
     while (IndentForLevel.size() <= Line.Level)
       IndentForLevel.push_back(-1);
     if (Line.InPPDirective) {
-      Indent = Line.Level * Style.IndentWidth + AdditionalIndent;
+      unsigned IndentWidth =
+          (Style.PPIndentWidth >= 0) ? Style.PPIndentWidth : Style.IndentWidth;
+      Indent = Line.Level * IndentWidth + AdditionalIndent;
     } else {
       IndentForLevel.resize(Line.Level + 1);
       Indent = getIndent(IndentForLevel, Line.Level);
@@ -821,8 +823,20 @@ protected:
       return true;
 
     if (NewLine) {
-      int AdditionalIndent = State.Stack.back().Indent -
-                             Previous.Children[0]->Level * Style.IndentWidth;
+      const ParenState &P = State.Stack.back();
+
+      int AdditionalIndent =
+          P.Indent - Previous.Children[0]->Level * Style.IndentWidth;
+
+      if (Style.LambdaBodyIndentation == FormatStyle::LBI_OuterScope &&
+          P.NestedBlockIndent == P.LastSpace) {
+        if (State.NextToken->MatchingParen &&
+            State.NextToken->MatchingParen->is(TT_LambdaLBrace)) {
+          State.Stack.pop_back();
+        }
+        if (LBrace->is(TT_LambdaLBrace))
+          AdditionalIndent = 0;
+      }
 
       Penalty +=
           BlockFormatter->format(Previous.Children, DryRun, AdditionalIndent,

@@ -544,6 +544,7 @@ ARMTargetLowering::ARMTargetLowering(const TargetMachine &TM,
   setLibcallName(RTLIB::SHL_I128, nullptr);
   setLibcallName(RTLIB::SRL_I128, nullptr);
   setLibcallName(RTLIB::SRA_I128, nullptr);
+  setLibcallName(RTLIB::MUL_I128, nullptr);
 
   // RTLIB
   if (Subtarget->isAAPCS_ABI() &&
@@ -1824,8 +1825,9 @@ EVT ARMTargetLowering::getSetCCResultType(const DataLayout &DL, LLVMContext &,
     return getPointerTy(DL);
 
   // MVE has a predicate register.
-  if (Subtarget->hasMVEIntegerOps() &&
-      (VT == MVT::v4i32 || VT == MVT::v8i16 || VT == MVT::v16i8))
+  if ((Subtarget->hasMVEIntegerOps() &&
+       (VT == MVT::v4i32 || VT == MVT::v8i16 || VT == MVT::v16i8)) ||
+      (Subtarget->hasMVEFloatOps() && (VT == MVT::v4f32 || VT == MVT::v8f16)))
     return MVT::getVectorVT(MVT::i1, VT.getVectorElementCount());
   return VT.changeVectorElementTypeToInteger();
 }
@@ -7635,6 +7637,18 @@ SDValue ARMTargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG,
           return DAG.getNode(ARMISD::VMOVFPIMM, dl, VT, Val);
         }
       }
+
+      // If we are under MVE, generate a VDUP(constant), bitcast to the original
+      // type.
+      if (ST->hasMVEIntegerOps() &&
+          (SplatBitSize == 8 || SplatBitSize == 16 || SplatBitSize == 32)) {
+        EVT DupVT = SplatBitSize == 32   ? MVT::v4i32
+                    : SplatBitSize == 16 ? MVT::v8i16
+                                         : MVT::v16i8;
+        SDValue Const = DAG.getConstant(SplatBits.getZExtValue(), dl, MVT::i32);
+        SDValue VDup = DAG.getNode(ARMISD::VDUP, dl, DupVT, Const);
+        return DAG.getNode(ARMISD::VECTOR_REG_CAST, dl, VT, VDup);
+      }
     }
   }
 
@@ -9830,7 +9844,7 @@ static SDValue LowerVecReduceF(SDValue Op, SelectionDAG &DAG,
 }
 
 static SDValue LowerAtomicLoadStore(SDValue Op, SelectionDAG &DAG) {
-  if (isStrongerThanMonotonic(cast<AtomicSDNode>(Op)->getOrdering()))
+  if (isStrongerThanMonotonic(cast<AtomicSDNode>(Op)->getSuccessOrdering()))
     // Acquire/Release load/store is not legal for targets without a dmb or
     // equivalent available.
     return SDValue();
@@ -14761,12 +14775,12 @@ static SDValue CombineBaseUpdate(SDNode *N,
         NumVecs = 3; hasAlignment = false; break;
       case Intrinsic::arm_neon_vld1x4:   NewOpc = ARMISD::VLD1x4_UPD;
         NumVecs = 4; hasAlignment = false; break;
-      case Intrinsic::arm_neon_vld2dup:
-      case Intrinsic::arm_neon_vld3dup:
-      case Intrinsic::arm_neon_vld4dup:
-        // TODO: Support updating VLDxDUP nodes. For now, we just skip
-        // combining base updates for such intrinsics.
-        continue;
+      case Intrinsic::arm_neon_vld2dup:  NewOpc = ARMISD::VLD2DUP_UPD;
+        NumVecs = 2; break;
+      case Intrinsic::arm_neon_vld3dup:  NewOpc = ARMISD::VLD3DUP_UPD;
+        NumVecs = 3; break;
+      case Intrinsic::arm_neon_vld4dup:  NewOpc = ARMISD::VLD4DUP_UPD;
+        NumVecs = 4; break;
       case Intrinsic::arm_neon_vld2lane: NewOpc = ARMISD::VLD2LN_UPD;
         NumVecs = 2; isLaneOp = true; break;
       case Intrinsic::arm_neon_vld3lane: NewOpc = ARMISD::VLD3LN_UPD;
@@ -14820,8 +14834,12 @@ static SDValue CombineBaseUpdate(SDNode *N,
       VecTy = N->getOperand(1).getValueType();
     }
 
+    bool isVLDDUPOp =
+        NewOpc == ARMISD::VLD1DUP_UPD || NewOpc == ARMISD::VLD2DUP_UPD ||
+        NewOpc == ARMISD::VLD3DUP_UPD || NewOpc == ARMISD::VLD4DUP_UPD;
+
     unsigned NumBytes = NumVecs * VecTy.getSizeInBits() / 8;
-    if (isLaneOp)
+    if (isLaneOp || isVLDDUPOp)
       NumBytes /= VecTy.getVectorNumElements();
 
     // If the increment is a constant, it must match the memory ref size.
@@ -18151,6 +18169,8 @@ bool ARMTargetLowering::getPostIndexedAddressParts(SDNode *N, SDNode *Op,
     auto *RHS = dyn_cast<ConstantSDNode>(Op->getOperand(1));
     if (!RHS || RHS->getZExtValue() != 4)
       return false;
+    if (Alignment < Align(4))
+      return false;
 
     Offset = Op->getOperand(1);
     Base = Op->getOperand(0);
@@ -19381,7 +19401,7 @@ bool ARMTargetLowering::isExtractSubvectorCheap(EVT ResVT, EVT SrcVT,
   return (Index == 0 || Index == ResVT.getVectorNumElements());
 }
 
-Instruction* ARMTargetLowering::makeDMB(IRBuilder<> &Builder,
+Instruction *ARMTargetLowering::makeDMB(IRBuilderBase &Builder,
                                         ARM_MB::MemBOpt Domain) const {
   Module *M = Builder.GetInsertBlock()->getParent()->getParent();
 
@@ -19411,7 +19431,7 @@ Instruction* ARMTargetLowering::makeDMB(IRBuilder<> &Builder,
 }
 
 // Based on http://www.cl.cam.ac.uk/~pes20/cpp/cpp0xmappings.html
-Instruction *ARMTargetLowering::emitLeadingFence(IRBuilder<> &Builder,
+Instruction *ARMTargetLowering::emitLeadingFence(IRBuilderBase &Builder,
                                                  Instruction *Inst,
                                                  AtomicOrdering Ord) const {
   switch (Ord) {
@@ -19436,7 +19456,7 @@ Instruction *ARMTargetLowering::emitLeadingFence(IRBuilder<> &Builder,
   llvm_unreachable("Unknown fence ordering in emitLeadingFence");
 }
 
-Instruction *ARMTargetLowering::emitTrailingFence(IRBuilder<> &Builder,
+Instruction *ARMTargetLowering::emitTrailingFence(IRBuilderBase &Builder,
                                                   Instruction *Inst,
                                                   AtomicOrdering Ord) const {
   switch (Ord) {
@@ -19598,7 +19618,7 @@ bool ARMTargetLowering::shouldExpandShift(SelectionDAG &DAG, SDNode *N) const {
   return !Subtarget->hasMinSize() || Subtarget->isTargetWindows();
 }
 
-Value *ARMTargetLowering::emitLoadLinked(IRBuilder<> &Builder, Value *Addr,
+Value *ARMTargetLowering::emitLoadLinked(IRBuilderBase &Builder, Value *Addr,
                                          AtomicOrdering Ord) const {
   Module *M = Builder.GetInsertBlock()->getParent()->getParent();
   Type *ValTy = cast<PointerType>(Addr->getType())->getElementType();
@@ -19635,15 +19655,15 @@ Value *ARMTargetLowering::emitLoadLinked(IRBuilder<> &Builder, Value *Addr,
 }
 
 void ARMTargetLowering::emitAtomicCmpXchgNoStoreLLBalance(
-    IRBuilder<> &Builder) const {
+    IRBuilderBase &Builder) const {
   if (!Subtarget->hasV7Ops())
     return;
   Module *M = Builder.GetInsertBlock()->getParent()->getParent();
   Builder.CreateCall(Intrinsic::getDeclaration(M, Intrinsic::arm_clrex));
 }
 
-Value *ARMTargetLowering::emitStoreConditional(IRBuilder<> &Builder, Value *Val,
-                                               Value *Addr,
+Value *ARMTargetLowering::emitStoreConditional(IRBuilderBase &Builder,
+                                               Value *Val, Value *Addr,
                                                AtomicOrdering Ord) const {
   Module *M = Builder.GetInsertBlock()->getParent()->getParent();
   bool IsRelease = isReleaseOrStronger(Ord);
@@ -20098,8 +20118,8 @@ static bool isHomogeneousAggregate(Type *Ty, HABaseType &Base,
 }
 
 /// Return the correct alignment for the current calling convention.
-Align ARMTargetLowering::getABIAlignmentForCallingConv(Type *ArgTy,
-                                                       DataLayout DL) const {
+Align ARMTargetLowering::getABIAlignmentForCallingConv(
+    Type *ArgTy, const DataLayout &DL) const {
   const Align ABITypeAlign = DL.getABITypeAlign(ArgTy);
   if (!ArgTy->isVectorTy())
     return ABITypeAlign;
@@ -20113,7 +20133,8 @@ Align ARMTargetLowering::getABIAlignmentForCallingConv(Type *ArgTy,
 /// [N x i32] or [N x i64]. This allows front-ends to skip emitting padding when
 /// passing according to AAPCS rules.
 bool ARMTargetLowering::functionArgumentNeedsConsecutiveRegisters(
-    Type *Ty, CallingConv::ID CallConv, bool isVarArg) const {
+    Type *Ty, CallingConv::ID CallConv, bool isVarArg,
+    const DataLayout &DL) const {
   if (getEffectiveCallingConv(CallConv, isVarArg) !=
       CallingConv::ARM_AAPCS_VFP)
     return false;

@@ -28,7 +28,6 @@
 
 namespace llvm {
 
-template<class GraphType> struct GraphTraits;
 class IntegerType;
 class LLVMContext;
 class PointerType;
@@ -484,6 +483,7 @@ public:
 
   /// Return a pointer to the current type. This is equivalent to
   /// PointerType::get(Foo, AddrSpace).
+  /// TODO: Remove this after opaque pointer transition is complete.
   PointerType *getPointerTo(unsigned AddrSpace = 0) const;
 
 private:

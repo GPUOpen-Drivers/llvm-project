@@ -35,6 +35,7 @@ namespace llvm {
   class APInt;
   class hash_code;
   template <typename T> class SmallVectorImpl;
+  template <typename T> struct DenseMapInfo;
   class StringRef;
 
   /// Helper functions for StringRef::getAsInteger.
@@ -684,10 +685,30 @@ namespace llvm {
       return true;
     }
 
+    /// Returns true if this StringRef has the given prefix, ignoring case,
+    /// and removes that prefix.
+    bool consume_front_lower(StringRef Prefix) {
+      if (!startswith_lower(Prefix))
+        return false;
+
+      *this = drop_front(Prefix.size());
+      return true;
+    }
+
     /// Returns true if this StringRef has the given suffix and removes that
     /// suffix.
     bool consume_back(StringRef Suffix) {
       if (!endswith(Suffix))
+        return false;
+
+      *this = drop_back(Suffix.size());
+      return true;
+    }
+
+    /// Returns true if this StringRef has the given suffix, ignoring case,
+    /// and removes that suffix.
+    bool consume_back_lower(StringRef Suffix) {
+      if (!endswith_lower(Suffix))
         return false;
 
       *this = drop_back(Suffix.size());
@@ -924,6 +945,35 @@ namespace llvm {
   /// Compute a hash_code for a StringRef.
   LLVM_NODISCARD
   hash_code hash_value(StringRef S);
+
+  // Provide DenseMapInfo for StringRefs.
+  template <> struct DenseMapInfo<StringRef> {
+    static inline StringRef getEmptyKey() {
+      return StringRef(
+          reinterpret_cast<const char *>(~static_cast<uintptr_t>(0)), 0);
+    }
+
+    static inline StringRef getTombstoneKey() {
+      return StringRef(
+          reinterpret_cast<const char *>(~static_cast<uintptr_t>(1)), 0);
+    }
+
+    static unsigned getHashValue(StringRef Val) {
+      assert(Val.data() != getEmptyKey().data() &&
+             "Cannot hash the empty key!");
+      assert(Val.data() != getTombstoneKey().data() &&
+             "Cannot hash the tombstone key!");
+      return (unsigned)(hash_value(Val));
+    }
+
+    static bool isEqual(StringRef LHS, StringRef RHS) {
+      if (RHS.data() == getEmptyKey().data())
+        return LHS.data() == getEmptyKey().data();
+      if (RHS.data() == getTombstoneKey().data())
+        return LHS.data() == getTombstoneKey().data();
+      return LHS == RHS;
+    }
+  };
 
 } // end namespace llvm
 

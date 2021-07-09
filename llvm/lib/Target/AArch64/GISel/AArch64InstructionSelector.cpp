@@ -2163,6 +2163,40 @@ bool AArch64InstructionSelector::earlySelect(MachineInstr &I) {
     I.eraseFromParent();
     return true;
   }
+  case TargetOpcode::G_OR: {
+    // Look for operations that take the lower `Width=Size-ShiftImm` bits of
+    // `ShiftSrc` and insert them into the upper `Width` bits of `MaskSrc` via
+    // shifting and masking that we can replace with a BFI (encoded as a BFM).
+    Register Dst = I.getOperand(0).getReg();
+    LLT Ty = MRI.getType(Dst);
+
+    if (!Ty.isScalar())
+      return false;
+
+    unsigned Size = Ty.getSizeInBits();
+    if (Size != 32 && Size != 64)
+      return false;
+
+    Register ShiftSrc;
+    int64_t ShiftImm;
+    Register MaskSrc;
+    int64_t MaskImm;
+    if (!mi_match(
+            Dst, MRI,
+            m_GOr(m_OneNonDBGUse(m_GShl(m_Reg(ShiftSrc), m_ICst(ShiftImm))),
+                  m_OneNonDBGUse(m_GAnd(m_Reg(MaskSrc), m_ICst(MaskImm))))))
+      return false;
+
+    if (ShiftImm > Size || ((1ULL << ShiftImm) - 1ULL) != uint64_t(MaskImm))
+      return false;
+
+    int64_t Immr = Size - ShiftImm;
+    int64_t Imms = Size - ShiftImm - 1;
+    unsigned Opc = Size == 32 ? AArch64::BFMWri : AArch64::BFMXri;
+    emitInstr(Opc, {Dst}, {MaskSrc, ShiftSrc, Immr, Imms}, MIB);
+    I.eraseFromParent();
+    return true;
+  }
   default:
     return false;
   }
@@ -2618,13 +2652,28 @@ bool AArch64InstructionSelector::select(MachineInstr &I) {
     auto &MemOp = **I.memoperands_begin();
     uint64_t MemSizeInBytes = MemOp.getSize();
     unsigned MemSizeInBits = MemSizeInBytes * 8;
-    AtomicOrdering Order = MemOp.getOrdering();
+    AtomicOrdering Order = MemOp.getSuccessOrdering();
 
     // Need special instructions for atomics that affect ordering.
     if (Order != AtomicOrdering::NotAtomic &&
         Order != AtomicOrdering::Unordered &&
-        Order != AtomicOrdering::Monotonic)
-      return false;
+        Order != AtomicOrdering::Monotonic) {
+      assert(I.getOpcode() != TargetOpcode::G_ZEXTLOAD);
+      if (MemSizeInBytes > 64)
+        return false;
+
+      if (I.getOpcode() == TargetOpcode::G_LOAD) {
+        static unsigned Opcodes[] = {AArch64::LDARB, AArch64::LDARH,
+                                     AArch64::LDARW, AArch64::LDARX};
+        I.setDesc(TII.get(Opcodes[Log2_32(MemSizeInBytes)]));
+      } else {
+        static unsigned Opcodes[] = {AArch64::STLRB, AArch64::STLRH,
+                                     AArch64::STLRW, AArch64::STLRX};
+        I.setDesc(TII.get(Opcodes[Log2_32(MemSizeInBytes)]));
+      }
+      constrainSelectedInstRegOperands(I, TII, TRI, RBI);
+      return true;
+    }
 
 #ifndef NDEBUG
     const Register PtrReg = I.getOperand(1).getReg();
@@ -5766,9 +5815,9 @@ AArch64_AM::ShiftExtendType AArch64InstructionSelector::getExtendTypeForInst(
     assert(Size != 64 && "Extend from 64 bits?");
     switch (Size) {
     case 8:
-      return AArch64_AM::SXTB;
+      return IsLoadStore ? AArch64_AM::InvalidShiftExtend : AArch64_AM::SXTB;
     case 16:
-      return AArch64_AM::SXTH;
+      return IsLoadStore ? AArch64_AM::InvalidShiftExtend : AArch64_AM::SXTH;
     case 32:
       return AArch64_AM::SXTW;
     default:
@@ -5781,9 +5830,9 @@ AArch64_AM::ShiftExtendType AArch64InstructionSelector::getExtendTypeForInst(
     assert(Size != 64 && "Extend from 64 bits?");
     switch (Size) {
     case 8:
-      return AArch64_AM::UXTB;
+      return IsLoadStore ? AArch64_AM::InvalidShiftExtend : AArch64_AM::UXTB;
     case 16:
-      return AArch64_AM::UXTH;
+      return IsLoadStore ? AArch64_AM::InvalidShiftExtend : AArch64_AM::UXTH;
     case 32:
       return AArch64_AM::UXTW;
     default:
@@ -6003,7 +6052,14 @@ static void fixupPHIOpBanks(MachineInstr &MI, MachineRegisterInfo &MRI,
       // Insert a cross-bank copy.
       auto *OpDef = MRI.getVRegDef(OpReg);
       const LLT &Ty = MRI.getType(OpReg);
-      MIB.setInsertPt(*OpDef->getParent(), std::next(OpDef->getIterator()));
+      MachineBasicBlock &OpDefBB = *OpDef->getParent();
+
+      // Any instruction we insert must appear after all PHIs in the block
+      // for the block to be valid MIR.
+      MachineBasicBlock::iterator InsertPt = std::next(OpDef->getIterator());
+      if (InsertPt != OpDefBB.end() && InsertPt->isPHI())
+        InsertPt = OpDefBB.getFirstNonPHI();
+      MIB.setInsertPt(*OpDef->getParent(), InsertPt);
       auto Copy = MIB.buildCopy(Ty, OpReg);
       MRI.setRegBank(Copy.getReg(0), *DstRB);
       MO.setReg(Copy.getReg(0));
