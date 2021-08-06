@@ -258,9 +258,9 @@ public:
     return LTODiscardSymbols.contains(Name);
   }
 
-  bool parseMSInlineAsm(void *AsmLoc, std::string &AsmString,
-                        unsigned &NumOutputs, unsigned &NumInputs,
-                        SmallVectorImpl<std::pair<void *,bool>> &OpDecls,
+  bool parseMSInlineAsm(std::string &AsmString, unsigned &NumOutputs,
+                        unsigned &NumInputs,
+                        SmallVectorImpl<std::pair<void *, bool>> &OpDecls,
                         SmallVectorImpl<std::string> &Constraints,
                         SmallVectorImpl<std::string> &Clobbers,
                         const MCInstrInfo *MII, const MCInstPrinter *IP,
@@ -749,6 +749,7 @@ namespace llvm {
 extern MCAsmParserExtension *createDarwinAsmParser();
 extern MCAsmParserExtension *createELFAsmParser();
 extern MCAsmParserExtension *createCOFFAsmParser();
+extern MCAsmParserExtension *createXCOFFAsmParser();
 extern MCAsmParserExtension *createWasmAsmParser();
 
 } // end namespace llvm
@@ -785,8 +786,7 @@ AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
     PlatformParser.reset(createWasmAsmParser());
     break;
   case MCContext::IsXCOFF:
-    report_fatal_error(
-        "Need to implement createXCOFFAsmParser for XCOFF format.");
+    PlatformParser.reset(createXCOFFAsmParser());
     break;
   }
 
@@ -5927,8 +5927,8 @@ static int rewritesSort(const AsmRewrite *AsmRewriteA,
 }
 
 bool AsmParser::parseMSInlineAsm(
-    void *AsmLoc, std::string &AsmString, unsigned &NumOutputs,
-    unsigned &NumInputs, SmallVectorImpl<std::pair<void *, bool>> &OpDecls,
+    std::string &AsmString, unsigned &NumOutputs, unsigned &NumInputs,
+    SmallVectorImpl<std::pair<void *, bool>> &OpDecls,
     SmallVectorImpl<std::string> &Constraints,
     SmallVectorImpl<std::string> &Clobbers, const MCInstrInfo *MII,
     const MCInstPrinter *IP, MCAsmParserSemaCallback &SI) {

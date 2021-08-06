@@ -258,8 +258,15 @@ namespace llvm {
       return parseOptionalAddrSpace(
           AddrSpace, M->getDataLayout().getProgramAddressSpace());
     };
-    bool parseOptionalParamAttrs(AttrBuilder &B);
-    bool parseOptionalReturnAttrs(AttrBuilder &B);
+    bool parseEnumAttribute(Attribute::AttrKind Attr, AttrBuilder &B,
+                            bool InAttrGroup);
+    bool parseOptionalParamOrReturnAttrs(AttrBuilder &B, bool IsParam);
+    bool parseOptionalParamAttrs(AttrBuilder &B) {
+      return parseOptionalParamOrReturnAttrs(B, true);
+    }
+    bool parseOptionalReturnAttrs(AttrBuilder &B) {
+      return parseOptionalParamOrReturnAttrs(B, false);
+    }
     bool parseOptionalLinkage(unsigned &Res, bool &HasLinkage,
                               unsigned &Visibility, unsigned &DLLStorageClass,
                               bool &DSOLocal);
@@ -328,10 +335,8 @@ namespace llvm {
     bool parseFnAttributeValuePairs(AttrBuilder &B,
                                     std::vector<unsigned> &FwdRefAttrGrps,
                                     bool inAttrGrp, LocTy &BuiltinLoc);
-    bool parseRequiredTypeAttr(Type *&Result, lltok::Kind AttrName);
-    bool parsePreallocated(Type *&Result);
-    bool parseInalloca(Type *&Result);
-    bool parseByRef(Type *&Result);
+    bool parseRequiredTypeAttr(AttrBuilder &B, lltok::Kind AttrToken,
+                               Attribute::AttrKind AttrKind);
 
     // Module Summary Index Parsing.
     bool skipModuleSummaryEntry();
@@ -507,7 +512,8 @@ namespace llvm {
                             PerFunctionState &PFS);
 
     // Constant Parsing.
-    bool parseValID(ValID &ID, PerFunctionState *PFS = nullptr);
+    bool parseValID(ValID &ID, PerFunctionState *PFS,
+                    Type *ExpectedTy = nullptr);
     bool parseGlobalValue(Type *Ty, Constant *&C);
     bool parseGlobalTypeAndValue(Constant *&V);
     bool parseGlobalValueVector(SmallVectorImpl<Constant *> &Elts,
@@ -532,8 +538,7 @@ namespace llvm {
     template <class ParserTy> bool parseMDFieldsImplBody(ParserTy ParseField);
     template <class ParserTy>
     bool parseMDFieldsImpl(ParserTy ParseField, LocTy &ClosingLoc);
-    bool parseSpecializedMDNode(MDNode *&N, bool IsDistinct = false,
-                                LocTy DistinctLoc = LocTy());
+    bool parseSpecializedMDNode(MDNode *&N, bool IsDistinct = false);
 
 #define HANDLE_SPECIALIZED_MDNODE_LEAF(CLASS)                                  \
   bool parse##CLASS(MDNode *&Result, bool IsDistinct);

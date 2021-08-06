@@ -191,12 +191,23 @@ SmallVector<Value, 4> mlir::linalg::applyMapToValues(OpBuilder &b, Location loc,
   return res;
 }
 
+/// Helper function that creates a memref::DimOp or tensor::DimOp depending on
+/// the type of `source`.
+static Value createOrFoldDimOp(OpBuilder &b, Location loc, Value source,
+                               int64_t dim) {
+  if (source.getType().isa<UnrankedMemRefType, MemRefType>())
+    return b.createOrFold<memref::DimOp>(loc, source, dim);
+  if (source.getType().isa<UnrankedTensorType, RankedTensorType>())
+    return b.createOrFold<tensor::DimOp>(loc, source, dim);
+  llvm_unreachable("Expected MemRefType or TensorType");
+}
+
 SmallVector<Value, 4> LinalgOp::createFlatListOfOperandDims(OpBuilder &b,
                                                             Location loc) {
   SmallVector<Value, 4> res;
   for (OpOperand *opOperand : getInputAndOutputOperands()) {
     for (int64_t i = 0, e = getRank(opOperand); i < e; ++i)
-      res.push_back(b.createOrFold<memref::DimOp>(loc, opOperand->get(), i));
+      res.push_back(createOrFoldDimOp(b, loc, opOperand->get(), i));
   }
   return res;
 }
@@ -263,8 +274,9 @@ private:
   llvm::SmallSet<unsigned, 4> positions;
 };
 
-LogicalResult LinalgOp::reifyReturnTypeShapesPerResultDim(
-    OpBuilder &b, SmallVectorImpl<SmallVector<Value>> &reifiedReturnShapes) {
+LogicalResult
+LinalgOp::reifyResultShapes(OpBuilder &b,
+                            ReifiedRankedShapedTypeDims &reifiedReturnShapes) {
   // An example that helps understand the logic below.
   // Consider the following expression O(i+j, j) += A(i,k) * B(k, j)
   // We want to express the shape of dim 0 of O in terms of shape of the inputs.
@@ -305,8 +317,7 @@ LogicalResult LinalgOp::reifyReturnTypeShapesPerResultDim(
     SmallVector<Value> shapes;
     for (int64_t dim : llvm::seq<int64_t>(0, getRank(opOperand))) {
       if (checkDimExpr.visit(shapeExprs[pos]))
-        shapes.push_back(
-            b.createOrFold<memref::DimOp>(loc, opOperand->get(), dim));
+        shapes.push_back(createOrFoldDimOp(b, loc, opOperand->get(), dim));
       else
         shapes.push_back(allResultDimValues[pos]);
       pos++;
@@ -328,10 +339,12 @@ LogicalResult mlir::linalg::detail::verifyStructuredOpInterface(Operation *op) {
     return op->emitOpError("expected at least one output operand");
   if (failed(OpTrait::impl::verifyNOperands(op, numInputs + numOutputs)))
     return failure();
-  // Should have at least one output tensor per result tensor.
-  // Can also have outbut buffers that do not correspond to results.
-  if (op->getNumResults() > linalgOp.getOutputTensorOperands().size())
-    return op->emitOpError("unexpected #results > #outputs");
+  // Verify the number of results matches the number of output tensors.
+  if (op->getNumResults() != linalgOp.getOutputTensorOperands().size())
+    return op->emitOpError("expected the number of results (")
+           << op->getNumResults()
+           << ") to be equal to the number of output tensors ("
+           << linalgOp.getOutputTensorOperands().size() << ")";
 
   // Before checking indexing maps, we need to make sure the attributes
   // referenced by it are valid.
@@ -384,10 +397,6 @@ LogicalResult mlir::linalg::detail::verifyStructuredOpInterface(Operation *op) {
         "all have buffer type");
 
   for (OpOperand *opOperand : linalgOp.getOutputTensorOperands()) {
-    // TODO: Enforce one output tensor per result?
-    if (opOperand->getOperandNumber() - linalgOp.getNumInputs() >=
-        linalgOp->getNumResults())
-      continue;
     OpResult result = linalgOp.getTiedOpResult(opOperand);
     if (result.getType() != opOperand->get().getType())
       return op->emitOpError("expected type of operand #")

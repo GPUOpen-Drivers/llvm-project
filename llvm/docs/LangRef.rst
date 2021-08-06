@@ -601,11 +601,29 @@ Non-integral pointer types represent pointers that have an *unspecified* bitwise
 representation; that is, the integral representation may be target dependent or
 unstable (not backed by a fixed integer).
 
-``inttoptr`` and ``ptrtoint`` instructions converting integers to non-integral
-pointer types or vice versa are implementation defined, and subject to likely
-future revision in semantics. Vector versions of said instructions are as well.
-Users of non-integral-pointer types are advised not to design around current
-semantics as they may very well change in the nearish future.
+``inttoptr`` and ``ptrtoint`` instructions have the same semantics as for
+integral (i.e. normal) pointers in that they convert integers to and from
+corresponding pointer types, but there are additional implications to be
+aware of.  Because the bit-representation of a non-integral pointer may
+not be stable, two identical casts of the same operand may or may not
+return the same value.  Said differently, the conversion to or from the
+non-integral type depends on environmental state in an implementation
+defined manner.
+
+If the frontend wishes to observe a *particular* value following a cast, the
+generated IR must fence with the underlying environment in an implementation
+defined manner. (In practice, this tends to require ``noinline`` routines for
+such operations.)
+
+From the perspective of the optimizer, ``inttoptr`` and ``ptrtoint`` for
+non-integral types are analogous to ones on integral types with one
+key exception: the optimizer may not, in general, insert new dynamic
+occurrences of such casts.  If a new cast is inserted, the optimizer would
+need to either ensure that a) all possible values are valid, or b)
+appropriate fencing is inserted.  Since the appropriate fencing is
+implementation defined, the optimizer can't do the latter.  The former is
+challenging as many commonly expected properties, such as
+``ptrtoint(v)-ptrtoint(v) == 0``, don't hold for non-integral types.  
 
 .. _globalvars:
 
@@ -1164,6 +1182,24 @@ Currently, only the following parameter attributes are defined:
 
     The sret type argument specifies the in memory type, which must be
     the same as the pointee type of the argument.
+
+.. _attr_elementtype:
+
+``elementtype(<ty>)``
+
+    The ``elementtype`` argument attribute can be used to specify a pointer
+    element type in a way that is compatible with `opaque pointers
+    <OpaquePointers.html>`.
+
+    The ``elementtype`` attribute by itself does not carry any specific
+    semantics. However, certain intrinsics may require this attribute to be
+    present and assign it particular semantics. This will be documented on
+    individual intrinsics.
+
+    The attribute may only be applied to pointer typed arguments of intrinsic
+    calls. It cannot be applied to non-intrinsic calls, and cannot be applied
+    to parameters on function declarations. For non-opaque pointers, the type
+    passed to ``elementtype`` must match the pointer element type.
 
 .. _attr_align:
 
@@ -4078,7 +4114,11 @@ Addresses of Basic Blocks
 ``blockaddress(@function, %block)``
 
 The '``blockaddress``' constant computes the address of the specified
-basic block in the specified function, and always has an ``i8*`` type.
+basic block in the specified function.
+
+It always has an ``i8 addrspace(P)*`` type, where ``P`` is the address space
+of the function containing ``%block`` (usually ``addrspace(0)``).
+
 Taking the address of the entry block is illegal.
 
 This value only has defined behavior when used as an operand to the
@@ -4995,8 +5035,8 @@ occurs on.
 Metadata
 ========
 
-LLVM IR allows metadata to be attached to instructions in the program
-that can convey extra information about the code to the optimizers and
+LLVM IR allows metadata to be attached to instructions and global objects in the
+program that can convey extra information about the code to the optimizers and
 code generator. One example application of metadata is source-level
 debug information. There are two metadata primitives: strings and nodes.
 
@@ -5056,6 +5096,9 @@ to the ``add`` instruction using the ``!dbg`` identifier:
 
     %indvar.next = add i64 %indvar, 1, !dbg !21
 
+Instructions may not have multiple metadata attachments with the same
+identifier.
+
 Metadata can also be attached to a function or a global variable. Here metadata
 ``!22`` is attached to the ``f1`` and ``f2`` functions, and the globals ``g1``
 and ``g2`` using the ``!dbg`` identifier:
@@ -5069,6 +5112,9 @@ and ``g2`` using the ``!dbg`` identifier:
 
     @g1 = global i32 0, !dbg !22
     @g2 = external global i32, !dbg !22
+
+Unlike instructions, global objects (functions and global variables) may have
+multiple metadata attachments with the same identifier.
 
 A transformation is required to drop any metadata attachment that it does not
 know or know it can't preserve. Currently there is an exception for metadata
@@ -5098,22 +5144,21 @@ metadata nodes are related to debug info.
 DICompileUnit
 """""""""""""
 
-``DICompileUnit`` nodes represent a compile unit. ``DICompileUnit`` nodes must
-be ``distinct``. The ``enums:``, ``retainedTypes:``, ``globals:``, ``imports:``
-and ``macros:`` fields are tuples containing the debug info to be emitted along
-with the compile unit, regardless of code optimizations (some nodes are only
-emitted if there are references to them from instructions). The
-``debugInfoForProfiling:`` field is a boolean indicating whether or not
-line-table discriminators are updated to provide more-accurate debug info for
-profiling results.
+``DICompileUnit`` nodes represent a compile unit. The ``enums:``,
+``retainedTypes:``, ``globals:``, ``imports:`` and ``macros:`` fields are tuples
+containing the debug info to be emitted along with the compile unit, regardless
+of code optimizations (some nodes are only emitted if there are references to
+them from instructions). The ``debugInfoForProfiling:`` field is a boolean
+indicating whether or not line-table discriminators are updated to provide
+more-accurate debug info for profiling results.
 
 .. code-block:: text
 
-    !0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "clang",
-                                 isOptimized: true, flags: "-O2", runtimeVersion: 2,
-                                 splitDebugFilename: "abc.debug", emissionKind: FullDebug,
-                                 enums: !2, retainedTypes: !3, globals: !4, imports: !5,
-                                 macros: !6, dwoId: 0x0abcd)
+    !0 = !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "clang",
+                        isOptimized: true, flags: "-O2", runtimeVersion: 2,
+                        splitDebugFilename: "abc.debug", emissionKind: FullDebug,
+                        enums: !2, retainedTypes: !3, globals: !4, imports: !5,
+                        macros: !6, dwoId: 0x0abcd)
 
 Compile unit descriptors provide the root scope for objects declared in a
 specific compilation unit. File descriptors are defined using this scope.  These
@@ -5524,14 +5569,12 @@ DIExpression
 """"""""""""
 
 ``DIExpression`` nodes represent expressions that are inspired by the DWARF
-expression language. ``DIExpression`` nodes must not be ``distinct``, and are
-canonically printed inline at each use. They are used in :ref:`debug
-intrinsics<dbg_intrinsics>` (such as ``llvm.dbg.declare`` and
-``llvm.dbg.value``) to describe how the referenced LLVM variable relates to the
-source language variable. Debug intrinsics are interpreted left-to-right: start
-by pushing the value/address operand of the intrinsic onto a stack, then
-repeatedly push and evaluate opcodes from the DIExpression until the final
-variable description is produced.
+expression language. They are used in :ref:`debug intrinsics<dbg_intrinsics>`
+(such as ``llvm.dbg.declare`` and ``llvm.dbg.value``) to describe how the
+referenced LLVM variable relates to the source language variable. Debug
+intrinsics are interpreted left-to-right: start by pushing the value/address
+operand of the intrinsic onto a stack, then repeatedly push and evaluate
+opcodes from the DIExpression until the final variable description is produced.
 
 The current supported opcode vocabulary is limited:
 
@@ -5609,23 +5652,23 @@ The current supported opcode vocabulary is limited:
 
     IR for "*ptr = 4;"
     --------------
-    call void @llvm.dbg.value(metadata i32 4, metadata !17,
-                              metadata !DIExpression(DW_OP_LLVM_implicit_pointer)))
+    call void @llvm.dbg.value(metadata i32 4, metadata !17, metadata !20)
     !17 = !DILocalVariable(name: "ptr1", scope: !12, file: !3, line: 5,
                            type: !18)
     !18 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !19, size: 64)
     !19 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+    !20 = !DIExpression(DW_OP_LLVM_implicit_pointer))
 
     IR for "**ptr = 4;"
     --------------
-    call void @llvm.dbg.value(metadata i32 4, metadata !17,
-                              metadata !DIExpression(DW_OP_LLVM_implicit_pointer,
-                                                     DW_OP_LLVM_implicit_pointer)))
+    call void @llvm.dbg.value(metadata i32 4, metadata !17, metadata !21)
     !17 = !DILocalVariable(name: "ptr1", scope: !12, file: !3, line: 5,
                            type: !18)
     !18 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !19, size: 64)
     !19 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !20, size: 64)
     !20 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
+    !21 = !DIExpression(DW_OP_LLVM_implicit_pointer,
+                        DW_OP_LLVM_implicit_pointer))
 
 DWARF specifies three kinds of simple location descriptions: Register, memory,
 and implicit location descriptions.  Note that a location description is
@@ -5666,13 +5709,12 @@ valid debug intrinsic.
 DIArgList
 """"""""""""
 
-``DIArgList`` nodes hold a list of constant or SSA value references.
-``DIArgList`` must not be ``distinct``, must only be used as an argument to a
-function call, and must appear inline at each use. ``DIArgList`` may refer to
-function-local values of the containing function. ``DIArgList`` nodes are used
-in :ref:`debug intrinsics<dbg_intrinsics>` (currently only in
+``DIArgList`` nodes hold a list of constant or SSA value references. These are
+used in :ref:`debug intrinsics<dbg_intrinsics>` (currently only in
 ``llvm.dbg.value``) in combination with a ``DIExpression`` that uses the
-``DW_OP_LLVM_arg`` operator.
+``DW_OP_LLVM_arg`` operator. Because a DIArgList may refer to local values
+within a function, it must only be used as a function argument, must always be
+inlined, and cannot appear in named metadata.
 
 .. code-block:: text
 
@@ -6838,17 +6880,29 @@ See :doc:`TypeMetadata`.
 '``associated``' Metadata
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The ``associated`` metadata may be attached to a global object
-declaration with a single argument that references another global object.
+The ``associated`` metadata may be attached to a global variable definition with
+a single argument that references a global object (optionally through an alias).
 
-This metadata prevents discarding of the global object in linker GC
-unless the referenced object is also discarded. The linker support for
-this feature is spotty. For best compatibility, globals carrying this
-metadata may also:
+This metadata lowers to the ELF section flag ``SHF_LINK_ORDER`` which prevents
+discarding of the global variable in linker GC unless the referenced object is
+also discarded. The linker support for this feature is spotty. For best
+compatibility, globals carrying this metadata should:
 
-- Be in a comdat with the referenced global.
-- Be in @llvm.compiler.used.
-- Have an explicit section with a name which is a valid C identifier.
+- Be in ``@llvm.compiler.used``.
+- If the referenced global variable is in a comdat, be in the same comdat.
+
+``!associated`` can not express many-to-one relationship. A global variable with
+the metadata should generally not be referenced by a function: the function may
+be inlined into other functions, leading to more references to the metadata.
+Ideally we would want to keep metadata alive as long as any inline location is
+alive, but this many-to-one relationship is not representable. Moreover, if the
+metadata is retained while the function is discarded, the linker will report an
+error of a relocation referencing a discarded section.
+
+The metadata is often used with an explicit section consisting of valid C
+identifiers so that the runtime can find the metadata section with
+linker-defined encapsulation symbols ``__start_<section_name>`` and
+``__stop_<section_name>``.
 
 It does not have any effect on non-ELF targets.
 
@@ -22507,6 +22561,10 @@ The ``base`` is the array base address.  The ``dim`` is the array dimension.
 The ``base`` is a pointer if ``dim`` equals 0.
 The ``index`` is the last access index into the array or pointer.
 
+The ``base`` argument must be annotated with an :ref:`elementtype
+<attr_elementtype>` attribute at the call-site. This attribute specifies the
+getelementptr element type.
+
 Semantics:
 """"""""""
 
@@ -22571,6 +22629,10 @@ Arguments:
 
 The ``base`` is the structure base address. The ``gep_index`` is the struct member index
 based on IR structures. The ``di_index`` is the struct member index based on debuginfo.
+
+The ``base`` argument must be annotated with an :ref:`elementtype
+<attr_elementtype>` attribute at the call-site. This attribute specifies the
+getelementptr element type.
 
 Semantics:
 """"""""""

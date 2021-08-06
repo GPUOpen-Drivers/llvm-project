@@ -1558,6 +1558,12 @@ def fno_sanitize_memory_track_origins : Flag<["-"], "fno-sanitize-memory-track-o
                                         Group<f_clang_Group>,
                                         Flags<[CoreOption, NoXarchOption]>,
                                         HelpText<"Disable origins tracking in MemorySanitizer">;
+def fsanitize_address_outline_instrumentation : Flag<["-"], "fsanitize-address-outline-instrumentation">,
+                                                Group<f_clang_Group>,
+                                                HelpText<"Always generate function calls for address sanitizer instrumentation">;
+def fno_sanitize_address_outline_instrumentation : Flag<["-"], "fno-sanitize-address-outline-instrumentation">,
+                                                   Group<f_clang_Group>,
+                                                   HelpText<"Use default code inlining logic for the address sanitizer">;
 def fsanitize_hwaddress_experimental_aliasing
   : Flag<["-"], "fsanitize-hwaddress-experimental-aliasing">,
     Group<f_clang_Group>,
@@ -1584,7 +1590,7 @@ def sanitize_address_use_after_return_EQ
   : Joined<["-"], "fsanitize-address-use-after-return=">,
     MetaVarName<"<mode>">,
     Flags<[CC1Option]>,
-    HelpText<"Select the mode of detecting stack use-after-return in AddressSanitizer">,
+    HelpText<"Select the mode of detecting stack use-after-return in AddressSanitizer: never | runtime (default) | always">,
     Group<f_clang_Group>,
     Values<"never,runtime,always">,
     NormalizedValuesScope<"llvm::AsanDetectStackUseAfterReturnMode">,
@@ -5405,13 +5411,16 @@ def stats_file : Joined<["-"], "stats-file=">,
 def fdump_record_layouts_simple : Flag<["-"], "fdump-record-layouts-simple">,
   HelpText<"Dump record layout information in a simple form used for testing">,
   MarshallingInfoFlag<LangOpts<"DumpRecordLayoutsSimple">>;
+def fdump_record_layouts_canonical : Flag<["-"], "fdump-record-layouts-canonical">,
+  HelpText<"Dump record layout information with canonical field types">,
+  MarshallingInfoFlag<LangOpts<"DumpRecordLayoutsCanonical">>;
 def fdump_record_layouts_complete : Flag<["-"], "fdump-record-layouts-complete">,
   HelpText<"Dump record layout information for all complete types">,
   MarshallingInfoFlag<LangOpts<"DumpRecordLayoutsComplete">>;
 def fdump_record_layouts : Flag<["-"], "fdump-record-layouts">,
   HelpText<"Dump record layout information">,
   MarshallingInfoFlag<LangOpts<"DumpRecordLayouts">>,
-  ImpliedByAnyOf<[fdump_record_layouts_simple.KeyPath, fdump_record_layouts_complete.KeyPath]>;
+  ImpliedByAnyOf<[fdump_record_layouts_simple.KeyPath, fdump_record_layouts_complete.KeyPath, fdump_record_layouts_canonical.KeyPath]>;
 def fix_what_you_can : Flag<["-"], "fix-what-you-can">,
   HelpText<"Apply fix-it advice even in the presence of unfixable errors">,
   MarshallingInfoFlag<FrontendOpts<"FixWhatYouCan">>;

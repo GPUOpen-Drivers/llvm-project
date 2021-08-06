@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN:  llc -amdgpu-scalarize-global-loads=false  -march=amdgcn -mcpu=tahiti -fp-contract=on -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GCN-STRICT,SI %s
 ; RUN:  llc -amdgpu-scalarize-global-loads=false  -march=amdgcn -mcpu=verde  -fp-contract=on -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GCN-STRICT,SI %s
 ; RUN:  llc -amdgpu-scalarize-global-loads=false  -march=amdgcn -mcpu=tahiti -fp-contract=fast -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GCN-CONTRACT,SI %s
@@ -43,7 +41,7 @@ define amdgpu_kernel void @fmul_fadd_contract_f64(double addrspace(1)* %out, dou
   %r0 = load double, double addrspace(1)* %in1
   %r1 = load double, double addrspace(1)* %in2
   %r2 = load double, double addrspace(1)* %in3
-  %tmp = fmul double %r0, %r1
+  %tmp = fmul contract double %r0, %r1
   %r3 = fadd contract double %tmp, %r2
   store double %r3, double addrspace(1)* %out
   ret void
