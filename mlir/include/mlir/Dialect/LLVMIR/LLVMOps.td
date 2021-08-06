@@ -331,7 +331,7 @@ def LLVM_LoadOp : LLVM_Op<"load">, MemoryOpWithAlignmentAndAttributes {
                    OptionalAttr<SymbolRefArrayAttr>:$access_groups,
                    OptionalAttr<I64Attr>:$alignment, UnitAttr:$volatile_,
                    UnitAttr:$nontemporal);
-  let results = (outs LLVM_Type:$res);
+  let results = (outs LLVM_LoadableType:$res);
   string llvmBuilder = [{
     auto *inst = builder.CreateLoad(
       $addr->getType()->getPointerElementType(), $addr, $volatile_);
@@ -1221,25 +1221,6 @@ def LLVM_ConstantOp
   let verifier = [{ return ::verify(*this); }];
 }
 
-def LLVM_DialectCastOp : LLVM_Op<"mlir.cast", [NoSideEffect]> {
-  let summary = "Type cast between LLVM dialect and Standard.";
-  let description = [{
-    llvm.mlir.cast op casts between Standard and LLVM dialects. It only changes
-    the dialect, but does not change compile-time or runtime semantics.
-
-    Notice that index type is not supported, as it's Standard-specific.
-
-    Example:
-      llvm.mlir.cast %v : f16 to llvm.half
-      llvm.mlir.cast %v : llvm.float to f32
-      llvm.mlir.cast %v : !llvm."<2 x f32>"> to vector<2xf32>
-  }];
-  let arguments = (ins AnyType:$in);
-  let results = (outs AnyType:$res);
-  let assemblyFormat = "$in attr-dict `:` type($in) `to` type($res)";
-  let verifier = "return ::verify(*this);";
-}
-
 // Operations that correspond to LLVM intrinsics. With MLIR operation set being
 // extendable, there is no reason to introduce a hard boundary between "core"
 // operations and intrinsics. However, we systematically prefix them with
@@ -1516,10 +1497,11 @@ def LLVM_MaskedLoadOp : LLVM_Op<"intr.masked.load"> {
   let results = (outs LLVM_Type:$res);
   let builders = [LLVM_OneResultOpBuilder];
   string llvmBuilder = [{
+    llvm::Type *Ty = $data->getType()->getPointerElementType();
     $res = $pass_thru.empty() ? builder.CreateMaskedLoad(
-      $data, llvm::Align($alignment), $mask) :
+      Ty, $data, llvm::Align($alignment), $mask) :
       builder.CreateMaskedLoad(
-        $data, llvm::Align($alignment), $mask, $pass_thru[0]);
+        Ty, $data, llvm::Align($alignment), $mask, $pass_thru[0]);
   }];
   let assemblyFormat =
     "operands attr-dict `:` functional-type(operands, results)";
@@ -1545,10 +1527,14 @@ def LLVM_masked_gather : LLVM_Op<"intr.masked.gather"> {
   let results = (outs LLVM_Type:$res);
   let builders = [LLVM_OneResultOpBuilder];
   string llvmBuilder = [{
+    llvm::VectorType *PtrVecTy = cast<llvm::VectorType>($ptrs->getType());
+    llvm::Type *Ty = llvm::VectorType::get(
+      PtrVecTy->getElementType()->getPointerElementType(),
+      PtrVecTy->getElementCount());
     $res = $pass_thru.empty() ? builder.CreateMaskedGather(
-      $ptrs, llvm::Align($alignment), $mask) :
+      Ty, $ptrs, llvm::Align($alignment), $mask) :
       builder.CreateMaskedGather(
-        $ptrs, llvm::Align($alignment), $mask, $pass_thru[0]);
+        Ty, $ptrs, llvm::Align($alignment), $mask, $pass_thru[0]);
   }];
   let assemblyFormat =
     "operands attr-dict `:` functional-type(operands, results)";

@@ -966,7 +966,7 @@ static bool isAddrSpaceMapManglingEnabled(const TargetInfo &TI,
 
 ASTContext::ASTContext(LangOptions &LOpts, SourceManager &SM,
                        IdentifierTable &idents, SelectorTable &sels,
-                       Builtin::Context &builtins)
+                       Builtin::Context &builtins, TranslationUnitKind TUKind)
     : ConstantArrayTypes(this_()), FunctionProtoTypes(this_()),
       TemplateSpecializationTypes(this_()),
       DependentTemplateSpecializationTypes(this_()), AutoTypes(this_()),
@@ -978,11 +978,10 @@ ASTContext::ASTContext(LangOptions &LOpts, SourceManager &SM,
                                         LangOpts.XRayAttrListFiles, SM)),
       ProfList(new ProfileList(LangOpts.ProfileListFiles, SM)),
       PrintingPolicy(LOpts), Idents(idents), Selectors(sels),
-      BuiltinInfo(builtins), DeclarationNames(*this), Comments(SM),
-      CommentCommandTraits(BumpAlloc, LOpts.CommentOpts),
+      BuiltinInfo(builtins), TUKind(TUKind), DeclarationNames(*this),
+      Comments(SM), CommentCommandTraits(BumpAlloc, LOpts.CommentOpts),
       CompCategories(this_()), LastSDM(nullptr, 0) {
-  TUDecl = TranslationUnitDecl::Create(*this);
-  TraversalScope = {TUDecl};
+  addTranslationUnitDecl();
 }
 
 ASTContext::~ASTContext() {
@@ -1196,9 +1195,10 @@ ExternCContextDecl *ASTContext::getExternCContextDecl() const {
 BuiltinTemplateDecl *
 ASTContext::buildBuiltinTemplateDecl(BuiltinTemplateKind BTK,
                                      const IdentifierInfo *II) const {
-  auto *BuiltinTemplate = BuiltinTemplateDecl::Create(*this, TUDecl, II, BTK);
+  auto *BuiltinTemplate =
+      BuiltinTemplateDecl::Create(*this, getTranslationUnitDecl(), II, BTK);
   BuiltinTemplate->setImplicit();
-  TUDecl->addDecl(BuiltinTemplate);
+  getTranslationUnitDecl()->addDecl(BuiltinTemplate);
 
   return BuiltinTemplate;
 }
@@ -1485,7 +1485,7 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target,
   // MSVC predeclares struct _GUID, and we need it to create MSGuidDecls.
   if (LangOpts.MicrosoftExt || LangOpts.Borland) {
     MSGuidTagDecl = buildImplicitRecord("_GUID");
-    TUDecl->addDecl(MSGuidTagDecl);
+    getTranslationUnitDecl()->addDecl(MSGuidTagDecl);
   }
 }
 
@@ -3869,7 +3869,7 @@ ASTContext::getBuiltinVectorTypeInfo(const BuiltinType *Ty) const {
             llvm::ElementCount::getScalable(NumEls), NF};
 #define RVV_VECTOR_TYPE_FLOAT(Name, Id, SingletonId, NumEls, ElBits, NF)       \
   case BuiltinType::Id:                                                        \
-    return {ElBits == 16 ? HalfTy : (ElBits == 32 ? FloatTy : DoubleTy),       \
+    return {ElBits == 16 ? Float16Ty : (ElBits == 32 ? FloatTy : DoubleTy),    \
             llvm::ElementCount::getScalable(NumEls), NF};
 #define RVV_PREDICATE_TYPE(Name, Id, SingletonId, NumEls)                      \
   case BuiltinType::Id:                                                        \
@@ -6622,7 +6622,7 @@ QualType ASTContext::getCFConstantStringType() const {
 QualType ASTContext::getObjCSuperType() const {
   if (ObjCSuperType.isNull()) {
     RecordDecl *ObjCSuperTypeDecl = buildImplicitRecord("objc_super");
-    TUDecl->addDecl(ObjCSuperTypeDecl);
+    getTranslationUnitDecl()->addDecl(ObjCSuperTypeDecl);
     ObjCSuperType = getTagDeclType(ObjCSuperTypeDecl);
   }
   return ObjCSuperType;
@@ -10370,6 +10370,11 @@ static QualType DecodeTypeFromStr(const char *&Str, const ASTContext &Context,
   // Read the base type.
   switch (*Str++) {
   default: llvm_unreachable("Unknown builtin type letter!");
+  case 'x':
+    assert(HowLong == 0 && !Signed && !Unsigned &&
+           "Bad modifiers used with 'x'!");
+    Type = Context.Float16Ty;
+    break;
   case 'y':
     assert(HowLong == 0 && !Signed && !Unsigned &&
            "Bad modifiers used with 'y'!");

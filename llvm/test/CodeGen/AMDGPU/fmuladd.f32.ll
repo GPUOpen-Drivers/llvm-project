@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -amdgpu-scalarize-global-loads=false -verify-machineinstrs -mcpu=tahiti -denormal-fp-math-f32=preserve-sign -mattr=+fast-fmaf -fp-contract=on < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GCN-FLUSH,GCN-FLUSH-MAD,SI %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -verify-machineinstrs -mcpu=tahiti -denormal-fp-math-f32=ieee -mattr=+fast-fmaf -fp-contract=on < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GCN-DENORM-STRICT,SI-DENORM,GCN-DENORM-FASTFMA,SI %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -verify-machineinstrs -mcpu=verde -denormal-fp-math-f32=preserve-sign -mattr=-fast-fmaf -fp-contract=on < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GCN-FLUSH,GCN-FLUSH-MAD,SI-FLUSH,SI %s
@@ -83,7 +81,7 @@ define amdgpu_kernel void @fmul_fadd_contract_f32(float addrspace(1)* %out, floa
   %r0 = load volatile float, float addrspace(1)* %in1
   %r1 = load volatile float, float addrspace(1)* %in2
   %r2 = load volatile float, float addrspace(1)* %in3
-  %mul = fmul float %r0, %r1
+  %mul = fmul contract float %r0, %r1
   %add = fadd contract float %mul, %r2
   store float %add, float addrspace(1)* %out
   ret void

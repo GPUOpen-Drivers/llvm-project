@@ -5928,6 +5928,7 @@ Sema::ConvertArgumentsForCall(CallExpr *Call, Expr *Fn,
   for (unsigned i = 0; i < TotalNumArgs; ++i)
     Call->setArg(i, AllArgs[i]);
 
+  Call->computeDependence();
   return false;
 }
 
@@ -6863,6 +6864,7 @@ ExprResult Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
 
       TheCall->setArg(i, Arg);
     }
+    TheCall->computeDependence();
   }
 
   if (CXXMethodDecl *Method = dyn_cast_or_null<CXXMethodDecl>(FDecl))
@@ -7705,7 +7707,7 @@ ExprResult Sema::BuildVectorLiteral(SourceLocation LParenLoc,
   // initializers must be one or must match the size of the vector.
   // If a single value is specified in the initializer then it will be
   // replicated to all the components of the vector
-  if (VTy->getVectorKind() == VectorType::AltiVecVector) {
+  if (ShouldSplatAltivecScalarInCast(VTy)) {
     // The number of initializers must be one or must match the size of the
     // vector. If a single value is specified in the initializer then it will
     // be replicated to all the components of the vector

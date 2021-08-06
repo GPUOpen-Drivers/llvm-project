@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -march=amdgcn -mcpu=gfx900 -denormal-fp-math-f32=preserve-sign -verify-machineinstrs < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GFX89,GFX9,GFX9-F32FLUSH %s
 ; RUN: llc -march=amdgcn -mcpu=gfx900 -denormal-fp-math-f32=ieee -verify-machineinstrs < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GFX89,GFX9,GFX9-F32DENORM %s
 ; RUN: llc -march=amdgcn -mcpu=gfx803 -denormal-fp-math-f32=preserve-sign -verify-machineinstrs < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GFX89 %s
@@ -311,10 +309,10 @@ entry:
 ; GFX9-F32DENORM-NEXT: s_setpc_b64
 define float @fsub_muladd_fpext_mul_f16_to_f32(float %x, float %y, float %z, half %u, half %v) #0 {
 entry:
-  %mul = fmul half %u, %v
+  %mul = fmul reassoc half %u, %v
   %mul.ext = fpext half %mul to float
   %fma = call float @llvm.fmuladd.f32(float %x, float %y, float %mul.ext)
-  %add = fsub float %fma, %z
+  %add = fsub reassoc float %fma, %z
   ret float %add
 }
 
@@ -352,10 +350,10 @@ entry:
 ; GFX9-F32DENORM-NEXT: s_setpc_b64
 define float @fsub_muladd_fpext_mul_f16_to_f32_commute(float %x, float %y, float %z, half %u, half %v) #0 {
 entry:
-  %mul = fmul half %u, %v
+  %mul = fmul reassoc half %u, %v
   %mul.ext = fpext half %mul to float
   %fma = call float @llvm.fmuladd.f32(float %y, float %z, float %mul.ext)
-  %add = fsub float %x, %fma
+  %add = fsub reassoc float %x, %fma
   ret float %add
 }
 

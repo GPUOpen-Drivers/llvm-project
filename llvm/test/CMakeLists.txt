@@ -77,7 +77,6 @@ set(LLVM_TEST_DEPENDS
           dsymutil
           llvm-dwarfdump
           llvm-dwp
-          llvm-elfabi
           llvm-exegesis
           llvm-extract
           llvm-gsymutil
@@ -162,6 +161,12 @@ if(LLVM_BUILD_EXAMPLES)
     Kaleidoscope-Ch6
     Kaleidoscope-Ch7
     LLJITWithThinLTOSummaries
+    OrcV2CBindingsBasicUsage
+    OrcV2CBindingsAddObjectFile
+    OrcV2CBindingsRemovableCode
+    OrcV2CBindingsReflectProcessSymbols
+    OrcV2CBindingsLazy
+    OrcV2CBindingsVeryLazy
     )
   if(CMAKE_HOST_UNIX)
     list(APPEND LLVM_TEST_DEPENDS

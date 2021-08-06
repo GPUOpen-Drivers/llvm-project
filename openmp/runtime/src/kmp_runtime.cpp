@@ -47,8 +47,6 @@ static char *ProfileTraceFile = nullptr;
 #include <process.h>
 #endif
 
-#include "tsan_annotations.h"
-
 #if KMP_OS_WINDOWS
 // windows does not need include files as it doesn't use shared memory
 #else
@@ -5959,7 +5957,6 @@ static void __kmp_reap_thread(kmp_info_t *thread, int is_root) {
                gtid));
       /* Need release fence here to prevent seg faults for tree forkjoin barrier
        * (GEH) */
-      ANNOTATE_HAPPENS_BEFORE(thread);
       kmp_flag_64<> flag(&thread->th.th_bar[bs_forkjoin_barrier].bb.b_go,
                          thread);
       __kmp_release_64(&flag);
@@ -6204,6 +6201,16 @@ void __kmp_internal_end_library(int gtid_req) {
     return;
   }
 
+  // If hidden helper team has been initialized, we need to deinit it
+  if (TCR_4(__kmp_init_hidden_helper) &&
+      !TCR_4(__kmp_hidden_helper_team_done)) {
+    TCW_SYNC_4(__kmp_hidden_helper_team_done, TRUE);
+    // First release the main thread to let it continue its work
+    __kmp_hidden_helper_main_thread_release();
+    // Wait until the hidden helper team has been destroyed
+    __kmp_hidden_helper_threads_deinitz_wait();
+  }
+
   KMP_MB(); /* Flush all pending memory write invalidates.  */
   /* find out who we are and what we should do */
   {
@@ -6317,7 +6324,8 @@ void __kmp_internal_end_thread(int gtid_req) {
   }
 
   // If hidden helper team has been initialized, we need to deinit it
-  if (TCR_4(__kmp_init_hidden_helper)) {
+  if (TCR_4(__kmp_init_hidden_helper) &&
+      !TCR_4(__kmp_hidden_helper_team_done)) {
     TCW_SYNC_4(__kmp_hidden_helper_team_done, TRUE);
     // First release the main thread to let it continue its work
     __kmp_hidden_helper_main_thread_release();
@@ -6544,7 +6552,7 @@ void __kmp_register_library_startup(void) {
       __kmp_str_split(tail, '-', &flag_val_str, &tail);
       file_name = tail;
       if (tail != NULL) {
-        long *flag_addr = 0;
+        unsigned long *flag_addr = 0;
         unsigned long flag_val = 0;
         KMP_SSCANF(flag_addr_str, "%p", RCAST(void **, &flag_addr));
         KMP_SSCANF(flag_val_str, "%lx", &flag_val);
@@ -8697,11 +8705,12 @@ void __kmp_omp_display_env(int verbose) {
 // Globals and functions for hidden helper task
 kmp_info_t **__kmp_hidden_helper_threads;
 kmp_info_t *__kmp_hidden_helper_main_thread;
-kmp_int32 __kmp_hidden_helper_threads_num = 8;
 std::atomic<kmp_int32> __kmp_unexecuted_hidden_helper_tasks;
 #if KMP_OS_LINUX
+kmp_int32 __kmp_hidden_helper_threads_num = 8;
 kmp_int32 __kmp_enable_hidden_helper = TRUE;
 #else
+kmp_int32 __kmp_hidden_helper_threads_num = 0;
 kmp_int32 __kmp_enable_hidden_helper = FALSE;
 #endif
 

@@ -13,10 +13,10 @@
 #include "mlir/Conversion/TosaToLinalg/TosaToLinalg.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -1121,8 +1121,7 @@ public:
         (operandTy.getRank() > resultTy.getRank() ? resultTy.getShape()
                                                   : operandTy.getShape());
     unsigned currSrcDim = 0, currDstDim = 0;
-    SmallVector<linalg::ReassociationExprs, 4> reassociationMap(
-        collapsedShape.size());
+    SmallVector<ReassociationExprs, 4> reassociationMap(collapsedShape.size());
 
     // First scan all dimensions in the source shapes to see whether we have a
     // perfect case where consecutive dimensions in source are collapsed. For
@@ -1177,11 +1176,11 @@ public:
           std::accumulate(expandedShape.begin(), expandedShape.end(), 1,
                           std::multiplies<int64_t>());
       auto elemTy = operandTy.getElementType();
-      SmallVector<linalg::ReassociationExprs, 4> collapsingMap = {
+      SmallVector<ReassociationExprs, 4> collapsingMap = {
           // Use operandTy here because we need to collapse all operands
           // dimensions.
           getIdentityExprs(operandTy.getShape().size())};
-      SmallVector<linalg::ReassociationExprs, 4> expandingMap = {
+      SmallVector<ReassociationExprs, 4> expandingMap = {
           // Use resultTy here because we need to expand to all result
           // dimensions.
           getIdentityExprs(resultTy.getShape().size())};
@@ -1720,12 +1719,12 @@ struct ConcatConverter : public OpConversionPattern<tosa::ConcatOp> {
     offsets.resize(rank, rewriter.create<ConstantIndexOp>(loc, 0));
 
     for (int i = 0; i < rank; ++i) {
-      sizes.push_back(rewriter.create<memref::DimOp>(loc, args[0], i));
+      sizes.push_back(rewriter.create<tensor::DimOp>(loc, args[0], i));
     }
 
     Value resultDimSize = sizes[axis];
     for (auto arg : args.drop_front()) {
-      auto size = rewriter.create<memref::DimOp>(loc, arg, axisValue);
+      auto size = rewriter.create<tensor::DimOp>(loc, arg, axisValue);
       resultDimSize = rewriter.create<AddIOp>(loc, resultDimSize, size);
     }
     sizes[axis] = resultDimSize;
@@ -1739,7 +1738,7 @@ struct ConcatConverter : public OpConversionPattern<tosa::ConcatOp> {
         rewriter.create<linalg::FillOp>(loc, zeroVal, init).getResult(0);
 
     for (auto arg : args) {
-      sizes[axis] = rewriter.create<memref::DimOp>(loc, arg, axisValue);
+      sizes[axis] = rewriter.create<tensor::DimOp>(loc, arg, axisValue);
       result = rewriter.create<tensor::InsertSliceOp>(loc, arg, result, offsets,
                                                       sizes, strides);
       offsets[axis] = rewriter.create<AddIOp>(loc, offsets[axis], sizes[axis]);
@@ -2292,48 +2291,20 @@ public:
     Value fakeWindowDims =
         rewriter.create<linalg::InitTensorOp>(loc, kernel, outElementTy);
 
-    auto createOp = [&](auto *typePtr) -> linalg::LinalgOp {
-      return cast<linalg::LinalgOp>(
-          rewriter
-              .create<std::remove_pointer_t<decltype(typePtr)>>(
-                  loc, ArrayRef<Type>{resultTy},
-                  ValueRange{paddedInput, fakeWindowDims}, filledInitTensor,
-                  dilationAttr, strideAttr)
-              .getOperation());
-    };
-
-    if (isa<tosa::MaxPool2dOp>(op) && inElementTy.isF32()) {
-      linalg::LinalgOp poolingOp =
-          createOp(static_cast<linalg::PoolingNHWCMaxFOp *>(nullptr));
-      rewriter.replaceOp(op, poolingOp->getResult(0));
-      return success();
-    }
-
-    if (isa<tosa::MaxPool2dOp>(op) && inElementTy.isInteger(8)) {
-      linalg::LinalgOp poolingOp =
-          createOp(static_cast<linalg::PoolingNHWCMaxI8Op *>(nullptr));
-      rewriter.replaceOp(op, poolingOp->getResult(0));
-      return success();
-    }
-
-    if (isa<tosa::MaxPool2dOp>(op) && inElementTy.isInteger(16)) {
-      linalg::LinalgOp poolingOp =
-          createOp(static_cast<linalg::PoolingNHWCMaxI16Op *>(nullptr));
-      rewriter.replaceOp(op, poolingOp->getResult(0));
-      return success();
-    }
-
-    if (isa<tosa::MaxPool2dOp>(op) && inElementTy.isInteger(32)) {
-      linalg::LinalgOp poolingOp =
-          createOp(static_cast<linalg::PoolingNHWCMaxI32Op *>(nullptr));
-      rewriter.replaceOp(op, poolingOp->getResult(0));
+    if (isa<tosa::MaxPool2dOp>(op)) {
+      rewriter.replaceOpWithNewOp<linalg::PoolingNhwcMaxOp>(
+          op, ArrayRef<Type>{resultTy}, ValueRange{paddedInput, fakeWindowDims},
+          filledInitTensor, strideAttr, dilationAttr);
       return success();
     }
 
     if (isa<tosa::AvgPool2dOp>(op) && inElementTy.isF32()) {
-      Value poolingOp =
-          createOp(static_cast<linalg::PoolingNHWCSumFOp *>(nullptr))
-              ->getResult(0);
+      Value poolingOp = rewriter
+                            .create<linalg::PoolingNhwcSumOp>(
+                                loc, ArrayRef<Type>{resultTy},
+                                ValueRange{paddedInput, fakeWindowDims},
+                                filledInitTensor, strideAttr, dilationAttr)
+                            .getResult(0);
       auto poolingOpTy = poolingOp.getType().cast<ShapedType>();
       auto affineMap = rewriter.getMultiDimIdentityMap(resultTy.getRank());
       auto genericOp = rewriter.create<linalg::GenericOp>(

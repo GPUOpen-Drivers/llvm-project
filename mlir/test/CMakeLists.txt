@@ -66,6 +66,7 @@ set(MLIR_TEST_DEPENDS
   FileCheck count not
   mlir-capi-execution-engine-test
   mlir-capi-ir-test
+  mlir-capi-llvm-test
   mlir-capi-pass-test
   mlir-capi-sparse-tensor-test
   mlir-cpu-runner
@@ -80,6 +81,10 @@ set(MLIR_TEST_DEPENDS
   mlir_c_runner_utils
   mlir_async_runtime
   )
+
+if (MLIR_INCLUDE_INTEGRATION_TESTS)
+  list(APPEND MLIR_TEST_DEPENDS lli)
+endif()
 
 if(MLIR_ENABLE_CUDA_RUNNER)
   list(APPEND MLIR_TEST_DEPENDS mlir_cuda_runtime)

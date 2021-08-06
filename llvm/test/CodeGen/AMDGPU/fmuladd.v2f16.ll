@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=gfx900 -denormal-fp-math=preserve-sign -fp-contract=on -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GFX9-FLUSH %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=gfx900 -denormal-fp-math=preserve-sign -fp-contract=on -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GFX9-FLUSH %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=gfx900 -denormal-fp-math=preserve-sign -fp-contract=fast -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,GFX9-FLUSH %s
@@ -55,7 +53,7 @@ define amdgpu_kernel void @fmul_fadd_contract_v2f16(<2 x half> addrspace(1)* %ou
   %r0 = load <2 x half>, <2 x half> addrspace(1)* %in1
   %r1 = load <2 x half>, <2 x half> addrspace(1)* %in2
   %r2 = load <2 x half>, <2 x half> addrspace(1)* %in3
-  %r3 = fmul <2 x half> %r0, %r1
+  %r3 = fmul contract <2 x half> %r0, %r1
   %r4 = fadd contract <2 x half> %r3, %r2
   store <2 x half> %r4, <2 x half> addrspace(1)* %out
   ret void

@@ -9,7 +9,6 @@
 #include "Writer.h"
 #include "ConcatOutputSection.h"
 #include "Config.h"
-#include "ICF.h"
 #include "InputFiles.h"
 #include "InputSection.h"
 #include "MapFile.h"
@@ -52,8 +51,6 @@ public:
   void scanSymbols();
   template <class LP> void createOutputSections();
   template <class LP> void createLoadCommands();
-  void foldIdenticalLiterals();
-  void foldIdenticalSections();
   void finalizeAddresses();
   void finalizeLinkEditSegment();
   void assignAddresses(OutputSegment *);
@@ -79,10 +76,6 @@ public:
 
   LCUuid *uuidCommand = nullptr;
   OutputSegment *linkEditSegment = nullptr;
-
-  // Output sections are added to output segments in iteration order
-  // of ConcatOutputSection, so must have deterministic iteration order.
-  MapVector<NamePair, ConcatOutputSection *> concatOutputSections;
 };
 
 // LC_DYLD_INFO_ONLY stores the offsets of symbol import/export information.
@@ -129,6 +122,31 @@ public:
   WeakBindingSection *weakBindingSection;
   LazyBindingSection *lazyBindingSection;
   ExportSection *exportSection;
+};
+
+class LCSubFramework final : public LoadCommand {
+public:
+  LCSubFramework(StringRef umbrella) : umbrella(umbrella) {}
+
+  uint32_t getSize() const override {
+    return alignTo(sizeof(sub_framework_command) + umbrella.size() + 1,
+                   target->wordSize);
+  }
+
+  void writeTo(uint8_t *buf) const override {
+    auto *c = reinterpret_cast<sub_framework_command *>(buf);
+    buf += sizeof(sub_framework_command);
+
+    c->cmd = LC_SUB_FRAMEWORK;
+    c->cmdsize = getSize();
+    c->umbrella = sizeof(sub_framework_command);
+
+    memcpy(buf, umbrella.data(), umbrella.size());
+    buf[umbrella.size()] = '\0';
+  }
+
+private:
+  const StringRef umbrella;
 };
 
 class LCFunctionStarts final : public LoadCommand {
@@ -445,7 +463,7 @@ public:
     c->ntools = ntools;
     auto *t = reinterpret_cast<build_tool_version *>(&c[1]);
     t->tool = TOOL_LD;
-    t->version = encodeVersion(llvm::VersionTuple(
+    t->version = encodeVersion(VersionTuple(
         LLVM_VERSION_MAJOR, LLVM_VERSION_MINOR, LLVM_VERSION_PATCH));
   }
 
@@ -585,25 +603,16 @@ static void prepareSymbolRelocation(Symbol *sym, const InputSection *isec,
     // References from thread-local variable sections are treated as offsets
     // relative to the start of the referent section, and therefore have no
     // need of rebase opcodes.
-    if (!(isThreadLocalVariables(isec->flags) && isa<Defined>(sym)))
+    if (!(isThreadLocalVariables(isec->getFlags()) && isa<Defined>(sym)))
       addNonLazyBindingEntries(sym, isec, r.offset, r.addend);
   }
 }
 
 void Writer::scanRelocations() {
   TimeTraceScope timeScope("Scan relocations");
-  for (InputSection *isec : inputSections) {
-    if (!isa<ConcatInputSection>(isec))
+  for (ConcatInputSection *isec : inputSections) {
+    if (isec->shouldOmitFromOutput())
       continue;
-    auto concatIsec = cast<ConcatInputSection>(isec);
-
-    if (concatIsec->shouldOmitFromOutput())
-      continue;
-
-    if (concatIsec->segname == segment_names::ld) {
-      in.unwindInfo->prepareRelocations(concatIsec);
-      continue;
-    }
 
     for (auto it = isec->relocs.begin(); it != isec->relocs.end(); ++it) {
       Reloc &r = *it;
@@ -621,12 +630,18 @@ void Writer::scanRelocations() {
         if (!isa<Undefined>(sym) && validateSymbolRelocation(sym, isec, r))
           prepareSymbolRelocation(sym, isec, r);
       } else {
-        assert(r.referent.is<InputSection *>());
+        // Canonicalize the referent so that later accesses in Writer won't
+        // have to worry about it. Perhaps we should do this for Defined::isec
+        // too...
+        auto *referentIsec = r.referent.get<InputSection *>();
+        r.referent = referentIsec->canonical();
         if (!r.pcrel)
           in.rebase->addEntry(isec, r.offset);
       }
     }
   }
+
+  in.unwindInfo->prepareRelocations();
 }
 
 void Writer::scanSymbols() {
@@ -647,15 +662,17 @@ void Writer::scanSymbols() {
 
 // TODO: ld64 enforces the old load commands in a few other cases.
 static bool useLCBuildVersion(const PlatformInfo &platformInfo) {
-  static const std::map<PlatformKind, llvm::VersionTuple> minVersion = {
-      {PlatformKind::macOS, llvm::VersionTuple(10, 14)},
-      {PlatformKind::iOS, llvm::VersionTuple(12, 0)},
-      {PlatformKind::iOSSimulator, llvm::VersionTuple(13, 0)},
-      {PlatformKind::tvOS, llvm::VersionTuple(12, 0)},
-      {PlatformKind::tvOSSimulator, llvm::VersionTuple(13, 0)},
-      {PlatformKind::watchOS, llvm::VersionTuple(5, 0)},
-      {PlatformKind::watchOSSimulator, llvm::VersionTuple(6, 0)}};
-  auto it = minVersion.find(platformInfo.target.Platform);
+  static const std::vector<std::pair<PlatformKind, VersionTuple>> minVersion = {
+      {PlatformKind::macOS, VersionTuple(10, 14)},
+      {PlatformKind::iOS, VersionTuple(12, 0)},
+      {PlatformKind::iOSSimulator, VersionTuple(13, 0)},
+      {PlatformKind::tvOS, VersionTuple(12, 0)},
+      {PlatformKind::tvOSSimulator, VersionTuple(13, 0)},
+      {PlatformKind::watchOS, VersionTuple(5, 0)},
+      {PlatformKind::watchOSSimulator, VersionTuple(6, 0)}};
+  auto it = llvm::find_if(minVersion, [&](const auto &p) {
+    return p.first == platformInfo.target.Platform;
+  });
   return it == minVersion.end() ? true : platformInfo.minimum >= it->second;
 }
 
@@ -671,10 +688,8 @@ template <class LP> void Writer::createLoadCommands() {
   in.header->addLoadCommand(make<LCSymtab>(symtabSection, stringTableSection));
   in.header->addLoadCommand(
       make<LCDysymtab>(symtabSection, indirectSymtabSection));
-  if (functionStartsSection)
-    in.header->addLoadCommand(make<LCFunctionStarts>(functionStartsSection));
-  if (dataInCodeSection)
-    in.header->addLoadCommand(make<LCDataInCode>(dataInCodeSection));
+  if (!config->umbrella.empty())
+    in.header->addLoadCommand(make<LCSubFramework>(config->umbrella));
   if (config->emitEncryptionInfo)
     in.header->addLoadCommand(make<LCEncryptionInfo<LP>>());
   for (StringRef path : config->runtimePaths)
@@ -683,7 +698,6 @@ template <class LP> void Writer::createLoadCommands() {
   switch (config->outputType) {
   case MH_EXECUTE:
     in.header->addLoadCommand(make<LCLoadDylinker>());
-    in.header->addLoadCommand(make<LCMain>());
     break;
   case MH_DYLIB:
     in.header->addLoadCommand(make<LCDylib>(LC_ID_DYLIB, config->installName,
@@ -703,6 +717,10 @@ template <class LP> void Writer::createLoadCommands() {
     in.header->addLoadCommand(make<LCBuildVersion>(config->platformInfo));
   else
     in.header->addLoadCommand(make<LCMinVersion>(config->platformInfo));
+
+  // This is down here to match ld64's load command order.
+  if (config->outputType == MH_EXECUTE)
+    in.header->addLoadCommand(make<LCMain>());
 
   int64_t dylibOrdinal = 1;
   DenseMap<StringRef, int64_t> ordinalForInstallName;
@@ -770,6 +788,10 @@ template <class LP> void Writer::createLoadCommands() {
     }
   }
 
+  if (functionStartsSection)
+    in.header->addLoadCommand(make<LCFunctionStarts>(functionStartsSection));
+  if (dataInCodeSection)
+    in.header->addLoadCommand(make<LCDataInCode>(dataInCodeSection));
   if (codeSignatureSection)
     in.header->addLoadCommand(make<LCCodeSignature>(codeSignatureSection));
 
@@ -808,7 +830,8 @@ static DenseMap<const InputSection *, size_t> buildInputSectionPriorities() {
 
     SymbolPriorityEntry &entry = it->second;
     size_t &priority = sectionPriorities[sym.isec];
-    priority = std::max(priority, getSymbolPriority(entry, sym.isec->file));
+    priority =
+        std::max(priority, getSymbolPriority(entry, sym.isec->getFile()));
   };
 
   // TODO: Make sure this handles weak symbols correctly.
@@ -855,16 +878,6 @@ static void sortSegmentsAndSections() {
   }
 }
 
-static NamePair maybeRenameSection(NamePair key) {
-  auto newNames = config->sectionRenameMap.find(key);
-  if (newNames != config->sectionRenameMap.end())
-    return newNames->second;
-  auto newName = config->segmentRenameMap.find(key.first);
-  if (newName != config->segmentRenameMap.end())
-    return std::make_pair(newName->second, key.second);
-  return key;
-}
-
 template <class LP> void Writer::createOutputSections() {
   TimeTraceScope timeScope("Create output sections");
   // First, create hidden sections
@@ -892,28 +905,13 @@ template <class LP> void Writer::createOutputSections() {
   }
 
   // Then add input sections to output sections.
-  for (const auto &p : enumerate(inputSections)) {
-    InputSection *isec = p.value();
-    OutputSection *osec;
-    if (auto *concatIsec = dyn_cast<ConcatInputSection>(isec)) {
-      if (concatIsec->shouldOmitFromOutput())
-        continue;
-      NamePair names = maybeRenameSection({isec->segname, isec->name});
-      ConcatOutputSection *&concatOsec = concatOutputSections[names];
-      if (concatOsec == nullptr)
-        concatOsec = make<ConcatOutputSection>(names.second);
-      concatOsec->addInput(concatIsec);
-      osec = concatOsec;
-    } else if (auto *cStringIsec = dyn_cast<CStringInputSection>(isec)) {
-      in.cStringSection->addInput(cStringIsec);
-      osec = in.cStringSection;
-    } else if (auto *litIsec = dyn_cast<WordLiteralInputSection>(isec)) {
-      in.wordLiteralSection->addInput(litIsec);
-      osec = in.wordLiteralSection;
-    } else {
-      llvm_unreachable("unhandled InputSection type");
-    }
-    osec->inputOrder = std::min(osec->inputOrder, static_cast<int>(p.index()));
+  for (ConcatInputSection *isec : inputSections) {
+    if (isec->shouldOmitFromOutput())
+      continue;
+    ConcatOutputSection *osec = cast<ConcatOutputSection>(isec->parent);
+    osec->addInput(isec);
+    osec->inputOrder =
+        std::min(osec->inputOrder, static_cast<int>(isec->outSecOff));
   }
 
   // Once all the inputs are added, we can finalize the output section
@@ -921,12 +919,9 @@ template <class LP> void Writer::createOutputSections() {
   for (const auto &it : concatOutputSections) {
     StringRef segname = it.first.first;
     ConcatOutputSection *osec = it.second;
-    if (segname == segment_names::ld) {
-      assert(osec->name == section_names::compactUnwind);
-      in.unwindInfo->setCompactUnwindSection(osec);
-    } else {
+    assert(segname != segment_names::ld);
+    if (osec->isNeeded())
       getOrCreateOutputSegment(segname)->addOutputSection(osec);
-    }
   }
 
   for (SyntheticSection *ssec : syntheticSections) {
@@ -935,7 +930,8 @@ template <class LP> void Writer::createOutputSections() {
       if (it == concatOutputSections.end()) {
         getOrCreateOutputSegment(ssec->segname)->addOutputSection(ssec);
       } else {
-        fatal("section from " + toString(it->second->firstSection()->file) +
+        fatal("section from " +
+              toString(it->second->firstSection()->getFile()) +
               " conflicts with synthetic section " + ssec->segname + "," +
               ssec->name);
       }
@@ -944,57 +940,6 @@ template <class LP> void Writer::createOutputSections() {
 
   // dyld requires __LINKEDIT segment to always exist (even if empty).
   linkEditSegment = getOrCreateOutputSegment(segment_names::linkEdit);
-}
-
-void Writer::foldIdenticalLiterals() {
-  if (in.cStringSection)
-    in.cStringSection->finalizeContents();
-  // TODO: WordLiteralSection & CFStringSection should be finalized here too
-}
-
-void Writer::foldIdenticalSections() {
-  if (config->icfLevel == ICFLevel::none)
-    return;
-  ConcatOutputSection *textOutputSection = concatOutputSections.lookup(
-      maybeRenameSection({segment_names::text, section_names::text}));
-  if (textOutputSection == nullptr)
-    return;
-
-  TimeTraceScope timeScope("Fold Identical Code Sections");
-  // The ICF equivalence-class segregation algorithm relies on pre-computed
-  // hashes of InputSection::data for the ConcatOutputSection::inputs and all
-  // sections referenced by their relocs. We could recursively traverse the
-  // relocs to find every referenced InputSection, but that precludes easy
-  // parallelization. Therefore, we hash every InputSection here where we have
-  // them all accessible as a simple vector.
-  std::vector<ConcatInputSection *> hashable;
-  // If an InputSection is ineligible for ICF, we give it a unique ID to force
-  // it into an unfoldable singleton equivalence class.  Begin the unique-ID
-  // space at inputSections.size(), so that it will never intersect with
-  // equivalence-class IDs which begin at 0. Since hashes & unique IDs never
-  // coexist with equivalence-class IDs, this is not necessary, but might help
-  // someone keep the numbers straight in case we ever need to debug the
-  // ICF::segregate()
-  uint64_t icfUniqueID = inputSections.size();
-  for (InputSection *isec : inputSections) {
-    if (auto *concatIsec = dyn_cast<ConcatInputSection>(isec)) {
-      if (concatIsec->isHashableForICF(isec->parent == textOutputSection))
-        hashable.push_back(concatIsec);
-      else
-        concatIsec->icfEqClass[0] = ++icfUniqueID;
-    }
-  }
-  // FIXME: hash literal sections here too?
-  parallelForEach(hashable,
-                  [](ConcatInputSection *isec) { isec->hashForICF(); });
-  // Now that every input section is either hashed or marked as unique,
-  // run the segregation algorithm to detect foldable subsections
-  ICF(textOutputSection->inputs).run();
-  size_t oldSize = textOutputSection->inputs.size();
-  textOutputSection->eraseOmittedInputSections();
-  size_t newSize = textOutputSection->inputs.size();
-  log("ICF kept " + Twine(newSize) + " removed " + Twine(oldSize - newSize) +
-      " of " + Twine(oldSize));
 }
 
 void Writer::finalizeAddresses() {
@@ -1128,10 +1073,6 @@ template <class LP> void Writer::run() {
     in.stubHelper->setup();
   scanSymbols();
   createOutputSections<LP>();
-  // ICF assumes that all literals have been folded already, so we must run
-  // foldIdenticalLiterals before foldIdenticalSections.
-  foldIdenticalLiterals();
-  foldIdenticalSections();
   // After this point, we create no new segments; HOWEVER, we might
   // yet create branch-range extension thunks for architectures whose
   // hardware call instructions have limited range, e.g., ARM(64).
