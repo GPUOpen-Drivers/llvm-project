@@ -353,6 +353,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeSILoadStoreOptimizerPass(*PR);
   initializeAMDGPUFixFunctionBitcastsPass(*PR);
   initializeAMDGPUAlwaysInlinePass(*PR);
+  initializeAMDGPUAttributorPass(*PR);
   initializeAMDGPUAnnotateKernelFeaturesPass(*PR);
   initializeAMDGPUAnnotateUniformValuesPass(*PR);
   initializeAMDGPUArgumentUsageInfoPass(*PR);
@@ -395,6 +396,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPUUseNativeCallsPass(*PR);
   initializeAMDGPUSimplifyLibCallsPass(*PR);
   initializeAMDGPUPrintfRuntimeBindingPass(*PR);
+  initializeAMDGPUResourceUsageAnalysisPass(*PR);
   initializeGCNNSAReassignPass(*PR);
   initializeGCNPreRAOptimizationsPass(*PR);
   initializeSIInsertScratchBoundsPass(*PR);
@@ -695,19 +697,18 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   });
 
   PB.registerPipelineStartEPCallback(
-      [this](ModulePassManager &PM, PassBuilder::OptimizationLevel Level) {
+      [this](ModulePassManager &PM, OptimizationLevel Level) {
         FunctionPassManager FPM;
         FPM.addPass(AMDGPUPropagateAttributesEarlyPass(*this));
         FPM.addPass(AMDGPUUseNativeCallsPass());
-        if (EnableLibCallSimplify &&
-            Level != PassBuilder::OptimizationLevel::O0)
+        if (EnableLibCallSimplify && Level != OptimizationLevel::O0)
           FPM.addPass(AMDGPUSimplifyLibCallsPass(*this));
         PM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
 
   PB.registerPipelineEarlySimplificationEPCallback(
-      [this](ModulePassManager &PM, PassBuilder::OptimizationLevel Level) {
-        if (Level == PassBuilder::OptimizationLevel::O0)
+      [this](ModulePassManager &PM, OptimizationLevel Level) {
+        if (Level == OptimizationLevel::O0)
           return;
 
         PM.addPass(AMDGPUUnifyMetadataPass());
@@ -725,8 +726,8 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
       });
 
   PB.registerCGSCCOptimizerLateEPCallback(
-      [this](CGSCCPassManager &PM, PassBuilder::OptimizationLevel Level) {
-        if (Level == PassBuilder::OptimizationLevel::O0)
+      [this](CGSCCPassManager &PM, OptimizationLevel Level) {
+        if (Level == OptimizationLevel::O0)
           return;
 
         FunctionPassManager FPM;
@@ -739,7 +740,7 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         // anything, and before other cleanup optimizations.
         FPM.addPass(AMDGPULowerKernelAttributesPass());
 
-        if (Level != PassBuilder::OptimizationLevel::O0) {
+        if (Level != OptimizationLevel::O0) {
           // Promote alloca to vector before SROA and loop unroll. If we
           // manage to eliminate allocas before unroll we may choose to unroll
           // less.
@@ -1112,9 +1113,6 @@ void AMDGPUPassConfig::addCodeGenPrepare() {
       EnableLowerKernelArguments)
     addPass(createAMDGPULowerKernelArgumentsPass());
 
-  if (TM->getOptLevel() > CodeGenOpt::Less)
-    addPass(&AMDGPUPerfHintAnalysisID);
-
   TargetPassConfig::addCodeGenPrepare();
 
   if (isPassEnabled(EnableLoadStoreVectorizer))
@@ -1221,21 +1219,14 @@ bool GCNPassConfig::addPreISel() {
     }
     addPass(createStructurizeCFGPass(false)); // true -> SkipUniformRegions
   }
-
-  // This is a temporary fix for the issue of dealing with in loop uniform values
-  // where the uses out of the loop are non-uniform. LCSSA creates a PHI at the
-  // loop exit such that can be marked divergent and can be passed onto ISEL
-  // Ideally, we will add LCSSA as preserved to AMDGPUDAGToDAGISel class, but
-  // for the moment it conflicts with StackProtector which is in CodeGen and
-  // therefore can't be preserved in LCSSA as needed. The linking/preserving
-  // outside of the same library needs to be resolved in llvm core code.
-  addPass(createLCSSAPass());
-
   addPass(createAMDGPUAnnotateUniformValues());
   if (!LateCFGStructurize) {
     addPass(createSIAnnotateControlFlowPass());
   }
   addPass(createLCSSAPass());
+
+  if (TM->getOptLevel() > CodeGenOpt::Less)
+    addPass(&AMDGPUPerfHintAnalysisID);
 
   return false;
 }

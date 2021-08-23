@@ -70,10 +70,7 @@ struct GlobalProc {
   Mutex mtx;
   Processor *proc;
 
-  GlobalProc()
-      : mtx(MutexTypeGlobalProc, StatMtxGlobalProc)
-      , proc(ProcCreate()) {
-  }
+  GlobalProc() : mtx(MutexTypeGlobalProc), proc(ProcCreate()) {}
 };
 
 static char global_proc_placeholder[sizeof(GlobalProc)] ALIGNED(64);
@@ -151,7 +148,7 @@ static void SignalUnsafeCall(ThreadState *thr, uptr pc) {
   ObtainCurrentStack(thr, pc, &stack);
   if (IsFiredSuppression(ctx, ReportTypeSignalUnsafe, stack))
     return;
-  ThreadRegistryLock l(ctx->thread_registry);
+  ThreadRegistryLock l(&ctx->thread_registry);
   ScopedReport rep(ReportTypeSignalUnsafe);
   rep.AddStack(stack, true);
   OutputReport(thr, rep);
@@ -339,7 +336,7 @@ void invoke_free_hook(void *ptr) {
   RunFreeHooks(ptr);
 }
 
-void *internal_alloc(MBlockType typ, uptr sz) {
+void *internal_alloc(uptr sz) {
   ThreadState *thr = cur_thread();
   if (thr->nomalloc) {
     thr->nomalloc = 0;  // CHECK calls internal_malloc().

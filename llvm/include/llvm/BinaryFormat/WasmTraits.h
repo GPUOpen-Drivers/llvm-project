@@ -74,7 +74,9 @@ template <> struct DenseMapInfo<wasm::WasmLimits> {
   static unsigned getHashValue(const wasm::WasmLimits &Limits) {
     unsigned Hash = hash_value(Limits.Flags);
     Hash = hash_combine(Hash, Limits.Minimum);
-    Hash = hash_combine(Hash, Limits.Maximum);
+    if (Limits.Flags & llvm::wasm::WASM_LIMITS_FLAG_HAS_MAX) {
+      Hash = hash_combine(Hash, Limits.Maximum);
+    }
     return Hash;
   }
   static bool isEqual(const wasm::WasmLimits &LHS,

@@ -77,8 +77,6 @@ void OnInitialize() {
 }
 #endif
 
-static ALIGNED(64) char thread_registry_placeholder[sizeof(ThreadRegistry)];
-
 static ThreadContextBase *CreateThreadContext(u32 tid) {
   // Map thread trace when context is created.
   char name[50];
@@ -103,7 +101,7 @@ static ThreadContextBase *CreateThreadContext(u32 tid) {
       CHECK("unable to mprotect" && 0);
     }
   }
-  void *mem = internal_alloc(MBlockThreadContex, sizeof(ThreadContext));
+  void *mem = internal_alloc(sizeof(ThreadContext));
   return new(mem) ThreadContext(tid);
 }
 
@@ -115,15 +113,15 @@ static const u32 kThreadQuarantineSize = 64;
 
 Context::Context()
     : initialized(),
-      report_mtx(MutexTypeReport, StatMtxReport),
+      report_mtx(MutexTypeReport),
       nreported(),
       nmissed_expected(),
-      thread_registry(new (thread_registry_placeholder) ThreadRegistry(
-          CreateThreadContext, kMaxTid, kThreadQuarantineSize, kMaxTidReuse)),
-      racy_mtx(MutexTypeRacy, StatMtxRacy),
+      thread_registry(CreateThreadContext, kMaxTid, kThreadQuarantineSize,
+                      kMaxTidReuse),
+      racy_mtx(MutexTypeRacy),
       racy_stacks(),
       racy_addresses(),
-      fired_suppressions_mtx(MutexTypeFired, StatMtxFired),
+      fired_suppressions_mtx(MutexTypeFired),
       clock_alloc(LINKER_INITIALIZED, "clock allocator") {
   fired_suppressions.reserve(8);
 }
@@ -161,7 +159,7 @@ ThreadState::ThreadState(Context *ctx, u32 tid, int unique_id, u64 epoch,
 static void MemoryProfiler(Context *ctx, fd_t fd, int i) {
   uptr n_threads;
   uptr n_running_threads;
-  ctx->thread_registry->GetNumberOfThreads(&n_threads, &n_running_threads);
+  ctx->thread_registry.GetNumberOfThreads(&n_threads, &n_running_threads);
   InternalMmapVector<char> buf(4096);
   WriteMemoryProfile(buf.data(), buf.size(), n_threads, n_running_threads);
   WriteToFile(fd, buf.data(), internal_strlen(buf.data()));
@@ -386,9 +384,10 @@ void CheckUnwind() {
   PrintCurrentStackSlow(StackTrace::GetCurrentPc());
 }
 
+bool is_initialized;
+
 void Initialize(ThreadState *thr) {
   // Thread safe because done before all threads exist.
-  static bool is_initialized = false;
   if (is_initialized)
     return;
   is_initialized = true;
@@ -422,7 +421,6 @@ void Initialize(ThreadState *thr) {
   InitializeInterceptors();
   CheckShadowMapping();
   InitializePlatform();
-  InitializeMutex();
   InitializeDynamicAnnotations();
 #if !SANITIZER_GO
   InitializeShadowMemory();
@@ -522,17 +520,12 @@ int Finalize(ThreadState *thr) {
 
   failed = OnFinalize(failed);
 
-#if TSAN_COLLECT_STATS
-  StatAggregate(ctx->stat, thr->stat);
-  StatOutput(ctx->stat);
-#endif
-
   return failed ? common_flags()->exitcode : 0;
 }
 
 #if !SANITIZER_GO
 void ForkBefore(ThreadState *thr, uptr pc) NO_THREAD_SAFETY_ANALYSIS {
-  ctx->thread_registry->Lock();
+  ctx->thread_registry.Lock();
   ctx->report_mtx.Lock();
   ScopedErrorReportLock::Lock();
   // Suppress all reports in the pthread_atfork callbacks.
@@ -551,7 +544,7 @@ void ForkParentAfter(ThreadState *thr, uptr pc) NO_THREAD_SAFETY_ANALYSIS {
   thr->ignore_interceptors--;
   ScopedErrorReportLock::Unlock();
   ctx->report_mtx.Unlock();
-  ctx->thread_registry->Unlock();
+  ctx->thread_registry.Unlock();
 }
 
 void ForkChildAfter(ThreadState *thr, uptr pc) NO_THREAD_SAFETY_ANALYSIS {
@@ -559,10 +552,10 @@ void ForkChildAfter(ThreadState *thr, uptr pc) NO_THREAD_SAFETY_ANALYSIS {
   thr->ignore_interceptors--;
   ScopedErrorReportLock::Unlock();
   ctx->report_mtx.Unlock();
-  ctx->thread_registry->Unlock();
+  ctx->thread_registry.Unlock();
 
   uptr nthread = 0;
-  ctx->thread_registry->GetNumberOfThreads(0, 0, &nthread /* alive threads */);
+  ctx->thread_registry.GetNumberOfThreads(0, 0, &nthread /* alive threads */);
   VPrintf(1, "ThreadSanitizer: forked new process with pid %d,"
       " parent had %d threads\n", (int)internal_getpid(), (int)nthread);
   if (nthread == 1) {
@@ -584,8 +577,7 @@ NOINLINE
 void GrowShadowStack(ThreadState *thr) {
   const int sz = thr->shadow_stack_end - thr->shadow_stack;
   const int newsz = 2 * sz;
-  uptr *newstack = (uptr*)internal_alloc(MBlockShadowStack,
-      newsz * sizeof(uptr));
+  uptr *newstack = (uptr *)internal_alloc(newsz * sizeof(uptr));
   internal_memcpy(newstack, thr->shadow_stack, sz * sizeof(uptr));
   internal_free(thr->shadow_stack);
   thr->shadow_stack = newstack;
@@ -696,9 +688,6 @@ ALWAYS_INLINE
 void MemoryAccessImpl1(ThreadState *thr, uptr addr,
     int kAccessSizeLog, bool kAccessIsWrite, bool kIsAtomic,
     u64 *shadow_mem, Shadow cur) {
-  StatInc(thr, StatMop);
-  StatInc(thr, kAccessIsWrite ? StatMopWrite : StatMopRead);
-  StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
 
   // This potentially can live in an MMX/SSE scratch register.
   // The required intrinsics are:
@@ -755,7 +744,6 @@ void MemoryAccessImpl1(ThreadState *thr, uptr addr,
     return;
   // choose a random candidate slot and replace it
   StoreShadow(shadow_mem + (cur.epoch() % kShadowCnt), store_word);
-  StatInc(thr, StatShadowReplace);
   return;
  RACE:
   HandleRace(thr, shadow_mem, cur, old);
@@ -894,19 +882,11 @@ void MemoryAccess(ThreadState *thr, uptr pc, uptr addr,
   if (!SANITIZER_GO && !kAccessIsWrite && *shadow_mem == kShadowRodata) {
     // Access to .rodata section, no races here.
     // Measurements show that it can be 10-20% of all memory accesses.
-    StatInc(thr, StatMop);
-    StatInc(thr, kAccessIsWrite ? StatMopWrite : StatMopRead);
-    StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
-    StatInc(thr, StatMopRodata);
     return;
   }
 
   FastState fast_state = thr->fast_state;
   if (UNLIKELY(fast_state.GetIgnoreBit())) {
-    StatInc(thr, StatMop);
-    StatInc(thr, kAccessIsWrite ? StatMopWrite : StatMopRead);
-    StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
-    StatInc(thr, StatMopIgnored);
     return;
   }
 
@@ -917,10 +897,6 @@ void MemoryAccess(ThreadState *thr, uptr pc, uptr addr,
 
   if (LIKELY(ContainsSameAccess(shadow_mem, cur.raw(),
       thr->fast_synch_epoch, kAccessIsWrite))) {
-    StatInc(thr, StatMop);
-    StatInc(thr, kAccessIsWrite ? StatMopWrite : StatMopRead);
-    StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
-    StatInc(thr, StatMopSame);
     return;
   }
 
@@ -942,10 +918,6 @@ void MemoryAccessImpl(ThreadState *thr, uptr addr,
     u64 *shadow_mem, Shadow cur) {
   if (LIKELY(ContainsSameAccess(shadow_mem, cur.raw(),
       thr->fast_synch_epoch, kAccessIsWrite))) {
-    StatInc(thr, StatMop);
-    StatInc(thr, kAccessIsWrite ? StatMopWrite : StatMopRead);
-    StatInc(thr, (StatType)(StatMop1 + kAccessSizeLog));
-    StatInc(thr, StatMopSame);
     return;
   }
 
@@ -1061,7 +1033,6 @@ void MemoryRangeImitateWriteOrResetRange(ThreadState *thr, uptr pc, uptr addr,
 
 ALWAYS_INLINE USED
 void FuncEntry(ThreadState *thr, uptr pc) {
-  StatInc(thr, StatFuncEnter);
   DPrintf2("#%d: FuncEntry %p\n", (int)thr->fast_state.tid(), (void*)pc);
   if (kCollectHistory) {
     thr->fast_state.IncrementEpoch();
@@ -1083,7 +1054,6 @@ void FuncEntry(ThreadState *thr, uptr pc) {
 
 ALWAYS_INLINE USED
 void FuncExit(ThreadState *thr) {
-  StatInc(thr, StatFuncExit);
   DPrintf2("#%d: FuncExit\n", (int)thr->fast_state.tid());
   if (kCollectHistory) {
     thr->fast_state.IncrementEpoch();
@@ -1097,18 +1067,18 @@ void FuncExit(ThreadState *thr) {
   thr->shadow_stack_pos--;
 }
 
-void ThreadIgnoreBegin(ThreadState *thr, uptr pc, bool save_stack) {
+void ThreadIgnoreBegin(ThreadState *thr, uptr pc) {
   DPrintf("#%d: ThreadIgnoreBegin\n", thr->tid);
   thr->ignore_reads_and_writes++;
   CHECK_GT(thr->ignore_reads_and_writes, 0);
   thr->fast_state.SetIgnoreBit();
 #if !SANITIZER_GO
-  if (save_stack && !ctx->after_multithreaded_fork)
+  if (pc && !ctx->after_multithreaded_fork)
     thr->mop_ignore_set.Add(CurrentStackId(thr, pc));
 #endif
 }
 
-void ThreadIgnoreEnd(ThreadState *thr, uptr pc) {
+void ThreadIgnoreEnd(ThreadState *thr) {
   DPrintf("#%d: ThreadIgnoreEnd\n", thr->tid);
   CHECK_GT(thr->ignore_reads_and_writes, 0);
   thr->ignore_reads_and_writes--;
@@ -1128,17 +1098,17 @@ uptr __tsan_testonly_shadow_stack_current_size() {
 }
 #endif
 
-void ThreadIgnoreSyncBegin(ThreadState *thr, uptr pc, bool save_stack) {
+void ThreadIgnoreSyncBegin(ThreadState *thr, uptr pc) {
   DPrintf("#%d: ThreadIgnoreSyncBegin\n", thr->tid);
   thr->ignore_sync++;
   CHECK_GT(thr->ignore_sync, 0);
 #if !SANITIZER_GO
-  if (save_stack && !ctx->after_multithreaded_fork)
+  if (pc && !ctx->after_multithreaded_fork)
     thr->sync_ignore_set.Add(CurrentStackId(thr, pc));
 #endif
 }
 
-void ThreadIgnoreSyncEnd(ThreadState *thr, uptr pc) {
+void ThreadIgnoreSyncEnd(ThreadState *thr) {
   DPrintf("#%d: ThreadIgnoreSyncEnd\n", thr->tid);
   CHECK_GT(thr->ignore_sync, 0);
   thr->ignore_sync--;
@@ -1158,15 +1128,30 @@ void build_consistency_debug() {}
 void build_consistency_release() {}
 #endif
 
-#if TSAN_COLLECT_STATS
-void build_consistency_stats() {}
-#else
-void build_consistency_nostats() {}
-#endif
-
 }  // namespace __tsan
+
+#if SANITIZER_CHECK_DEADLOCKS
+namespace __sanitizer {
+using namespace __tsan;
+MutexMeta mutex_meta[] = {
+    {MutexInvalid, "Invalid", {}},
+    {MutexThreadRegistry, "ThreadRegistry", {}},
+    {MutexTypeTrace, "Trace", {MutexLeaf}},
+    {MutexTypeReport, "Report", {MutexTypeSyncVar}},
+    {MutexTypeSyncVar, "SyncVar", {}},
+    {MutexTypeAnnotations, "Annotations", {}},
+    {MutexTypeAtExit, "AtExit", {MutexTypeSyncVar}},
+    {MutexTypeFired, "Fired", {MutexLeaf}},
+    {MutexTypeRacy, "Racy", {MutexLeaf}},
+    {MutexTypeGlobalProc, "GlobalProc", {}},
+    {},
+};
+
+void PrintMutexPC(uptr pc) { StackTrace(&pc, 1).Print(); }
+}  // namespace __sanitizer
+#endif
 
 #if !SANITIZER_GO
 // Must be included in this file to make sure everything is inlined.
-#include "tsan_interface_inl.h"
+#  include "tsan_interface_inl.h"
 #endif

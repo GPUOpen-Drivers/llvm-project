@@ -135,6 +135,7 @@ void ImportSection::addImport(Symbol *sym) {
     importedSymbols.emplace_back(sym);
     t->setTagIndex(numImportedTags++);
   } else {
+    assert(TableSymbol::classof(sym));
     auto *table = cast<TableSymbol>(sym);
     ImportKey<WasmTableType> key(*(table->getTableType()), module, name);
     auto entry = importedTables.try_emplace(key, numImportedTables);
