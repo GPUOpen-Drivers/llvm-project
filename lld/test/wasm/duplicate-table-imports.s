@@ -40,12 +40,12 @@ _start:
 
   end_function
 
-# XXX: the second imported table has index 1, not 0. I've verified by hand (with
-# `wasm2wat`) that the resulting Wasm file is correct: `t3` does end up at index
-# 1 and our `table.get` instructions are using the proper table index
-# immediates. This is also asserted (less legibly) in the hexdump of the code
-# body below. It looks like there's a bug in how `obj2yaml` disassembles
-# multiple table imports.
+## XXX: the second imported table has index 1, not 0. I've verified by hand
+## (with `wasm2wat`) that the resulting Wasm file is correct: `t3` does end up
+## at index 1 and our `table.get` instructions are using the proper table index
+## immediates. This is also asserted (less legibly) in the hexdump of the code
+## body below. It looks like there's a bug in how `obj2yaml` disassembles
+## multiple table imports.
 
 # CHECK:        - Type:            IMPORT
 # CHECK-NEXT:     Imports:

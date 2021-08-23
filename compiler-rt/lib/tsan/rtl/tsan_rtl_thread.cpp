@@ -61,8 +61,6 @@ void ThreadContext::OnCreated(void *arg) {
   TraceAddEvent(args->thr, args->thr->fast_state, EventTypeMop, 0);
   ReleaseImpl(args->thr, 0, &sync);
   creation_stack_id = CurrentStackId(args->thr, args->pc);
-  if (reuse_count == 0)
-    StatInc(args->thr, StatThreadMaxTid);
 }
 
 void ThreadContext::OnReset() {
@@ -101,8 +99,7 @@ void ThreadContext::OnStarted(void *arg) {
 #else
   // Setup dynamic shadow stack.
   const int kInitStackSize = 8;
-  thr->shadow_stack = (uptr*)internal_alloc(MBlockShadowStack,
-      kInitStackSize * sizeof(uptr));
+  thr->shadow_stack = (uptr *)internal_alloc(kInitStackSize * sizeof(uptr));
   thr->shadow_stack_pos = thr->shadow_stack;
   thr->shadow_stack_end = thr->shadow_stack + kInitStackSize;
 #endif
@@ -115,7 +112,6 @@ void ThreadContext::OnStarted(void *arg) {
 
   thr->fast_synch_epoch = epoch0;
   AcquireImpl(thr, 0, &sync);
-  StatInc(thr, StatSyncAcquire);
   sync.Reset(&thr->proc()->clock_cache);
   thr->is_inited = true;
   DPrintf("#%d: ThreadStart epoch=%zu stk_addr=%zx stk_size=%zx "
@@ -149,9 +145,6 @@ void ThreadContext::OnFinished() {
   PlatformCleanUpThreadState(thr);
 #endif
   thr->~ThreadState();
-#if TSAN_COLLECT_STATS
-  StatAggregate(ctx->stat, thr->stat);
-#endif
   thr = 0;
 }
 
@@ -212,10 +205,10 @@ void ThreadFinalize(ThreadState *thr) {
 #if !SANITIZER_GO
   if (!ShouldReport(thr, ReportTypeThreadLeak))
     return;
-  ThreadRegistryLock l(ctx->thread_registry);
+  ThreadRegistryLock l(&ctx->thread_registry);
   Vector<ThreadLeak> leaks;
-  ctx->thread_registry->RunCallbackForEachThreadLocked(
-      MaybeReportThreadLeak, &leaks);
+  ctx->thread_registry.RunCallbackForEachThreadLocked(MaybeReportThreadLeak,
+                                                      &leaks);
   for (uptr i = 0; i < leaks.Size(); i++) {
     ScopedReport rep(ReportTypeThreadLeak);
     rep.AddThread(leaks[i].tctx, true);
@@ -227,18 +220,15 @@ void ThreadFinalize(ThreadState *thr) {
 
 int ThreadCount(ThreadState *thr) {
   uptr result;
-  ctx->thread_registry->GetNumberOfThreads(0, 0, &result);
+  ctx->thread_registry.GetNumberOfThreads(0, 0, &result);
   return (int)result;
 }
 
 int ThreadCreate(ThreadState *thr, uptr pc, uptr uid, bool detached) {
-  StatInc(thr, StatThreadCreate);
   OnCreatedArgs args = { thr, pc };
   u32 parent_tid = thr ? thr->tid : kInvalidTid;  // No parent for GCD workers.
-  int tid =
-      ctx->thread_registry->CreateThread(uid, detached, parent_tid, &args);
+  int tid = ctx->thread_registry.CreateThread(uid, detached, parent_tid, &args);
   DPrintf("#%d: ThreadCreate tid=%d uid=%zu\n", parent_tid, tid, uid);
-  StatSet(thr, StatThreadMaxAlive, ctx->thread_registry->GetMaxAliveThreads());
   return tid;
 }
 
@@ -261,7 +251,7 @@ void ThreadStart(ThreadState *thr, int tid, tid_t os_id,
   }
 #endif
 
-  ThreadRegistry *tr = ctx->thread_registry;
+  ThreadRegistry *tr = &ctx->thread_registry;
   OnStartedArgs args = { thr, stk_addr, stk_size, tls_addr, tls_size };
   tr->StartThread(tid, os_id, thread_type, &args);
 
@@ -280,13 +270,12 @@ void ThreadStart(ThreadState *thr, int tid, tid_t os_id,
 
 void ThreadFinish(ThreadState *thr) {
   ThreadCheckIgnore(thr);
-  StatInc(thr, StatThreadFinish);
   if (thr->stk_addr && thr->stk_size)
     DontNeedShadowFor(thr->stk_addr, thr->stk_size);
   if (thr->tls_addr && thr->tls_size)
     DontNeedShadowFor(thr->tls_addr, thr->tls_size);
   thr->is_dead = true;
-  ctx->thread_registry->FinishThread(thr->tid);
+  ctx->thread_registry.FinishThread(thr->tid);
 }
 
 struct ConsumeThreadContext {
@@ -313,7 +302,7 @@ static bool ConsumeThreadByUid(ThreadContextBase *tctx, void *arg) {
 
 int ThreadConsumeTid(ThreadState *thr, uptr pc, uptr uid) {
   ConsumeThreadContext findCtx = {uid, nullptr};
-  ctx->thread_registry->FindThread(ConsumeThreadByUid, &findCtx);
+  ctx->thread_registry.FindThread(ConsumeThreadByUid, &findCtx);
   int tid = findCtx.tctx ? findCtx.tctx->tid : kInvalidTid;
   DPrintf("#%d: ThreadTid uid=%zu tid=%d\n", thr->tid, uid, tid);
   return tid;
@@ -323,23 +312,23 @@ void ThreadJoin(ThreadState *thr, uptr pc, int tid) {
   CHECK_GT(tid, 0);
   CHECK_LT(tid, kMaxTid);
   DPrintf("#%d: ThreadJoin tid=%d\n", thr->tid, tid);
-  ctx->thread_registry->JoinThread(tid, thr);
+  ctx->thread_registry.JoinThread(tid, thr);
 }
 
 void ThreadDetach(ThreadState *thr, uptr pc, int tid) {
   CHECK_GT(tid, 0);
   CHECK_LT(tid, kMaxTid);
-  ctx->thread_registry->DetachThread(tid, thr);
+  ctx->thread_registry.DetachThread(tid, thr);
 }
 
 void ThreadNotJoined(ThreadState *thr, uptr pc, int tid, uptr uid) {
   CHECK_GT(tid, 0);
   CHECK_LT(tid, kMaxTid);
-  ctx->thread_registry->SetThreadUserId(tid, uid);
+  ctx->thread_registry.SetThreadUserId(tid, uid);
 }
 
 void ThreadSetName(ThreadState *thr, const char *name) {
-  ctx->thread_registry->SetThreadName(thr->tid, name);
+  ctx->thread_registry.SetThreadName(thr->tid, name);
 }
 
 void MemoryAccessRange(ThreadState *thr, uptr pc, uptr addr,
@@ -372,13 +361,10 @@ void MemoryAccessRange(ThreadState *thr, uptr pc, uptr addr,
   }
 #endif
 
-  StatInc(thr, StatMopRange);
-
   if (*shadow_mem == kShadowRodata) {
     DCHECK(!is_write);
     // Access to .rodata section, no races here.
     // Measurements show that it can be 10-20% of all memory accesses.
-    StatInc(thr, StatMopRangeRodata);
     return;
   }
 
@@ -433,7 +419,7 @@ void FiberSwitchImpl(ThreadState *from, ThreadState *to) {
 }
 
 ThreadState *FiberCreate(ThreadState *thr, uptr pc, unsigned flags) {
-  void *mem = internal_alloc(MBlockThreadContex, sizeof(ThreadState));
+  void *mem = internal_alloc(sizeof(ThreadState));
   ThreadState *fiber = static_cast<ThreadState *>(mem);
   internal_memset(fiber, 0, sizeof(*fiber));
   int tid = ThreadCreate(thr, pc, 0, true);

@@ -400,9 +400,6 @@ struct ThreadState {
   Vector<JmpBuf> jmp_bufs;
   int ignore_interceptors;
 #endif
-#if TSAN_COLLECT_STATS
-  u64 stat[StatCnt];
-#endif
   const u32 tid;
   const int unique_id;
   bool in_symbolizer;
@@ -417,9 +414,6 @@ struct ThreadState {
   const uptr tls_size;
   ThreadContext *tctx;
 
-#if SANITIZER_DEBUG && !SANITIZER_GO
-  InternalDeadlockDetector internal_deadlock_detector;
-#endif
   DDLogicalThread *dd_lt;
 
   // Current wired Processor, or nullptr. Required to handle any events.
@@ -536,7 +530,7 @@ struct Context {
   void *background_thread;
   atomic_uint32_t stop_background_thread;
 
-  ThreadRegistry *thread_registry;
+  ThreadRegistry thread_registry;
 
   Mutex racy_mtx;
   Vector<RacyStacks> racy_stacks;
@@ -549,10 +543,6 @@ struct Context {
   ClockAlloc clock_alloc;
 
   Flags flags;
-
-  u64 stat[StatCnt];
-  u64 int_alloc_cnt[MBlockTypeCount];
-  u64 int_alloc_siz[MBlockTypeCount];
 };
 
 extern Context *ctx;  // The one and the only global runtime context.
@@ -658,22 +648,6 @@ void ObtainCurrentStack(ThreadState *thr, uptr toppc, StackTraceTy *stack,
   ObtainCurrentStack(thr, pc, &stack); \
   stack.ReverseOrder();
 
-#if TSAN_COLLECT_STATS
-void StatAggregate(u64 *dst, u64 *src);
-void StatOutput(u64 *stat);
-#endif
-
-void ALWAYS_INLINE StatInc(ThreadState *thr, StatType typ, u64 n = 1) {
-#if TSAN_COLLECT_STATS
-  thr->stat[typ] += n;
-#endif
-}
-void ALWAYS_INLINE StatSet(ThreadState *thr, StatType typ, u64 n) {
-#if TSAN_COLLECT_STATS
-  thr->stat[typ] = n;
-#endif
-}
-
 void MapShadow(uptr addr, uptr size);
 void MapThreadTrace(uptr addr, uptr size, const char *name);
 void DontNeedShadowFor(uptr addr, uptr size);
@@ -709,6 +683,7 @@ u32 CurrentStackId(ThreadState *thr, uptr pc);
 ReportStack *SymbolizeStackId(u32 stack_id);
 void PrintCurrentStack(ThreadState *thr, uptr pc);
 void PrintCurrentStackSlow(uptr pc);  // uses libunwind
+MBlock *JavaHeapBlock(uptr addr, uptr *start);
 
 void Initialize(ThreadState *thr);
 void MaybeSpawnBackgroundThread();
@@ -760,10 +735,10 @@ void MemoryRangeImitateWrite(ThreadState *thr, uptr pc, uptr addr, uptr size);
 void MemoryRangeImitateWriteOrResetRange(ThreadState *thr, uptr pc, uptr addr,
                                          uptr size);
 
-void ThreadIgnoreBegin(ThreadState *thr, uptr pc, bool save_stack = true);
-void ThreadIgnoreEnd(ThreadState *thr, uptr pc);
-void ThreadIgnoreSyncBegin(ThreadState *thr, uptr pc, bool save_stack = true);
-void ThreadIgnoreSyncEnd(ThreadState *thr, uptr pc);
+void ThreadIgnoreBegin(ThreadState *thr, uptr pc);
+void ThreadIgnoreEnd(ThreadState *thr);
+void ThreadIgnoreSyncBegin(ThreadState *thr, uptr pc);
+void ThreadIgnoreSyncEnd(ThreadState *thr);
 
 void FuncEntry(ThreadState *thr, uptr pc);
 void FuncExit(ThreadState *thr);
@@ -808,7 +783,7 @@ void Acquire(ThreadState *thr, uptr pc, uptr addr);
 // handle Go finalizers. Namely, finalizer goroutine executes AcquireGlobal
 // right before executing finalizers. This provides a coarse, but simple
 // approximation of the actual required synchronization.
-void AcquireGlobal(ThreadState *thr, uptr pc);
+void AcquireGlobal(ThreadState *thr);
 void Release(ThreadState *thr, uptr pc, uptr addr);
 void ReleaseStoreAcquire(ThreadState *thr, uptr pc, uptr addr);
 void ReleaseStore(ThreadState *thr, uptr pc, uptr addr);
@@ -854,7 +829,6 @@ void ALWAYS_INLINE TraceAddEvent(ThreadState *thr, FastState fs,
   DCHECK_GE((int)typ, 0);
   DCHECK_LE((int)typ, 7);
   DCHECK_EQ(GetLsb(addr, kEventPCBits), addr);
-  StatInc(thr, StatEvents);
   u64 pos = fs.GetTracePos();
   if (UNLIKELY((pos % kTracePartSize) == 0)) {
 #if !SANITIZER_GO
@@ -884,6 +858,19 @@ void FiberSwitch(ThreadState *thr, uptr pc, ThreadState *fiber, unsigned flags);
 enum FiberSwitchFlags {
   FiberSwitchFlagNoSync = 1 << 0, // __tsan_switch_to_fiber_no_sync
 };
+
+extern bool is_initialized;
+
+ALWAYS_INLINE
+void LazyInitialize(ThreadState *thr) {
+  // If we can use .preinit_array, assume that __tsan_init
+  // called from .preinit_array initializes runtime before
+  // any instrumented code.
+#if !SANITIZER_CAN_USE_PREINIT_ARRAY
+  if (UNLIKELY(!is_initialized))
+    Initialize(thr);
+#endif
+}
 
 }  // namespace __tsan
 
