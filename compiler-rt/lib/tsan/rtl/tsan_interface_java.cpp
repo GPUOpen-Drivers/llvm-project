@@ -129,14 +129,14 @@ void __tsan_java_move(jptr src, jptr dst, jptr size) {
   ctx->metamap.MoveMemory(src, dst, size);
 
   // Move shadow.
-  u64 *s = (u64*)MemToShadow(src);
-  u64 *d = (u64*)MemToShadow(dst);
-  u64 *send = (u64*)MemToShadow(src + size);
+  RawShadow *s = MemToShadow(src);
+  RawShadow *d = MemToShadow(dst);
+  RawShadow *send = MemToShadow(src + size);
   uptr inc = 1;
   if (dst > src) {
-    s = (u64*)MemToShadow(src + size) - 1;
-    d = (u64*)MemToShadow(dst + size) - 1;
-    send = (u64*)MemToShadow(src) - 1;
+    s = MemToShadow(src + size) - 1;
+    d = MemToShadow(dst + size) - 1;
+    send = MemToShadow(src) - 1;
     inc = -1;
   }
   for (; s != send; s += inc, d += inc) {
@@ -164,7 +164,7 @@ jptr __tsan_java_find(jptr *from_ptr, jptr to) {
 
 void __tsan_java_finalize() {
   JAVA_FUNC_ENTER(__tsan_java_finalize);
-  DPrintf("#%d: java_mutex_finalize()\n", thr->tid);
+  DPrintf("#%d: java_finalize()\n", thr->tid);
   AcquireGlobal(thr);
 }
 

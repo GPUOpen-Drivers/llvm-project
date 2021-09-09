@@ -18,8 +18,10 @@
 namespace mlir {
 
 class ConversionTarget;
+struct LogicalResult;
 class MLIRContext;
 class Region;
+class RewriterBase;
 class TypeConverter;
 class RewritePatternSet;
 using OwningRewritePatternList = RewritePatternSet;
@@ -27,6 +29,8 @@ class Operation;
 
 namespace scf {
 
+class IfOp;
+class ForOp;
 class ParallelOp;
 class ForOp;
 
@@ -34,6 +38,51 @@ class ForOp;
 /// into one scf.parallel operations. Uses a naive aliasing and dependency
 /// analysis.
 void naivelyFuseParallelOps(Region &region);
+
+/// Rewrite a for loop with bounds/step that potentially do not divide evenly
+/// into a for loop where the step divides the iteration space evenly, followed
+/// by an scf.if for the last (partial) iteration (if any; returned via `ifOp`).
+/// This transformation is called "loop peeling".
+///
+/// This transformation is beneficial for a wide range of transformations such
+/// as vectorization or loop tiling: It enables additional canonicalizations
+/// inside the peeled loop body such as rewriting masked loads into unmaked
+/// loads.
+///
+/// E.g., assuming a lower bound of 0 (for illustration purposes):
+/// ```
+/// scf.for %iv = %c0 to %ub step %c4 {
+///   (loop body)
+/// }
+/// ```
+/// is rewritten into the following pseudo IR:
+/// ```
+/// %newUb = %ub - (%ub mod %c4)
+/// scf.for %iv = %c0 to %newUb step %c4 {
+///   (loop body)
+/// }
+/// scf.if %newUb < %ub {
+///   (loop body)
+/// }
+/// ```
+///
+/// After loop peeling, this function tries to simplify/canonicalize affine.min
+/// operations in the body of the loop and the scf.if, taking advantage of the
+/// fact that every iteration of the peeled loop is a "full" iteration. This
+/// canonicalization is expected to enable further canonicalization
+/// opportunities through other patterns.
+///
+/// The return value indicates whether the loop was rewritten or not. Loops are
+/// not rewritten if:
+/// * Loop step size is 1 or
+/// * Loop bounds and step size are static, and step already divides the
+///   iteration space evenly.
+///
+/// Note: This function rewrites the given scf.for loop in-place and creates a
+/// new scf.if operation for the last iteration. It replaces all uses of the
+/// unpeeled loop with the results of the newly generated scf.if.
+LogicalResult peelAndCanonicalizeForLoop(RewriterBase &rewriter, ForOp forOp,
+                                         scf::IfOp &ifOp);
 
 /// Tile a parallel loop of the form
 ///   scf.parallel (%i0, %i1) = (%arg0, %arg1) to (%arg2, %arg3)
@@ -51,7 +100,8 @@ void naivelyFuseParallelOps(Region &region);
 /// The function returns the resulting ParallelOps, i.e. {outer_loop_op,
 /// inner_loop_op}.
 std::pair<ParallelOp, ParallelOp>
-tileParallelLoop(ParallelOp op, llvm::ArrayRef<int64_t> tileSizes);
+tileParallelLoop(ParallelOp op, llvm::ArrayRef<int64_t> tileSizes,
+                 bool noMinMaxBounds);
 
 /// Populates patterns for SCF structural type conversions and sets up the
 /// provided ConversionTarget with the appropriate legality configuration for

@@ -18,6 +18,12 @@ if (NOT LIBOMPTARGET_BUILD_AMDGCN_BCLIB)
   return()
 endif()
 
+if (NOT LIBOMPTARGET_LLVM_INCLUDE_DIRS)
+  libomptarget_say("Not building AMDGCN device RTL: Missing definition for LIBOMPTARGET_LLVM_INCLUDE_DIRS")
+  return()
+endif()
+
+
 # Copied from nvptx CMakeLists
 if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "x86_64")
   set(aux_triple x86_64-unknown-linux-gnu)
@@ -103,11 +109,15 @@ if (DEFINED LIBOMPTARGET_AMDGCN_GFXLIST)
   set(mcpus ${LIBOMPTARGET_AMDGCN_GFXLIST})
 endif()
 
+# Prepend -I to each list element
+set (LIBOMPTARGET_LLVM_INCLUDE_DIRS_AMDGCN "${LIBOMPTARGET_LLVM_INCLUDE_DIRS}")
+list(TRANSFORM LIBOMPTARGET_LLVM_INCLUDE_DIRS_AMDGCN PREPEND "-I")
+
 macro(add_cuda_bc_library)
   set(cu_cmd ${CLANG_TOOL}
     -xc++
     -c
-    -mllvm -openmp-opt-disable-internalization
+    -mllvm -openmp-opt-disable
     -std=c++14
     -ffreestanding
     -target amdgcn-amd-amdhsa
@@ -123,7 +133,8 @@ macro(add_cuda_bc_library)
     ${CUDA_DEBUG}
     -I${CMAKE_CURRENT_SOURCE_DIR}/src
     -I${devicertl_base_directory}/common/include
-    -I${devicertl_base_directory})
+    -I${devicertl_base_directory}
+    ${LIBOMPTARGET_LLVM_INCLUDE_DIRS_AMDGCN})
 
   set(bc1_files)
 
@@ -157,7 +168,7 @@ foreach(mcpu ${mcpus})
   add_custom_command(
     OUTPUT ${bc_libname}
     COMMAND ${LINK_TOOL} ${bc_files} | ${OPT_TOOL} --always-inline -o ${OUTPUTDIR}/${bc_libname}
-    DEPENDS ${bc_files})
+    DEPENDS ${bc_files} llvm-link opt)
 
   add_custom_target(lib${libname}-${mcpu} ALL DEPENDS ${bc_libname})
 
