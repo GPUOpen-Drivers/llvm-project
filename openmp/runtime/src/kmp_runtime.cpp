@@ -5537,7 +5537,6 @@ void __kmp_free_team(kmp_root_t *root,
   int use_hot_team = team == root->r.r_hot_team;
 #if KMP_NESTED_HOT_TEAMS
   int level;
-  kmp_hot_team_ptr_t *hot_teams;
   if (master) {
     level = team->t.t_active_level - 1;
     if (master->th.th_teams_microtask) { // in teams construct?
@@ -5551,7 +5550,9 @@ void __kmp_free_team(kmp_root_t *root,
         // team_of_workers before the parallel
       } // team->t.t_level will be increased inside parallel
     }
-    hot_teams = master->th.th_hot_teams;
+#if KMP_DEBUG
+    kmp_hot_team_ptr_t *hot_teams = master->th.th_hot_teams;
+#endif
     if (level < __kmp_hot_teams_max_level) {
       KMP_DEBUG_ASSERT(team == hot_teams[level].hot_team);
       use_hot_team = 1;
@@ -6594,7 +6595,7 @@ void __kmp_register_library_startup(void) {
 
     char *value = NULL; // Actual value of the environment variable.
 
-#if KMP_OS_UNIX && KMP_DYNAMIC_LIB // shared memory is with dynamic library
+#if defined(KMP_USE_SHM)
     char *shm_name = __kmp_str_format("/%s", name);
     int shm_preexist = 0;
     char *data1;
@@ -6699,7 +6700,7 @@ void __kmp_register_library_startup(void) {
       } break;
       case 2: { // Neighbor is dead.
 
-#if KMP_OS_UNIX && KMP_DYNAMIC_LIB // shared memory is with dynamic library
+#if defined(KMP_USE_SHM)
         // close shared memory.
         shm_unlink(shm_name); // this removes file in /dev/shm
 #else
@@ -6713,7 +6714,7 @@ void __kmp_register_library_startup(void) {
       }
     }
     KMP_INTERNAL_FREE((void *)value);
-#if KMP_OS_UNIX && KMP_DYNAMIC_LIB // shared memory is with dynamic library
+#if defined(KMP_USE_SHM)
     KMP_INTERNAL_FREE((void *)shm_name);
 #endif
   } // while
@@ -6726,7 +6727,7 @@ void __kmp_unregister_library(void) {
   char *name = __kmp_reg_status_name();
   char *value = NULL;
 
-#if KMP_OS_UNIX && KMP_DYNAMIC_LIB // shared memory is with dynamic library
+#if defined(KMP_USE_SHM)
   char *shm_name = __kmp_str_format("/%s", name);
   int fd1 = shm_open(shm_name, O_RDONLY, 0666);
   if (fd1 == -1) {
@@ -6747,14 +6748,14 @@ void __kmp_unregister_library(void) {
   KMP_DEBUG_ASSERT(__kmp_registration_str != NULL);
   if (value != NULL && strcmp(value, __kmp_registration_str) == 0) {
 //  Ok, this is our variable. Delete it.
-#if KMP_OS_UNIX && KMP_DYNAMIC_LIB // shared memory is with dynamic library
+#if defined(KMP_USE_SHM)
     shm_unlink(shm_name); // this removes file in /dev/shm
 #else
     __kmp_env_unset(name);
 #endif
   }
 
-#if KMP_OS_UNIX && KMP_DYNAMIC_LIB // shared memory is with dynamic library
+#if defined(KMP_USE_SHM)
   KMP_INTERNAL_FREE(shm_name);
 #endif
 

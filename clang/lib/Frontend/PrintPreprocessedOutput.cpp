@@ -182,7 +182,7 @@ public:
   /// implicitly when at the beginning of the file.
   ///
   /// @param Tok                 Token where to move to.
-  /// @param RequiresStartOfLine Whether the next line depends on being in the
+  /// @param RequireStartOfLine  Whether the next line depends on being in the
   ///                            first column, such as a directive.
   ///
   /// @return Whether column adjustments are necessary.
@@ -646,7 +646,9 @@ void PrintPPOutputPPCallbacks::HandleWhitespaceBeforeTok(const Token &Tok,
        !Tok.is(tok::annot_module_begin) && !Tok.is(tok::annot_module_end)))
     return;
 
-  if (!RequireSameLine && MoveToLine(Tok, /*RequireStartOfLine=*/false)) {
+  // EmittedDirectiveOnThisLine takes priority over RequireSameLine.
+  if ((!RequireSameLine || EmittedDirectiveOnThisLine) &&
+      MoveToLine(Tok, /*RequireStartOfLine=*/EmittedDirectiveOnThisLine)) {
     if (MinimizeWhitespace) {
       // Avoid interpreting hash as a directive under -fpreprocessed.
       if (Tok.is(tok::hash))

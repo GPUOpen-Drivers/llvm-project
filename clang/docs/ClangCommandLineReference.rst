@@ -1705,7 +1705,7 @@ Enable support for int128\_t type
 
 .. option:: -ffp-contract=<arg>
 
-Form fused FP ops (e.g. FMAs): fast (fuses across statements disregarding pragmas) \| on (only fuses in the same statement unless dictated by pragmas) \| off (never fuses) \| fast-honor-pragmas (fuses across statements unless diectated by pragmas). Default is 'fast' for CUDA, 'fast-honor-pragmas' for HIP, and 'on' otherwise.
+Form fused FP ops (e.g. FMAs): fast (fuses across statements disregarding pragmas) \| on (only fuses in the same statement unless dictated by pragmas) \| off (never fuses) \| fast-honor-pragmas (fuses across statements unless dictated by pragmas). Default is 'fast' for CUDA, 'fast-honor-pragmas' for HIP, and 'on' otherwise.
 
 .. option:: -ffp-exception-behavior=<arg>
 
@@ -1940,6 +1940,10 @@ Microsoft compiler version number to report in \_MSC\_VER (0 = don't define it (
 .. option:: -fnew-alignment=<align>, -fnew-alignment <arg>
 
 Specifies the largest alignment guaranteed by '::operator new(size\_t)'
+
+.. option:: -fnew-infallible
+
+Treats throwing global C++ operator new as always returning valid memory (annotates with \_\_attribute\_\_((returns\_nonnull)) and throw()). This is detectable in source.
 
 .. option:: -fnext-runtime
 
@@ -2539,7 +2543,7 @@ Give global types 'default' visibility and global functions and variables 'hidde
 
 .. option:: -fvisibility-nodllstorageclass=<arg>
 
-The visibility for defintiions without an explicit DLL export class \[-fvisibility-from-dllstorageclass\]
+The visibility for definitions without an explicit DLL export class \[-fvisibility-from-dllstorageclass\]
 
 .. option:: -fvisibility=<arg>
 
@@ -3548,6 +3552,8 @@ X86
 .. option:: -mavx512er, -mno-avx512er
 
 .. option:: -mavx512f, -mno-avx512f
+
+.. option:: -mavx512fp16, -mno-avx512fp16
 
 .. option:: -mavx512ifma, -mno-avx512ifma
 
