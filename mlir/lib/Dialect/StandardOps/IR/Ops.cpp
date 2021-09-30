@@ -105,9 +105,7 @@ static void printStandardUnaryOp(Operation *op, OpAsmPrinter &p) {
   assert(op->getNumOperands() == 1 && "unary op should have one operand");
   assert(op->getNumResults() == 1 && "unary op should have one result");
 
-  int stdDotLen = StandardOpsDialect::getDialectNamespace().size() + 1;
-  p << op->getName().getStringRef().drop_front(stdDotLen) << ' '
-    << op->getOperand(0);
+  p << ' ' << op->getOperand(0);
   p.printOptionalAttrDict(op->getAttrs());
   p << " : " << op->getOperand(0).getType();
 }
@@ -127,9 +125,7 @@ static void printStandardBinaryOp(Operation *op, OpAsmPrinter &p) {
     return;
   }
 
-  int stdDotLen = StandardOpsDialect::getDialectNamespace().size() + 1;
-  p << op->getName().getStringRef().drop_front(stdDotLen) << ' '
-    << op->getOperand(0) << ", " << op->getOperand(1);
+  p << ' ' << op->getOperand(0) << ", " << op->getOperand(1);
   p.printOptionalAttrDict(op->getAttrs());
 
   // Now we can output only one type for all operands and the result.
@@ -152,9 +148,7 @@ static void printStandardTernaryOp(Operation *op, OpAsmPrinter &p) {
     return;
   }
 
-  int stdDotLen = StandardOpsDialect::getDialectNamespace().size() + 1;
-  p << op->getName().getStringRef().drop_front(stdDotLen) << ' '
-    << op->getOperand(0) << ", " << op->getOperand(1) << ", "
+  p << ' ' << op->getOperand(0) << ", " << op->getOperand(1) << ", "
     << op->getOperand(2);
   p.printOptionalAttrDict(op->getAttrs());
 
@@ -165,10 +159,8 @@ static void printStandardTernaryOp(Operation *op, OpAsmPrinter &p) {
 /// A custom cast operation printer that omits the "std." prefix from the
 /// operation names.
 static void printStandardCastOp(Operation *op, OpAsmPrinter &p) {
-  int stdDotLen = StandardOpsDialect::getDialectNamespace().size() + 1;
-  p << op->getName().getStringRef().drop_front(stdDotLen) << ' '
-    << op->getOperand(0) << " : " << op->getOperand(0).getType() << " to "
-    << op->getResult(0).getType();
+  p << ' ' << op->getOperand(0) << " : " << op->getOperand(0).getType()
+    << " to " << op->getResult(0).getType();
 }
 
 void StandardOpsDialect::initialize() {
@@ -296,8 +288,7 @@ OpFoldResult AndOp::fold(ArrayRef<Attribute> operands) {
     return rhs();
   /// and(x, allOnes) -> x
   APInt intValue;
-  if (matchPattern(rhs(), m_ConstantInt(&intValue)) &&
-      intValue.isAllOnesValue())
+  if (matchPattern(rhs(), m_ConstantInt(&intValue)) && intValue.isAllOnes())
     return lhs();
   /// and(x,x) -> x
   if (lhs() == rhs())
@@ -359,9 +350,32 @@ static LogicalResult verify(AtomicRMWOp op) {
 Attribute mlir::getIdentityValueAttr(AtomicRMWKind kind, Type resultType,
                                      OpBuilder &builder, Location loc) {
   switch (kind) {
+  case AtomicRMWKind::maxf:
+    return builder.getFloatAttr(
+        resultType,
+        APFloat::getInf(resultType.cast<FloatType>().getFloatSemantics(),
+                        /*Negative=*/true));
   case AtomicRMWKind::addf:
   case AtomicRMWKind::addi:
+  case AtomicRMWKind::maxu:
     return builder.getZeroAttr(resultType);
+  case AtomicRMWKind::maxs:
+    return builder.getIntegerAttr(
+        resultType,
+        APInt::getSignedMinValue(resultType.cast<IntegerType>().getWidth()));
+  case AtomicRMWKind::minf:
+    return builder.getFloatAttr(
+        resultType,
+        APFloat::getInf(resultType.cast<FloatType>().getFloatSemantics(),
+                        /*Negative=*/false));
+  case AtomicRMWKind::mins:
+    return builder.getIntegerAttr(
+        resultType,
+        APInt::getSignedMaxValue(resultType.cast<IntegerType>().getWidth()));
+  case AtomicRMWKind::minu:
+    return builder.getIntegerAttr(
+        resultType,
+        APInt::getMaxValue(resultType.cast<IntegerType>().getWidth()));
   case AtomicRMWKind::muli:
     return builder.getIntegerAttr(resultType, 1);
   case AtomicRMWKind::mulf:
@@ -394,6 +408,30 @@ Value mlir::getReductionOp(AtomicRMWKind op, OpBuilder &builder, Location loc,
     return builder.create<MulFOp>(loc, lhs, rhs);
   case AtomicRMWKind::muli:
     return builder.create<MulIOp>(loc, lhs, rhs);
+  case AtomicRMWKind::maxf:
+    return builder.create<SelectOp>(
+        loc, builder.create<CmpFOp>(loc, CmpFPredicate::OGT, lhs, rhs), lhs,
+        rhs);
+  case AtomicRMWKind::minf:
+    return builder.create<SelectOp>(
+        loc, builder.create<CmpFOp>(loc, CmpFPredicate::OLT, lhs, rhs), lhs,
+        rhs);
+  case AtomicRMWKind::maxs:
+    return builder.create<SelectOp>(
+        loc, builder.create<CmpIOp>(loc, CmpIPredicate::sgt, lhs, rhs), lhs,
+        rhs);
+  case AtomicRMWKind::mins:
+    return builder.create<SelectOp>(
+        loc, builder.create<CmpIOp>(loc, CmpIPredicate::slt, lhs, rhs), lhs,
+        rhs);
+  case AtomicRMWKind::maxu:
+    return builder.create<SelectOp>(
+        loc, builder.create<CmpIOp>(loc, CmpIPredicate::ugt, lhs, rhs), lhs,
+        rhs);
+  case AtomicRMWKind::minu:
+    return builder.create<SelectOp>(
+        loc, builder.create<CmpIOp>(loc, CmpIPredicate::ult, lhs, rhs), lhs,
+        rhs);
   // TODO: Add remaining reduction operations.
   default:
     (void)emitOptionalError(loc, "Reduction operation type not supported");
@@ -465,7 +503,7 @@ static ParseResult parseGenericAtomicRMWOp(OpAsmParser &parser,
 }
 
 static void print(OpAsmPrinter &p, GenericAtomicRMWOp op) {
-  p << op.getOperationName() << ' ' << op.memref() << "[" << op.indices()
+  p << ' ' << op.memref() << "[" << op.indices()
     << "] : " << op.memref().getType();
   p.printRegion(op.body());
   p.printOptionalAttrDict(op->getAttrs());
@@ -1133,7 +1171,7 @@ Block *CondBranchOp::getSuccessorForOperands(ArrayRef<Attribute> operands) {
 //===----------------------------------------------------------------------===//
 
 static void print(OpAsmPrinter &p, ConstantOp &op) {
-  p << "constant ";
+  p << " ";
   p.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
 
   if (op->getAttrs().size() > 1)
@@ -1641,7 +1679,7 @@ OpFoldResult SelectOp::fold(ArrayRef<Attribute> operands) {
 }
 
 static void print(OpAsmPrinter &p, SelectOp op) {
-  p << "select " << op.getOperands();
+  p << " " << op.getOperands();
   p.printOptionalAttrDict(op->getAttrs());
   p << " : ";
   if (ShapedType condType = op.getCondition().getType().dyn_cast<ShapedType>())
@@ -1782,7 +1820,7 @@ OpFoldResult SignedFloorDivIOp::fold(ArrayRef<Attribute> operands) {
       return a;
     }
     unsigned bits = a.getBitWidth();
-    APInt zero = APInt::getNullValue(bits);
+    APInt zero = APInt::getZero(bits);
     if (a.sge(zero) && b.sgt(zero)) {
       // Both positive (or a is zero), return a / b.
       return a.sdiv_ov(b, overflowOrDiv0);
@@ -1832,7 +1870,7 @@ OpFoldResult SignedCeilDivIOp::fold(ArrayRef<Attribute> operands) {
       return a;
     }
     unsigned bits = a.getBitWidth();
-    APInt zero = APInt::getNullValue(bits);
+    APInt zero = APInt::getZero(bits);
     if (a.sgt(zero) && b.sgt(zero)) {
       // Both positive, return ceil(a, b).
       return signedCeilNonnegInputs(a, b, overflowOrDiv0);

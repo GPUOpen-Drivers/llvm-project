@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -585,9 +587,41 @@ bool SIFixSGPRCopies::runOnMachineFunction(MachineFunction &MF) {
       case AMDGPU::SOFT_WQM:
       case AMDGPU::STRICT_WWM: {
         Register DstReg = MI.getOperand(0).getReg();
-
         const TargetRegisterClass *SrcRC, *DstRC;
         std::tie(SrcRC, DstRC) = getCopyRegClasses(MI, *TRI, *MRI);
+
+        if (MI.isCopy()) {
+          Register SrcReg = MI.getOperand(1).getReg();
+          if (SrcReg == AMDGPU::SCC) {
+            Register SCCCopy = MRI->createVirtualRegister(
+                TRI->getRegClass(AMDGPU::SReg_1_XEXECRegClassID));
+            I = BuildMI(*MI.getParent(),
+                        std::next(MachineBasicBlock::iterator(MI)),
+                        MI.getDebugLoc(),
+                        TII->get(ST.isWave32() ? AMDGPU::S_CSELECT_B32
+                                               : AMDGPU::S_CSELECT_B64),
+                        SCCCopy)
+                    .addImm(-1)
+                    .addImm(0);
+            I = BuildMI(*MI.getParent(), std::next(I), I->getDebugLoc(),
+                    TII->get(AMDGPU::COPY), DstReg)
+                .addReg(SCCCopy);
+            MI.eraseFromParent();
+            continue;
+          } else if (DstReg == AMDGPU::SCC) {
+            unsigned Opcode =
+                ST.isWave64() ? AMDGPU::S_AND_B64 : AMDGPU::S_AND_B32;
+            Register EXEC = ST.isWave64() ? AMDGPU::EXEC : AMDGPU::EXEC_LO;
+            Register Tmp = MRI->createVirtualRegister(TRI->getBoolRC());
+            I = BuildMI(*MI.getParent(), std::next(MachineBasicBlock::iterator(MI)),
+                    MI.getDebugLoc(), TII->get(Opcode))
+                    .addReg(Tmp, getDefRegState(true))
+                .addReg(SrcReg, getKillRegState(MI.getOperand(1).isKill()))
+                .addReg(EXEC);
+            MI.eraseFromParent();
+            continue;
+          }
+        }
 
         if (!DstReg.isVirtual()) {
           // If the destination register is a physical register there isn't
