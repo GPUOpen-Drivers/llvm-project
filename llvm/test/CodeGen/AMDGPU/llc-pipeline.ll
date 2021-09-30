@@ -52,6 +52,7 @@
 ; GCN-O0-NEXT:      Expand vector predication intrinsics
 ; GCN-O0-NEXT:      Scalarize Masked Memory Intrinsics
 ; GCN-O0-NEXT:      Expand reduction intrinsics
+; GCN-O0-NEXT:    AMDGPU Attributor
 ; GCN-O0-NEXT:    CallGraph Construction
 ; GCN-O0-NEXT:    Call Graph SCC Pass Manager
 ; GCN-O0-NEXT:      AMDGPU Annotate Kernel Features
@@ -222,6 +223,7 @@
 ; GCN-O1-NEXT:      Expand vector predication intrinsics
 ; GCN-O1-NEXT:      Scalarize Masked Memory Intrinsics
 ; GCN-O1-NEXT:      Expand reduction intrinsics
+; GCN-O1-NEXT:    AMDGPU Attributor
 ; GCN-O1-NEXT:    CallGraph Construction
 ; GCN-O1-NEXT:    Call Graph SCC Pass Manager
 ; GCN-O1-NEXT:      AMDGPU Annotate Kernel Features
@@ -313,11 +315,6 @@
 ; GCN-O1-NEXT:        SI Fold Operands
 ; GCN-O1-NEXT:        GCN DPP Combine
 ; GCN-O1-NEXT:        SI Load Store Optimizer
-; GCN-O1-NEXT:        MachineDominator Tree Construction
-; GCN-O1-NEXT:        Slot index numbering
-; GCN-O1-NEXT:        Live Interval Analysis
-; GCN-O1-NEXT:        Analysis of per BB register pressure
-; GCN-O1-NEXT:        SI Memory operation coalescer
 ; GCN-O1-NEXT:        Remove dead machine instructions
 ; GCN-O1-NEXT:        SI Shrink Instructions
 ; GCN-O1-NEXT:        Register Usage Information Propagation
@@ -389,7 +386,7 @@
 ; GCN-O1-NEXT:        SI post-RA bundler
 ; GCN-O1-NEXT:        MachineDominator Tree Construction
 ; GCN-O1-NEXT:        Machine Natural Loop Construction
-; GCN-O1-NEXT:        Post RA top-down list latency scheduler
+; GCN-O1-NEXT:        PostRA Machine Instruction Scheduler
 ; GCN-O1-NEXT:        Machine Block Frequency Analysis
 ; GCN-O1-NEXT:        MachinePostDominator Tree Construction
 ; GCN-O1-NEXT:        Branch Probability Basic Block Placement
@@ -505,6 +502,7 @@
 ; GCN-O1-OPTS-NEXT:      Scalarize Masked Memory Intrinsics
 ; GCN-O1-OPTS-NEXT:      Expand reduction intrinsics
 ; GCN-O1-OPTS-NEXT:      Early CSE
+; GCN-O1-OPTS-NEXT:    AMDGPU Attributor
 ; GCN-O1-OPTS-NEXT:    CallGraph Construction
 ; GCN-O1-OPTS-NEXT:    Call Graph SCC Pass Manager
 ; GCN-O1-OPTS-NEXT:      AMDGPU Annotate Kernel Features
@@ -602,13 +600,9 @@
 ; GCN-O1-OPTS-NEXT:        SI Fold Operands
 ; GCN-O1-OPTS-NEXT:        GCN DPP Combine
 ; GCN-O1-OPTS-NEXT:        SI Load Store Optimizer
-; GCN-O1-OPTS-NEXT:        MachineDominator Tree Construction
-; GCN-O1-OPTS-NEXT:        Slot index numbering
-; GCN-O1-OPTS-NEXT:        Live Interval Analysis
-; GCN-O1-OPTS-NEXT:        Analysis of per BB register pressure
-; GCN-O1-OPTS-NEXT:        SI Memory operation coalescer
 ; GCN-O1-OPTS-NEXT:        SI Peephole SDWA
 ; GCN-O1-OPTS-NEXT:        Machine Block Frequency Analysis
+; GCN-O1-OPTS-NEXT:        MachineDominator Tree Construction
 ; GCN-O1-OPTS-NEXT:        Early Machine Loop Invariant Code Motion
 ; GCN-O1-OPTS-NEXT:        MachineDominator Tree Construction
 ; GCN-O1-OPTS-NEXT:        Machine Block Frequency Analysis
@@ -686,7 +680,7 @@
 ; GCN-O1-OPTS-NEXT:        SI post-RA bundler
 ; GCN-O1-OPTS-NEXT:        MachineDominator Tree Construction
 ; GCN-O1-OPTS-NEXT:        Machine Natural Loop Construction
-; GCN-O1-OPTS-NEXT:        Post RA top-down list latency scheduler
+; GCN-O1-OPTS-NEXT:        PostRA Machine Instruction Scheduler
 ; GCN-O1-OPTS-NEXT:        Machine Block Frequency Analysis
 ; GCN-O1-OPTS-NEXT:        MachinePostDominator Tree Construction
 ; GCN-O1-OPTS-NEXT:        Branch Probability Basic Block Placement
@@ -802,6 +796,7 @@
 ; GCN-O2-NEXT:      Scalarize Masked Memory Intrinsics
 ; GCN-O2-NEXT:      Expand reduction intrinsics
 ; GCN-O2-NEXT:      Early CSE
+; GCN-O2-NEXT:    AMDGPU Attributor
 ; GCN-O2-NEXT:    CallGraph Construction
 ; GCN-O2-NEXT:    Call Graph SCC Pass Manager
 ; GCN-O2-NEXT:      AMDGPU Annotate Kernel Features
@@ -900,13 +895,9 @@
 ; GCN-O2-NEXT:        SI Fold Operands
 ; GCN-O2-NEXT:        GCN DPP Combine
 ; GCN-O2-NEXT:        SI Load Store Optimizer
-; GCN-O2-NEXT:        MachineDominator Tree Construction
-; GCN-O2-NEXT:        Slot index numbering
-; GCN-O2-NEXT:        Live Interval Analysis
-; GCN-O2-NEXT:        Analysis of per BB register pressure
-; GCN-O2-NEXT:        SI Memory operation coalescer
 ; GCN-O2-NEXT:        SI Peephole SDWA
 ; GCN-O2-NEXT:        Machine Block Frequency Analysis
+; GCN-O2-NEXT:        MachineDominator Tree Construction
 ; GCN-O2-NEXT:        Early Machine Loop Invariant Code Motion
 ; GCN-O2-NEXT:        MachineDominator Tree Construction
 ; GCN-O2-NEXT:        Machine Block Frequency Analysis
@@ -985,7 +976,7 @@
 ; GCN-O2-NEXT:        SI post-RA bundler
 ; GCN-O2-NEXT:        MachineDominator Tree Construction
 ; GCN-O2-NEXT:        Machine Natural Loop Construction
-; GCN-O2-NEXT:        Post RA top-down list latency scheduler
+; GCN-O2-NEXT:        PostRA Machine Instruction Scheduler
 ; GCN-O2-NEXT:        Machine Block Frequency Analysis
 ; GCN-O2-NEXT:        MachinePostDominator Tree Construction
 ; GCN-O2-NEXT:        Branch Probability Basic Block Placement
@@ -1114,6 +1105,7 @@
 ; GCN-O3-NEXT:      Lazy Block Frequency Analysis
 ; GCN-O3-NEXT:      Optimization Remark Emitter
 ; GCN-O3-NEXT:      Global Value Numbering
+; GCN-O3-NEXT:    AMDGPU Attributor
 ; GCN-O3-NEXT:    CallGraph Construction
 ; GCN-O3-NEXT:    Call Graph SCC Pass Manager
 ; GCN-O3-NEXT:      AMDGPU Annotate Kernel Features
@@ -1212,13 +1204,9 @@
 ; GCN-O3-NEXT:        SI Fold Operands
 ; GCN-O3-NEXT:        GCN DPP Combine
 ; GCN-O3-NEXT:        SI Load Store Optimizer
-; GCN-O3-NEXT:        MachineDominator Tree Construction
-; GCN-O3-NEXT:        Slot index numbering
-; GCN-O3-NEXT:        Live Interval Analysis
-; GCN-O3-NEXT:        Analysis of per BB register pressure
-; GCN-O3-NEXT:        SI Memory operation coalescer
 ; GCN-O3-NEXT:        SI Peephole SDWA
 ; GCN-O3-NEXT:        Machine Block Frequency Analysis
+; GCN-O3-NEXT:        MachineDominator Tree Construction
 ; GCN-O3-NEXT:        Early Machine Loop Invariant Code Motion
 ; GCN-O3-NEXT:        MachineDominator Tree Construction
 ; GCN-O3-NEXT:        Machine Block Frequency Analysis
@@ -1297,7 +1285,7 @@
 ; GCN-O3-NEXT:        SI post-RA bundler
 ; GCN-O3-NEXT:        MachineDominator Tree Construction
 ; GCN-O3-NEXT:        Machine Natural Loop Construction
-; GCN-O3-NEXT:        Post RA top-down list latency scheduler
+; GCN-O3-NEXT:        PostRA Machine Instruction Scheduler
 ; GCN-O3-NEXT:        Machine Block Frequency Analysis
 ; GCN-O3-NEXT:        MachinePostDominator Tree Construction
 ; GCN-O3-NEXT:        Branch Probability Basic Block Placement

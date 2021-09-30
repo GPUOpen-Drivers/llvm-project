@@ -19,6 +19,7 @@
 #include "clang/Basic/OperatorPrecedence.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Format/Format.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "format-indenter"
@@ -492,8 +493,12 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
       return true;
   }
 
-  // Break after the closing parenthesis of TypeScript decorators.
+  // Break after the closing parenthesis of TypeScript decorators before
+  // functions, getters and setters.
+  static const llvm::StringSet<> BreakBeforeDecoratedTokens = {"get", "set",
+                                                               "function"};
   if (Style.Language == FormatStyle::LK_JavaScript &&
+      BreakBeforeDecoratedTokens.contains(Current.TokenText) &&
       Previous.is(tok::r_paren) && Previous.is(TT_JavaAnnotation)) {
     return true;
   }
@@ -953,7 +958,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
          State.Line->MustBeDeclaration) ||
         (!Style.AllowAllArgumentsOnNextLine &&
          !State.Line->MustBeDeclaration) ||
-        (!Style.AllowAllConstructorInitializersOnNextLine &&
+        (Style.PackConstructorInitializers != FormatStyle::PCIS_NextLine &&
          PreviousIsBreakingCtorInitializerColon) ||
         Previous.is(TT_DictLiteral))
       State.Stack.back().BreakBeforeParameter = true;
@@ -962,7 +967,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
     // and we allow all arguments on the next line, we should not break
     // before the next parameter.
     if (PreviousIsBreakingCtorInitializerColon &&
-        Style.AllowAllConstructorInitializersOnNextLine)
+        Style.PackConstructorInitializers == FormatStyle::PCIS_NextLine)
       State.Stack.back().BreakBeforeParameter = false;
   }
 
@@ -1242,10 +1247,10 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
              ? 0
              : 2);
     State.Stack.back().NestedBlockIndent = State.Stack.back().Indent;
-    if (Style.ConstructorInitializerAllOnOneLineOrOnePerLine) {
+    if (Style.PackConstructorInitializers > FormatStyle::PCIS_BinPack) {
       State.Stack.back().AvoidBinPacking = true;
       State.Stack.back().BreakBeforeParameter =
-          !Style.AllowAllConstructorInitializersOnNextLine;
+          Style.PackConstructorInitializers != FormatStyle::PCIS_NextLine;
     } else {
       State.Stack.back().BreakBeforeParameter = false;
     }
@@ -1255,7 +1260,7 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
     State.Stack.back().Indent =
         State.FirstIndent + Style.ConstructorInitializerIndentWidth;
     State.Stack.back().NestedBlockIndent = State.Stack.back().Indent;
-    if (Style.ConstructorInitializerAllOnOneLineOrOnePerLine)
+    if (Style.PackConstructorInitializers > FormatStyle::PCIS_BinPack)
       State.Stack.back().AvoidBinPacking = true;
   }
   if (Current.is(TT_InheritanceColon))

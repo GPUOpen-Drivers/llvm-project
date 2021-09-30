@@ -63,9 +63,6 @@ def HasAM            : Predicate<"Subtarget->hasAM()">,
 def HasSEL2          : Predicate<"Subtarget->hasSEL2()">,
                        AssemblerPredicate<(all_of FeatureSEL2), "sel2">;
 
-def HasPMU           : Predicate<"Subtarget->hasPMU()">,
-                       AssemblerPredicate<(all_of FeaturePMU), "pmu">;
-
 def HasTLB_RMI          : Predicate<"Subtarget->hasTLB_RMI()">,
                        AssemblerPredicate<(all_of FeatureTLB_RMI), "tlb-rmi">;
 
@@ -691,40 +688,40 @@ let isReMaterializable = 1, isCodeGenOnly = 1 in {
 // removed, along with the AArch64Wrapper node.
 
 let AddedComplexity = 10 in
-def LOADgot : Pseudo<(outs GPR64:$dst), (ins i64imm:$addr),
-                     [(set GPR64:$dst, (AArch64LOADgot tglobaladdr:$addr))]>,
+def LOADgot : Pseudo<(outs GPR64common:$dst), (ins i64imm:$addr),
+                     [(set GPR64common:$dst, (AArch64LOADgot tglobaladdr:$addr))]>,
               Sched<[WriteLDAdr]>;
 
 // The MOVaddr instruction should match only when the add is not folded
 // into a load or store address.
 def MOVaddr
-    : Pseudo<(outs GPR64:$dst), (ins i64imm:$hi, i64imm:$low),
-             [(set GPR64:$dst, (AArch64addlow (AArch64adrp tglobaladdr:$hi),
+    : Pseudo<(outs GPR64common:$dst), (ins i64imm:$hi, i64imm:$low),
+             [(set GPR64common:$dst, (AArch64addlow (AArch64adrp tglobaladdr:$hi),
                                             tglobaladdr:$low))]>,
       Sched<[WriteAdrAdr]>;
 def MOVaddrJT
-    : Pseudo<(outs GPR64:$dst), (ins i64imm:$hi, i64imm:$low),
-             [(set GPR64:$dst, (AArch64addlow (AArch64adrp tjumptable:$hi),
+    : Pseudo<(outs GPR64common:$dst), (ins i64imm:$hi, i64imm:$low),
+             [(set GPR64common:$dst, (AArch64addlow (AArch64adrp tjumptable:$hi),
                                              tjumptable:$low))]>,
       Sched<[WriteAdrAdr]>;
 def MOVaddrCP
-    : Pseudo<(outs GPR64:$dst), (ins i64imm:$hi, i64imm:$low),
-             [(set GPR64:$dst, (AArch64addlow (AArch64adrp tconstpool:$hi),
+    : Pseudo<(outs GPR64common:$dst), (ins i64imm:$hi, i64imm:$low),
+             [(set GPR64common:$dst, (AArch64addlow (AArch64adrp tconstpool:$hi),
                                              tconstpool:$low))]>,
       Sched<[WriteAdrAdr]>;
 def MOVaddrBA
-    : Pseudo<(outs GPR64:$dst), (ins i64imm:$hi, i64imm:$low),
-             [(set GPR64:$dst, (AArch64addlow (AArch64adrp tblockaddress:$hi),
+    : Pseudo<(outs GPR64common:$dst), (ins i64imm:$hi, i64imm:$low),
+             [(set GPR64common:$dst, (AArch64addlow (AArch64adrp tblockaddress:$hi),
                                              tblockaddress:$low))]>,
       Sched<[WriteAdrAdr]>;
 def MOVaddrTLS
-    : Pseudo<(outs GPR64:$dst), (ins i64imm:$hi, i64imm:$low),
-             [(set GPR64:$dst, (AArch64addlow (AArch64adrp tglobaltlsaddr:$hi),
+    : Pseudo<(outs GPR64common:$dst), (ins i64imm:$hi, i64imm:$low),
+             [(set GPR64common:$dst, (AArch64addlow (AArch64adrp tglobaltlsaddr:$hi),
                                             tglobaltlsaddr:$low))]>,
       Sched<[WriteAdrAdr]>;
 def MOVaddrEXT
-    : Pseudo<(outs GPR64:$dst), (ins i64imm:$hi, i64imm:$low),
-             [(set GPR64:$dst, (AArch64addlow (AArch64adrp texternalsym:$hi),
+    : Pseudo<(outs GPR64common:$dst), (ins i64imm:$hi, i64imm:$low),
+             [(set GPR64common:$dst, (AArch64addlow (AArch64adrp texternalsym:$hi),
                                             texternalsym:$low))]>,
       Sched<[WriteAdrAdr]>;
 // Normally AArch64addlow either gets folded into a following ldr/str,
@@ -732,8 +729,8 @@ def MOVaddrEXT
 // might appear without either of them, so allow lowering it into a plain
 // add.
 def ADDlowTLS
-    : Pseudo<(outs GPR64:$dst), (ins GPR64:$src, i64imm:$low),
-             [(set GPR64:$dst, (AArch64addlow GPR64:$src,
+    : Pseudo<(outs GPR64sp:$dst), (ins GPR64sp:$src, i64imm:$low),
+             [(set GPR64sp:$dst, (AArch64addlow GPR64sp:$src,
                                             tglobaltlsaddr:$low))]>,
       Sched<[WriteAdr]>;
 
@@ -873,7 +870,7 @@ defm UDOTlane : SIMDThreeSameVectorDotIndex<1, 0, 0b10, "udot", AArch64udot>;
 }
 
 // ARMv8.6-A BFloat
-let Predicates = [HasBF16] in {
+let Predicates = [HasNEON, HasBF16] in {
 defm BFDOT       : SIMDThreeSameVectorBFDot<1, "bfdot">;
 defm BF16DOTlane : SIMDThreeSameVectorBF16DotI<0, "bfdot">;
 def BFMMLA       : SIMDThreeSameVectorBF16MatrixMul<"bfmmla">;
@@ -883,7 +880,6 @@ def BFMLALBIdx   : SIMDBF16MLALIndex<0, "bfmlalb", int_aarch64_neon_bfmlalb>;
 def BFMLALTIdx   : SIMDBF16MLALIndex<1, "bfmlalt", int_aarch64_neon_bfmlalt>;
 def BFCVTN       : SIMD_BFCVTN;
 def BFCVTN2      : SIMD_BFCVTN2;
-def BFCVT        : BF16ToSinglePrecision<"bfcvt">;
 
 // Vector-scalar BFDOT:
 // The second source operand of the 64-bit variant of BF16DOTlane is a 128-bit
@@ -901,6 +897,10 @@ def : Pat<(v2f32 (int_aarch64_neon_bfdot
           (BF16DOTlanev4bf16 (v2f32 V64:$Rd), (v4bf16 V64:$Rn),
                              (SUBREG_TO_REG (i32 0), V64:$Rm, dsub),
                              VectorIndexS:$idx)>;
+}
+
+let Predicates = [HasNEONorStreamingSVE, HasBF16] in {
+def BFCVT : BF16ToSinglePrecision<"bfcvt">;
 }
 
 // ARMv8.6A AArch64 matrix multiplication
@@ -975,6 +975,15 @@ def : SHA3_pattern<EOR3, int_aarch64_crypto_eor3u, v16i8>;
 def : SHA3_pattern<EOR3, int_aarch64_crypto_eor3u, v8i16>;
 def : SHA3_pattern<EOR3, int_aarch64_crypto_eor3u, v4i32>;
 def : SHA3_pattern<EOR3, int_aarch64_crypto_eor3u, v2i64>;
+
+class EOR3_pattern<ValueType VecTy>
+  : Pat<(xor (xor (VecTy V128:$Vn), (VecTy V128:$Vm)), (VecTy V128:$Va)),
+        (EOR3 (VecTy V128:$Vn), (VecTy V128:$Vm), (VecTy V128:$Va))>;
+
+def : EOR3_pattern<v16i8>;
+def : EOR3_pattern<v8i16>;
+def : EOR3_pattern<v4i32>;
+def : EOR3_pattern<v2i64>;
 
 def : SHA3_pattern<BCAX, int_aarch64_crypto_bcaxu, v16i8>;
 def : SHA3_pattern<BCAX, int_aarch64_crypto_bcaxu, v8i16>;
@@ -1052,8 +1061,7 @@ defm FCMLA : SIMDThreeSameVectorTiedComplexHSD<1, 0b110, complexrotateop,
                                                "fcmla", null_frag>;
 defm FCADD : SIMDThreeSameVectorComplexHSD<1, 0b111, complexrotateopodd,
                                            "fcadd", null_frag>;
-defm FCMLA : SIMDIndexedTiedComplexHSD<1, 0, 1, complexrotateop, "fcmla",
-                                       null_frag>;
+defm FCMLA : SIMDIndexedTiedComplexHSD<0, 1, complexrotateop, "fcmla">;
 
 let Predicates = [HasComplxNum, HasNEON, HasFullFP16] in {
   def : Pat<(v4f16 (int_aarch64_neon_vcadd_rot90 (v4f16 V64:$Rn), (v4f16 V64:$Rm))),
@@ -1638,8 +1646,8 @@ def : ShiftAlias<"rorv", RORVXr, GPR64>;
 
 // Multiply-add
 let AddedComplexity = 5 in {
-defm MADD : MulAccum<0, "madd", add>;
-defm MSUB : MulAccum<1, "msub", sub>;
+defm MADD : MulAccum<0, "madd">;
+defm MSUB : MulAccum<1, "msub">;
 
 def : Pat<(i32 (mul GPR32:$Rn, GPR32:$Rm)),
           (MADDWrrr GPR32:$Rn, GPR32:$Rm, WZR)>;
@@ -3132,7 +3140,7 @@ defm STRB : Store8RO< 0b00,  1, 0b00, FPR8Op,   "str", untyped, store>;
 defm STRH : Store16RO<0b01,  1, 0b00, FPR16Op,  "str", f16,     store>;
 defm STRS : Store32RO<0b10,  1, 0b00, FPR32Op,  "str", f32,     store>;
 defm STRD : Store64RO<0b11,  1, 0b00, FPR64Op,  "str", f64,     store>;
-defm STRQ : Store128RO<0b00, 1, 0b10, FPR128Op, "str", f128,    store>;
+defm STRQ : Store128RO<0b00, 1, 0b10, FPR128Op, "str">;
 
 let Predicates = [UseSTRQro], AddedComplexity = 10 in {
   def : Pat<(store (f128 FPR128:$Rt),
@@ -4144,6 +4152,22 @@ defm FCVTXN : SIMDFPInexactCvtTwoVector<1, 0, 0b10110, "fcvtxn",
                                         int_aarch64_neon_fcvtxn>;
 defm FCVTZS : SIMDTwoVectorFPToInt<0, 1, 0b11011, "fcvtzs", fp_to_sint>;
 defm FCVTZU : SIMDTwoVectorFPToInt<1, 1, 0b11011, "fcvtzu", fp_to_uint>;
+
+// AArch64's FCVT instructions saturate when out of range.
+multiclass SIMDTwoVectorFPToIntSatPats<SDNode to_int_sat, string INST> {
+  def : Pat<(v4i16 (to_int_sat v4f16:$Rn, i16)),
+            (!cast<Instruction>(INST # v4f16) v4f16:$Rn)>;
+  def : Pat<(v8i16 (to_int_sat v8f16:$Rn, i16)),
+            (!cast<Instruction>(INST # v8f16) v8f16:$Rn)>;
+  def : Pat<(v2i32 (to_int_sat v2f32:$Rn, i32)),
+            (!cast<Instruction>(INST # v2f32) v2f32:$Rn)>;
+  def : Pat<(v4i32 (to_int_sat v4f32:$Rn, i32)),
+            (!cast<Instruction>(INST # v4f32) v4f32:$Rn)>;
+  def : Pat<(v2i64 (to_int_sat v2f64:$Rn, i64)),
+            (!cast<Instruction>(INST # v2f64) v2f64:$Rn)>;
+}
+defm : SIMDTwoVectorFPToIntSatPats<fp_to_sint_sat, "FCVTZS">;
+defm : SIMDTwoVectorFPToIntSatPats<fp_to_uint_sat, "FCVTZU">;
 
 def : Pat<(v4i16 (int_aarch64_neon_fcvtzs v4f16:$Rn)), (FCVTZSv4f16 $Rn)>;
 def : Pat<(v8i16 (int_aarch64_neon_fcvtzs v8f16:$Rn)), (FCVTZSv8f16 $Rn)>;
@@ -5229,7 +5253,7 @@ def : Pat<(v16i8 (int_aarch64_neon_tbx1 (v16i8 V128:$Rd),
 // AdvSIMD scalar CPY instruction
 //----------------------------------------------------------------------------
 
-defm CPY : SIMDScalarCPY<"cpy">;
+defm CPY : SIMDScalarCPY<"mov">;
 
 //----------------------------------------------------------------------------
 // AdvSIMD scalar pairwise instructions

@@ -2066,24 +2066,6 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
       // allows it to work on indirect virtual function calls.
       if (AttrOnCallSite && TargetDecl->hasAttr<NoMergeAttr>())
         FuncAttrs.addAttribute(llvm::Attribute::NoMerge);
-
-      // Add known guaranteed alignment for allocation functions.
-      if (unsigned BuiltinID = Fn->getBuiltinID()) {
-        switch (BuiltinID) {
-        case Builtin::BIaligned_alloc:
-        case Builtin::BIcalloc:
-        case Builtin::BImalloc:
-        case Builtin::BImemalign:
-        case Builtin::BIrealloc:
-        case Builtin::BIstrdup:
-        case Builtin::BIstrndup:
-          RetAttrs.addAlignmentAttr(Context.getTargetInfo().getNewAlign() /
-                                    Context.getTargetInfo().getCharWidth());
-          break;
-        default:
-          break;
-        }
-      }
     }
 
     // 'const', 'pure' and 'noalias' attributed functions are also nounwind.
@@ -5316,6 +5298,15 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   if (getDebugInfo() && TargetDecl &&
       TargetDecl->hasAttr<MSAllocatorAttr>())
     getDebugInfo()->addHeapAllocSiteMetadata(CI, RetTy->getPointeeType(), Loc);
+
+  // Add metadata if calling an __attribute__((error(""))) or warning fn.
+  if (TargetDecl && TargetDecl->hasAttr<ErrorAttr>()) {
+    llvm::ConstantInt *Line =
+        llvm::ConstantInt::get(Int32Ty, Loc.getRawEncoding());
+    llvm::ConstantAsMetadata *MD = llvm::ConstantAsMetadata::get(Line);
+    llvm::MDTuple *MDT = llvm::MDNode::get(getLLVMContext(), {MD});
+    CI->setMetadata("srcloc", MDT);
+  }
 
   // 4. Finish the call.
 
