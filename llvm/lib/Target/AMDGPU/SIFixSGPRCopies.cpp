@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -604,20 +602,21 @@ bool SIFixSGPRCopies::runOnMachineFunction(MachineFunction &MF) {
                     .addImm(-1)
                     .addImm(0);
             I = BuildMI(*MI.getParent(), std::next(I), I->getDebugLoc(),
-                    TII->get(AMDGPU::COPY), DstReg)
-                .addReg(SCCCopy);
+                        TII->get(AMDGPU::COPY), DstReg)
+                    .addReg(SCCCopy);
             MI.eraseFromParent();
             continue;
           } else if (DstReg == AMDGPU::SCC) {
             unsigned Opcode =
                 ST.isWave64() ? AMDGPU::S_AND_B64 : AMDGPU::S_AND_B32;
-            Register EXEC = ST.isWave64() ? AMDGPU::EXEC : AMDGPU::EXEC_LO;
+            Register Exec = ST.isWave64() ? AMDGPU::EXEC : AMDGPU::EXEC_LO;
             Register Tmp = MRI->createVirtualRegister(TRI->getBoolRC());
-            I = BuildMI(*MI.getParent(), std::next(MachineBasicBlock::iterator(MI)),
-                    MI.getDebugLoc(), TII->get(Opcode))
+            I = BuildMI(*MI.getParent(),
+                        std::next(MachineBasicBlock::iterator(MI)),
+                        MI.getDebugLoc(), TII->get(Opcode))
                     .addReg(Tmp, getDefRegState(true))
-                .addReg(SrcReg, getKillRegState(MI.getOperand(1).isKill()))
-                .addReg(EXEC);
+                    .addReg(SrcReg)
+                    .addReg(Exec);
             MI.eraseFromParent();
             continue;
           }
