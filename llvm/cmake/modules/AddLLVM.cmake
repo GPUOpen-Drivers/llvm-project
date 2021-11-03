@@ -1,3 +1,5 @@
+# Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+# Notified per clause 4(b) of the license.
 include(LLVMDistributionSupport)
 include(LLVMProcessSources)
 include(LLVM-Config)
@@ -1584,11 +1586,9 @@ endfunction()
 # use it and can't be in a lit module. Use with make_paths_relative().
 string(CONCAT LLVM_LIT_PATH_FUNCTION
   "# Allow generated file to be relocatable.\n"
-  "from pathlib import Path\n"
   "def path(p):\n"
   "    if not p: return ''\n"
-  "    return str((Path(__file__).parent / p).resolve())\n"
-  )
+  "    return os.path.join(os.path.dirname(os.path.abspath(__file__)), p)\n"  )
 
 # This function provides an automatic way to 'configure'-like generate a file
 # based on a set of common and custom variables, specifically targeting the
