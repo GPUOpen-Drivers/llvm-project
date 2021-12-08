@@ -14,6 +14,7 @@
 
 #include "lld/Common/LLVM.h"
 #include "lld/Common/Memory.h"
+#include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/BinaryFormat/MachO.h"
@@ -69,6 +70,7 @@ public:
   virtual ~InputFile() = default;
   Kind kind() const { return fileKind; }
   StringRef getName() const { return name; }
+  static void resetIdCount() { idCount = 0; }
 
   MemoryBufferRef mb;
 
@@ -119,6 +121,7 @@ private:
                         SubsectionMap &);
   void parseDebugInfo();
   void parseDataInCode();
+  void registerCompactUnwind();
 };
 
 // command-line -sectcreate file
@@ -209,6 +212,7 @@ public:
 };
 
 extern llvm::SetVector<InputFile *> inputFiles;
+extern llvm::DenseMap<llvm::CachedHashStringRef, MemoryBufferRef> cachedReads;
 
 llvm::Optional<MemoryBufferRef> readFile(StringRef path);
 

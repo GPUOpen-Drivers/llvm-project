@@ -375,7 +375,7 @@ bool ExternalFileUnit::BeginReadingRecord(IoErrorHandler &handler) {
     if (access == Access::Sequential) {
       if (endfileRecordNumber && currentRecordNumber >= *endfileRecordNumber) {
         handler.SignalEnd();
-      } else if (isFixedRecordLength) {
+      } else if (isFixedRecordLength && access == Access::Direct) {
         RUNTIME_CHECK(handler, recordLength.has_value());
         auto need{
             static_cast<std::size_t>(recordOffsetInFrame_ + *recordLength)};
@@ -406,30 +406,30 @@ void ExternalFileUnit::FinishReadingRecord(IoErrorHandler &handler) {
     // avoid bogus crashes in END/ERR circumstances
   } else if (access == Access::Sequential) {
     RUNTIME_CHECK(handler, recordLength.has_value());
-    if (isFixedRecordLength) {
-      frameOffsetInFile_ += recordOffsetInFrame_ + *recordLength;
+    recordOffsetInFrame_ += *recordLength;
+    if (isFixedRecordLength && access == Access::Direct) {
+      frameOffsetInFile_ += recordOffsetInFrame_;
       recordOffsetInFrame_ = 0;
     } else {
       RUNTIME_CHECK(handler, isUnformatted.has_value());
+      recordLength.reset();
       if (isUnformatted.value_or(false)) {
         // Retain footer in frame for more efficient BACKSPACE
-        frameOffsetInFile_ += recordOffsetInFrame_ + *recordLength;
+        frameOffsetInFile_ += recordOffsetInFrame_;
         recordOffsetInFrame_ = sizeof(std::uint32_t);
-        recordLength.reset();
       } else { // formatted
-        if (FrameLength() > recordOffsetInFrame_ + *recordLength &&
-            Frame()[recordOffsetInFrame_ + *recordLength] == '\r') {
+        if (FrameLength() > recordOffsetInFrame_ &&
+            Frame()[recordOffsetInFrame_] == '\r') {
           ++recordOffsetInFrame_;
         }
         if (FrameLength() >= recordOffsetInFrame_ &&
-            Frame()[recordOffsetInFrame_ + *recordLength] == '\n') {
+            Frame()[recordOffsetInFrame_] == '\n') {
           ++recordOffsetInFrame_;
         }
-        if (!resumptionRecordNumber || mayPosition()) {
-          frameOffsetInFile_ += recordOffsetInFrame_ + *recordLength;
+        if (!pinnedFrame || mayPosition()) {
+          frameOffsetInFile_ += recordOffsetInFrame_;
           recordOffsetInFrame_ = 0;
         }
-        recordLength.reset();
       }
     }
   }
@@ -444,16 +444,17 @@ bool ExternalFileUnit::AdvanceRecord(IoErrorHandler &handler) {
   } else { // Direction::Output
     bool ok{true};
     RUNTIME_CHECK(handler, isUnformatted.has_value());
-    if (isFixedRecordLength && recordLength) {
+    if (isFixedRecordLength && recordLength &&
+        furthestPositionInRecord < *recordLength) {
       // Pad remainder of fixed length record
-      if (furthestPositionInRecord < *recordLength) {
-        WriteFrame(
-            frameOffsetInFile_, recordOffsetInFrame_ + *recordLength, handler);
-        std::memset(Frame() + recordOffsetInFrame_ + furthestPositionInRecord,
-            isUnformatted.value_or(false) ? 0 : ' ',
-            *recordLength - furthestPositionInRecord);
-      }
-    } else {
+      WriteFrame(
+          frameOffsetInFile_, recordOffsetInFrame_ + *recordLength, handler);
+      std::memset(Frame() + recordOffsetInFrame_ + furthestPositionInRecord,
+          isUnformatted.value_or(false) ? 0 : ' ',
+          *recordLength - furthestPositionInRecord);
+      furthestPositionInRecord = *recordLength;
+    }
+    if (!(isFixedRecordLength && access == Access::Direct)) {
       positionInRecord = furthestPositionInRecord;
       if (isUnformatted.value_or(false)) {
         // Append the length of a sequential unformatted variable-length record
@@ -498,7 +499,7 @@ void ExternalFileUnit::BackspaceRecord(IoErrorHandler &handler) {
       DoImpliedEndfile(handler);
       if (frameOffsetInFile_ + recordOffsetInFrame_ > 0) {
         --currentRecordNumber;
-        if (isFixedRecordLength) {
+        if (isFixedRecordLength && access == Access::Direct) {
           BackspaceFixedRecord(handler);
         } else {
           RUNTIME_CHECK(handler, isUnformatted.has_value());

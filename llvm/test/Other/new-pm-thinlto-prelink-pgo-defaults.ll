@@ -69,6 +69,7 @@
 ; CHECK-O123SZ-NEXT: Running pass: EarlyCSEPass on foo
 ; CHECK-O123SZ-NEXT: Running pass: SimplifyCFGPass on foo
 ; CHECK-O123SZ-NEXT: Running pass: InstCombinePass on foo
+; CHECK-O123SZ-NEXT: Invalidating analysis: InlineAdvisorAnalysis
 ; CHECK-O123SZ-NEXT: Running pass: GlobalDCEPass
 ; CHECK-O-NEXT: Running pass: PGOInstrumentationUse
 ; These next two can appear in any order since they are accessed as parameters
@@ -85,6 +86,7 @@
 ; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy
 ; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on foo
 ; CHECK-O-NEXT: Running pass: ModuleInlinerWrapperPass
+; CHECK-O-NEXT: Running analysis: InlineAdvisorAnalysis
 ; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}GlobalsAA
 ; CHECK-O-NEXT: Running analysis: GlobalsAA
 ; CHECK-O-NEXT: Running analysis: CallGraphAnalysis
@@ -102,20 +104,16 @@
 ; CHECK-O-NEXT: Running analysis: AAManager
 ; CHECK-O-NEXT: Running analysis: BasicAA
 ; CHECK-O-NEXT: Running analysis: AssumptionAnalysis
+; CHECK-O-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis
 ; CHECK-O-NEXT: Running analysis: ScopedNoAliasAA
 ; CHECK-O-NEXT: Running analysis: TypeBasedAA
 ; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy
 ; CHECK-O3-NEXT: Running pass: ArgumentPromotionPass
-; CHECK-O3-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-O2-NEXT: Running pass: OpenMPOptCGSCCPass
 ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass
 ; CHECK-O-NEXT: Running pass: SROA
 ; CHECK-O-NEXT: Running pass: EarlyCSEPass
-; CHECK-O1-NEXT: Running analysis: TargetIRAnalysis on foo
-; CHECK-O2-NEXT: Running analysis: TargetIRAnalysis on foo
-; CHECK-Os-NEXT: Running analysis: TargetIRAnalysis on foo
-; CHECK-Oz-NEXT: Running analysis: TargetIRAnalysis on foo
 ; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis
 ; CHECK-O23SZ-NEXT: Running pass: SpeculativeExecutionPass
 ; CHECK-O23SZ-NEXT: Running pass: JumpThreadingPass
@@ -198,6 +196,7 @@
 ; CHECK-O3-NEXT: Running analysis: RegionInfoAnalysis on foo
 ; CHECK-O3-NEXT: Running analysis: DominanceFrontierAnalysis on foo
 ; CHECK-O-NEXT: Running pass: CoroSplitPass
+; CHECK-O-NEXT: Invalidating analysis: InlineAdvisorAnalysis
 ; CHECK-O-NEXT: Running pass: GlobalOptPass
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on bar
 ; CHECK-EXT: Running pass: {{.*}}::Bye

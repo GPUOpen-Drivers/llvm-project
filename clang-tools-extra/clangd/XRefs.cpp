@@ -80,6 +80,9 @@ const NamedDecl *getDefinition(const NamedDecl *D) {
     return VD->getDefinition();
   if (const auto *FD = dyn_cast<FunctionDecl>(D))
     return FD->getDefinition();
+  if (const auto *CTD = dyn_cast<ClassTemplateDecl>(D))
+    if (const auto *RD = CTD->getTemplatedDecl())
+      return RD->getDefinition();
   // Objective-C classes can have three types of declarations:
   //
   // - forward declaration: @class MyClass;
@@ -1391,13 +1394,11 @@ ReferencesResult findReferences(ParsedAST &AST, Position Pos, uint32_t Limit,
         // Special case: For virtual methods, report decl/def of overrides and
         // references to all overridden methods in complete type hierarchy.
         if (const auto *CMD = llvm::dyn_cast<CXXMethodDecl>(ND)) {
-          if (CMD->isVirtual())
-            if (IdentifierAtCursor && SM.getSpellingLoc(CMD->getLocation()) ==
-                                          IdentifierAtCursor->location()) {
-              if (auto ID = getSymbolID(CMD))
-                OverriddenBy.Subjects.insert(ID);
-              getOverriddenMethods(CMD, OverriddenMethods);
-            }
+          if (CMD->isVirtual()) {
+            if (auto ID = getSymbolID(CMD))
+              OverriddenBy.Subjects.insert(ID);
+            getOverriddenMethods(CMD, OverriddenMethods);
+          }
         }
       }
     }

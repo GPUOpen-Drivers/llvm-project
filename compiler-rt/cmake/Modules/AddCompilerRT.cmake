@@ -130,11 +130,14 @@ macro(set_output_name output name arch)
       else()
         set(triple "${TARGET_TRIPLE}")
       endif()
-      # When using arch-suffixed runtime library names, clang only looks for
-      # libraries named "arm" or "armhf", see getArchNameForCompilerRTLib in
-      # clang. Therefore, try to inspect both the arch name and the triple
-      # if it seems like we're building an armhf target.
-      if ("${arch}" MATCHES "hf$" OR "${triple}" MATCHES "hf$")
+      # Except for baremetal, when using arch-suffixed runtime library names,
+      # clang only looks for libraries named "arm" or "armhf", see
+      # getArchNameForCompilerRTLib in clang. Therefore, try to inspect both
+      # the arch name and the triple if it seems like we're building an armhf
+      # target.
+      if (COMPILER_RT_BAREMETAL_BUILD)
+        set(${output} "${name}-${arch}${COMPILER_RT_OS_SUFFIX}")
+      elseif ("${arch}" MATCHES "hf$" OR "${triple}" MATCHES "hf$")
         set(${output} "${name}-armhf${COMPILER_RT_OS_SUFFIX}")
       else()
         set(${output} "${name}-arm${COMPILER_RT_OS_SUFFIX}")
@@ -254,7 +257,7 @@ function(add_compiler_rt_runtime name type)
       if(COMPILER_RT_USE_BUILTINS_LIBRARY AND NOT type STREQUAL "OBJECT" AND
          NOT name STREQUAL "clang_rt.builtins")
         get_compiler_rt_target(${arch} target)
-        find_compiler_rt_library(builtins ${target} builtins_${libname})
+        find_compiler_rt_library(builtins builtins_${libname} TARGET ${target})
         if(builtins_${libname} STREQUAL "NOTFOUND")
           message(FATAL_ERROR "Cannot find builtins library for the target architecture")
         endif()

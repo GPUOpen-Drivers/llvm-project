@@ -84,6 +84,12 @@ uint32_t ARM::calcEFlags() const {
 RelExpr ARM::getRelExpr(RelType type, const Symbol &s,
                         const uint8_t *loc) const {
   switch (type) {
+  case R_ARM_ABS32:
+  case R_ARM_MOVW_ABS_NC:
+  case R_ARM_MOVT_ABS:
+  case R_ARM_THM_MOVW_ABS_NC:
+  case R_ARM_THM_MOVT_ABS:
+    return R_ABS;
   case R_ARM_THM_JUMP11:
     return R_PC;
   case R_ARM_CALL:
@@ -156,7 +162,9 @@ RelExpr ARM::getRelExpr(RelType type, const Symbol &s,
     // not ARMv4 output, we can just ignore it.
     return R_NONE;
   default:
-    return R_ABS;
+    error(getErrorLocation(loc) + "unknown relocation (" + Twine(type) +
+          ") against symbol " + toString(s));
+    return R_NONE;
   }
 }
 
@@ -380,20 +388,25 @@ bool ARM::inBranchRange(RelType type, uint64_t src, uint64_t dst) const {
 // or Thumb.
 static void stateChangeWarning(uint8_t *loc, RelType relt, const Symbol &s) {
   assert(!s.isFunc());
+  const ErrorPlace place = getErrorPlace(loc);
+  std::string hint;
+  if (!place.srcLoc.empty())
+    hint = "; " + place.srcLoc;
   if (s.isSection()) {
     // Section symbols must be defined and in a section. Users cannot change
     // the type. Use the section name as getName() returns an empty string.
-    warn(getErrorLocation(loc) + "branch and link relocation: " +
-         toString(relt) + " to STT_SECTION symbol " +
-         cast<Defined>(s).section->name + " ; interworking not performed");
+    warn(place.loc + "branch and link relocation: " + toString(relt) +
+         " to STT_SECTION symbol " + cast<Defined>(s).section->name +
+         " ; interworking not performed" + hint);
   } else {
     // Warn with hint on how to alter the symbol type.
     warn(getErrorLocation(loc) + "branch and link relocation: " +
          toString(relt) + " to non STT_FUNC symbol: " + s.getName() +
          " interworking not performed; consider using directive '.type " +
          s.getName() +
-         ", %function' to give symbol type STT_FUNC if"
-         " interworking between ARM and Thumb is required");
+         ", %function' to give symbol type STT_FUNC if interworking between "
+         "ARM and Thumb is required" +
+         hint);
   }
 }
 
@@ -697,8 +710,7 @@ void ARM::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     break;
   }
   default:
-    error(getErrorLocation(loc) + "unrecognized relocation " +
-          toString(rel.type));
+    llvm_unreachable("unknown relocation");
   }
 }
 
@@ -836,6 +848,7 @@ int64_t ARM::getImplicitAddend(const uint8_t *buf, RelType type) const {
     return u ? imm12 : -imm12;
   }
   case R_ARM_NONE:
+  case R_ARM_V4BX:
   case R_ARM_JUMP_SLOT:
     // These relocations are defined as not having an implicit addend.
     return 0;

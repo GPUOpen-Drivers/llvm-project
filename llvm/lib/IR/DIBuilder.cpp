@@ -287,17 +287,16 @@ DIDerivedType *DIBuilder::createQualifiedType(unsigned Tag, DIType *FromTy) {
                             0, 0, None, DINode::FlagZero);
 }
 
-DIDerivedType *DIBuilder::createPointerType(
-    DIType *PointeeTy,
-    uint64_t SizeInBits,
-    uint32_t AlignInBits,
-    Optional<unsigned> DWARFAddressSpace,
-    StringRef Name) {
+DIDerivedType *
+DIBuilder::createPointerType(DIType *PointeeTy, uint64_t SizeInBits,
+                             uint32_t AlignInBits,
+                             Optional<unsigned> DWARFAddressSpace,
+                             StringRef Name, DINodeArray Annotations) {
   // FIXME: Why is there a name here?
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_pointer_type, Name,
                             nullptr, 0, nullptr, PointeeTy, SizeInBits,
-                            AlignInBits, 0, DWARFAddressSpace,
-                            DINode::FlagZero);
+                            AlignInBits, 0, DWARFAddressSpace, DINode::FlagZero,
+                            nullptr, Annotations);
 }
 
 DIDerivedType *DIBuilder::createMemberPointerType(DIType *PointeeTy,
@@ -324,10 +323,12 @@ DIDerivedType *DIBuilder::createReferenceType(
 DIDerivedType *DIBuilder::createTypedef(DIType *Ty, StringRef Name,
                                         DIFile *File, unsigned LineNo,
                                         DIScope *Context,
-                                        uint32_t AlignInBits) {
+                                        uint32_t AlignInBits,
+                                        DINodeArray Annotations) {
   return DIDerivedType::get(VMContext, dwarf::DW_TAG_typedef, Name, File,
                             LineNo, getNonCompileUnitScope(Context), Ty, 0,
-                            AlignInBits, 0, None, DINode::FlagZero);
+                            AlignInBits, 0, None, DINode::FlagZero, nullptr,
+                            Annotations);
 }
 
 DIDerivedType *DIBuilder::createFriend(DIType *Ty, DIType *FriendTy) {

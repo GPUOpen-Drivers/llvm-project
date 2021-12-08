@@ -125,25 +125,19 @@ public:
     return ST->getMinVectorRegisterBitWidth();
   }
 
+  Optional<unsigned> getVScaleForTuning() const {
+    return ST->getVScaleForTuning();
+  }
 
   /// Try to return an estimate cost factor that can be used as a multiplier
   /// when scalarizing an operation for a vector with ElementCount \p VF.
   /// For scalable vectors this currently takes the most pessimistic view based
   /// upon the maximum possible value for vscale.
-  unsigned getMaxNumElements(ElementCount VF,
-                             const Function *F = nullptr) const {
+  unsigned getMaxNumElements(ElementCount VF) const {
     if (!VF.isScalable())
       return VF.getFixedValue();
 
-    unsigned MaxNumVScale = 16;
-    if (F && F->hasFnAttribute(Attribute::VScaleRange)) {
-      unsigned VScaleMax =
-          F->getFnAttribute(Attribute::VScaleRange).getVScaleRangeArgs().second;
-      if (VScaleMax > 0)
-        MaxNumVScale = VScaleMax;
-    }
-
-    return MaxNumVScale * VF.getKnownMinValue();
+    return VF.getKnownMinValue() * ST->getVScaleForTuning();
   }
 
   unsigned getMaxInterleaveFactor(unsigned VF);

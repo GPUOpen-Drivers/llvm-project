@@ -522,7 +522,7 @@ struct Allocator {
         size > max_user_defined_malloc_size) {
       if (AllocatorMayReturnNull()) {
         Report("WARNING: AddressSanitizer failed to allocate 0x%zx bytes\n",
-               (void*)size);
+               size);
         return nullptr;
       }
       uptr malloc_limit =
@@ -908,13 +908,6 @@ AllocType AsanChunkView::GetAllocType() const {
   return (AllocType)chunk_->alloc_type;
 }
 
-static StackTrace GetStackTraceFromId(u32 id) {
-  CHECK(id);
-  StackTrace res = StackDepotGet(id);
-  CHECK(res.trace);
-  return res;
-}
-
 u32 AsanChunkView::GetAllocStackId() const {
   u32 tid = 0;
   u32 stack = 0;
@@ -929,14 +922,6 @@ u32 AsanChunkView::GetFreeStackId() const {
   u32 stack = 0;
   chunk_->GetFreeContext(tid, stack);
   return stack;
-}
-
-StackTrace AsanChunkView::GetAllocStack() const {
-  return GetStackTraceFromId(GetAllocStackId());
-}
-
-StackTrace AsanChunkView::GetFreeStack() const {
-  return GetStackTraceFromId(GetFreeStackId());
 }
 
 void InitializeAllocator(const AllocatorOptions &options) {

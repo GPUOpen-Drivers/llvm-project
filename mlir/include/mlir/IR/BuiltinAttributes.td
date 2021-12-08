@@ -34,7 +34,9 @@ class Builtin_Attr<string name, list<Trait> traits = [],
 // AffineMapAttr
 //===----------------------------------------------------------------------===//
 
-def Builtin_AffineMapAttr : Builtin_Attr<"AffineMap"> {
+def Builtin_AffineMapAttr : Builtin_Attr<"AffineMap", [
+    MemRefLayoutAttrInterface
+  ]> {
   let summary = "An Attribute containing an AffineMap object";
   let description = [{
     Syntax:
@@ -56,7 +58,10 @@ def Builtin_AffineMapAttr : Builtin_Attr<"AffineMap"> {
       return $_get(value.getContext(), value);
     }]>
   ];
-  let extraClassDeclaration = "using ValueType = AffineMap;";
+  let extraClassDeclaration = [{
+    using ValueType = AffineMap;
+    AffineMap getAffineMap() const { return getValue(); }
+  }];
   let skipDefaultBuilders = 1;
   let typeBuilder = "IndexType::get($_value.getContext())";
 }
@@ -66,7 +71,8 @@ def Builtin_AffineMapAttr : Builtin_Attr<"AffineMap"> {
 //===----------------------------------------------------------------------===//
 
 def Builtin_ArrayAttr : Builtin_Attr<"Array", [
-    DeclareAttrInterfaceMethods<SubElementAttrInterface>
+    DeclareAttrInterfaceMethods<SubElementAttrInterface,
+        ["replaceImmediateSubAttribute"]>
   ]> {
   let summary = "A collection of other Attribute values";
   let description = [{
@@ -168,9 +174,7 @@ def Builtin_DenseIntOrFPElementsAttr : Builtin_Attr<
                         "ArrayRef<char>":$rawData);
   let extraClassDeclaration = [{
     using DenseElementsAttr::empty;
-    using DenseElementsAttr::getFlatValue;
     using DenseElementsAttr::getNumElements;
-    using DenseElementsAttr::getValue;
     using DenseElementsAttr::getValues;
     using DenseElementsAttr::isSplat;
     using DenseElementsAttr::size;
@@ -307,9 +311,7 @@ def Builtin_DenseStringElementsAttr : Builtin_Attr<
   ];
   let extraClassDeclaration = [{
     using DenseElementsAttr::empty;
-    using DenseElementsAttr::getFlatValue;
     using DenseElementsAttr::getNumElements;
-    using DenseElementsAttr::getValue;
     using DenseElementsAttr::getValues;
     using DenseElementsAttr::isSplat;
     using DenseElementsAttr::size;
@@ -340,7 +342,8 @@ def Builtin_DenseStringElementsAttr : Builtin_Attr<
 //===----------------------------------------------------------------------===//
 
 def Builtin_DictionaryAttr : Builtin_Attr<"Dictionary", [
-    DeclareAttrInterfaceMethods<SubElementAttrInterface>
+    DeclareAttrInterfaceMethods<SubElementAttrInterface,
+        ["replaceImmediateSubAttribute"]>
   ]> {
   let summary = "An dictionary of named Attribute values";
   let description = [{
@@ -381,6 +384,10 @@ def Builtin_DictionaryAttr : Builtin_Attr<"Dictionary", [
     /// Return the specified named attribute if present, None otherwise.
     Optional<NamedAttribute> getNamed(StringRef name) const;
     Optional<NamedAttribute> getNamed(Identifier name) const;
+
+    /// Return whether the specified attribute is present.
+    bool contains(StringRef name) const;
+    bool contains(Identifier name) const;
 
     /// Support range iteration.
     using iterator = llvm::ArrayRef<NamedAttribute>::iterator;
@@ -701,10 +708,6 @@ def Builtin_OpaqueElementsAttr : Builtin_Attr<
   let extraClassDeclaration = [{
     using ValueType = StringRef;
 
-    /// Return the value at the given index. The 'index' is expected to refer to
-    /// a valid element.
-    Attribute getValue(ArrayRef<uint64_t> index) const;
-
     /// Decodes the attribute value using dialect-specific decoding hook.
     /// Returns false if decoding is successful. If not, returns true and leaves
     /// 'result' argument unspecified.
@@ -791,6 +794,7 @@ def Builtin_SparseElementsAttr : Builtin_Attr<
       // String types.
       StringRef
     >;
+    using ElementsAttr::Trait<SparseElementsAttr>::getValues;
 
     /// Provide a `value_begin_impl` to enable iteration within ElementsAttr.
     template <typename T>
@@ -806,13 +810,7 @@ def Builtin_SparseElementsAttr : Builtin_Attr<
     /// Return the values of this attribute in the form of the given type 'T'.
     /// 'T'  may be any of Attribute, APInt, APFloat, c++ integer/float types,
     /// etc.
-    template <typename T> llvm::iterator_range<iterator<T>> getValues() const;
     template <typename T> iterator<T> value_begin() const;
-    template <typename T> iterator<T> value_end() const;
-
-    /// Return the value of the element at the given index. The 'index' is
-    /// expected to refer to a valid element.
-    Attribute getValue(ArrayRef<uint64_t> index) const;
 
   private:
     /// Get a zero APFloat for the given sparse attribute.
@@ -949,10 +947,11 @@ def Builtin_SymbolRefAttr : Builtin_Attr<"SymbolRef"> {
     symbol nested within a different symbol table.
 
     This attribute can only be held internally by
-    [array attributes](#array-attribute) and
+    [array attributes](#array-attribute),
     [dictionary attributes](#dictionary-attribute)(including the top-level
-    operation attribute dictionary), i.e. no other attribute kinds such as
-    Locations or extended attribute kinds.
+    operation attribute dictionary) as well as attributes exposing it via
+    the `SubElementAttrInterface` interface. Symbol reference attributes
+    nested in types are currently not supported.
 
     **Rationale:** Identifying accesses to global data is critical to
     enabling efficient multi-threaded compilation. Restricting global

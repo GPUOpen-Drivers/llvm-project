@@ -386,15 +386,16 @@ void BTFTypeFloat::completeType(BTFDebug &BDebug) {
   BTFType.NameOff = BDebug.addString(Name);
 }
 
-BTFTypeTag::BTFTypeTag(uint32_t BaseTypeId, int ComponentIdx, StringRef Tag)
+BTFTypeDeclTag::BTFTypeDeclTag(uint32_t BaseTypeId, int ComponentIdx,
+                               StringRef Tag)
     : Tag(Tag) {
-  Kind = BTF::BTF_KIND_TAG;
+  Kind = BTF::BTF_KIND_DECL_TAG;
   BTFType.Info = Kind << 24;
   BTFType.Type = BaseTypeId;
   Info = ComponentIdx;
 }
 
-void BTFTypeTag::completeType(BTFDebug &BDebug) {
+void BTFTypeDeclTag::completeType(BTFDebug &BDebug) {
   if (IsCompleted)
     return;
   IsCompleted = true;
@@ -402,9 +403,22 @@ void BTFTypeTag::completeType(BTFDebug &BDebug) {
   BTFType.NameOff = BDebug.addString(Tag);
 }
 
-void BTFTypeTag::emitType(MCStreamer &OS) {
+void BTFTypeDeclTag::emitType(MCStreamer &OS) {
   BTFTypeBase::emitType(OS);
   OS.emitInt32(Info);
+}
+
+BTFTypeTypeTag::BTFTypeTypeTag(uint32_t BaseTypeId, StringRef Tag) : Tag(Tag) {
+  Kind = BTF::BTF_KIND_TYPE_TAG;
+  BTFType.Info = Kind << 24;
+  BTFType.Type = BaseTypeId;
+}
+
+void BTFTypeTypeTag::completeType(BTFDebug &BDebug) {
+  if (IsCompleted)
+    return;
+  IsCompleted = true;
+  BTFType.NameOff = BDebug.addString(Tag);
 }
 
 uint32_t BTFStringTable::addString(StringRef S) {
@@ -496,20 +510,21 @@ void BTFDebug::visitSubroutineType(
   }
 }
 
-void BTFDebug::processAnnotations(DINodeArray Annotations, uint32_t BaseTypeId,
-                                  int ComponentIdx) {
+void BTFDebug::processDeclAnnotations(DINodeArray Annotations,
+                                      uint32_t BaseTypeId,
+                                      int ComponentIdx) {
   if (!Annotations)
      return;
 
   for (const Metadata *Annotation : Annotations->operands()) {
     const MDNode *MD = cast<MDNode>(Annotation);
     const MDString *Name = cast<MDString>(MD->getOperand(0));
-    if (!Name->getString().equals("btf_tag"))
+    if (!Name->getString().equals("btf_decl_tag"))
       continue;
 
     const MDString *Value = cast<MDString>(MD->getOperand(1));
-    auto TypeEntry = std::make_unique<BTFTypeTag>(BaseTypeId, ComponentIdx,
-                                                  Value->getString());
+    auto TypeEntry = std::make_unique<BTFTypeDeclTag>(BaseTypeId, ComponentIdx,
+                                                      Value->getString());
     addType(std::move(TypeEntry));
   }
 }
@@ -538,14 +553,14 @@ void BTFDebug::visitStructType(const DICompositeType *CTy, bool IsStruct,
   TypeId = addType(std::move(TypeEntry), CTy);
 
   // Check struct/union annotations
-  processAnnotations(CTy->getAnnotations(), TypeId, -1);
+  processDeclAnnotations(CTy->getAnnotations(), TypeId, -1);
 
   // Visit all struct members.
   int FieldNo = 0;
   for (const auto *Element : Elements) {
     const auto Elem = cast<DIDerivedType>(Element);
     visitTypeEntry(Elem);
-    processAnnotations(Elem->getAnnotations(), TypeId, FieldNo);
+    processDeclAnnotations(Elem->getAnnotations(), TypeId, FieldNo);
     FieldNo++;
   }
 }
@@ -656,11 +671,45 @@ void BTFDebug::visitDerivedType(const DIDerivedType *DTy, uint32_t &TypeId,
     }
   }
 
-  if (Tag == dwarf::DW_TAG_pointer_type || Tag == dwarf::DW_TAG_typedef ||
-      Tag == dwarf::DW_TAG_const_type || Tag == dwarf::DW_TAG_volatile_type ||
-      Tag == dwarf::DW_TAG_restrict_type) {
+  if (Tag == dwarf::DW_TAG_pointer_type) {
+    SmallVector<const MDString *, 4> MDStrs;
+    DINodeArray Annots = DTy->getAnnotations();
+    if (Annots) {
+      for (const Metadata *Annotations : Annots->operands()) {
+        const MDNode *MD = cast<MDNode>(Annotations);
+        const MDString *Name = cast<MDString>(MD->getOperand(0));
+        if (!Name->getString().equals("btf_type_tag"))
+          continue;
+        MDStrs.push_back(cast<MDString>(MD->getOperand(1)));
+      }
+    }
+
+    if (MDStrs.size() > 0) {
+      auto TypeEntry = std::make_unique<BTFTypeDerived>(DTy, Tag, false);
+      unsigned TmpTypeId = addType(std::move(TypeEntry));
+      for (unsigned I = MDStrs.size(); I > 0; I--) {
+        const MDString *Value = MDStrs[I - 1];
+        if (I != 1) {
+          auto TypeEntry =
+              std::make_unique<BTFTypeTypeTag>(TmpTypeId, Value->getString());
+          TmpTypeId = addType(std::move(TypeEntry));
+        } else {
+          auto TypeEntry =
+              std::make_unique<BTFTypeTypeTag>(TmpTypeId, Value->getString());
+          TypeId = addType(std::move(TypeEntry), DTy);
+        }
+      }
+    } else {
+      auto TypeEntry = std::make_unique<BTFTypeDerived>(DTy, Tag, false);
+      TypeId = addType(std::move(TypeEntry), DTy);
+    }
+  } else if (Tag == dwarf::DW_TAG_typedef || Tag == dwarf::DW_TAG_const_type ||
+             Tag == dwarf::DW_TAG_volatile_type ||
+             Tag == dwarf::DW_TAG_restrict_type) {
     auto TypeEntry = std::make_unique<BTFTypeDerived>(DTy, Tag, false);
     TypeId = addType(std::move(TypeEntry), DTy);
+    if (Tag == dwarf::DW_TAG_typedef)
+      processDeclAnnotations(DTy->getAnnotations(), TypeId, -1);
   } else if (Tag != dwarf::DW_TAG_member) {
     return;
   }
@@ -830,7 +879,9 @@ void BTFDebug::emitBTFSection() {
     return;
 
   MCContext &Ctx = OS.getContext();
-  OS.SwitchSection(Ctx.getELFSection(".BTF", ELF::SHT_PROGBITS, 0));
+  MCSectionELF *Sec = Ctx.getELFSection(".BTF", ELF::SHT_PROGBITS, 0);
+  Sec->setAlignment(Align(4));
+  OS.SwitchSection(Sec);
 
   // Emit header.
   emitCommonHeader();
@@ -868,7 +919,9 @@ void BTFDebug::emitBTFExtSection() {
     return;
 
   MCContext &Ctx = OS.getContext();
-  OS.SwitchSection(Ctx.getELFSection(".BTF.ext", ELF::SHT_PROGBITS, 0));
+  MCSectionELF *Sec = Ctx.getELFSection(".BTF.ext", ELF::SHT_PROGBITS, 0);
+  Sec->setAlignment(Align(4));
+  OS.SwitchSection(Sec);
 
   // Emit header.
   emitCommonHeader();
@@ -1016,11 +1069,11 @@ void BTFDebug::beginFunctionImpl(const MachineFunction *MF) {
     if (const auto *DV = dyn_cast<DILocalVariable>(DN)) {
       uint32_t Arg = DV->getArg();
       if (Arg)
-        processAnnotations(DV->getAnnotations(), FuncTypeId, Arg - 1);
+        processDeclAnnotations(DV->getAnnotations(), FuncTypeId, Arg - 1);
     }
   }
 
-  processAnnotations(SP->getAnnotations(), FuncTypeId, -1);
+  processDeclAnnotations(SP->getAnnotations(), FuncTypeId, -1);
 
   for (const auto &TypeEntry : TypeEntries)
     TypeEntry->completeType(*this);
@@ -1272,7 +1325,7 @@ void BTFDebug::processGlobals(bool ProcessingMapDef) {
         std::make_unique<BTFKindVar>(Global.getName(), GVTypeId, GVarInfo);
     uint32_t VarId = addType(std::move(VarEntry));
 
-    processAnnotations(DIGlobal->getAnnotations(), VarId, -1);
+    processDeclAnnotations(DIGlobal->getAnnotations(), VarId, -1);
 
     // An empty SecName means an extern variable without section attribute.
     if (SecName.empty())
@@ -1369,7 +1422,7 @@ void BTFDebug::processFuncPrototypes(const Function *F) {
       std::make_unique<BTFTypeFunc>(SP->getName(), ProtoTypeId, Scope);
   uint32_t FuncId = addType(std::move(FuncTypeEntry));
 
-  processAnnotations(SP->getAnnotations(), FuncId, -1);
+  processDeclAnnotations(SP->getAnnotations(), FuncId, -1);
 
   if (F->hasSection()) {
     StringRef SecName = F->getSection();

@@ -154,9 +154,43 @@ struct ReshapeReshapeOptimization : public OpRewritePattern<tosa::ReshapeOp> {
   }
 };
 
+struct ReshapeConstOptimization : public OpRewritePattern<tosa::ReshapeOp> {
+  using OpRewritePattern<tosa::ReshapeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tosa::ReshapeOp op,
+                                PatternRewriter &rewriter) const override {
+    Value input = op.input1();
+    ArrayAttr newShape = op.new_shape();
+
+    // Check if input is constant
+    DenseElementsAttr inputAttr;
+    if (!matchPattern(input, m_Constant(&inputAttr)))
+      return failure();
+
+    // Check if has >1 consumer and is not splat
+    if (!input.hasOneUse() && !inputAttr.isSplat())
+      return failure();
+
+    // Grab the new shape
+    SmallVector<int64_t> newShapeValues = llvm::to_vector<6>(
+        llvm::map_range(newShape.getValue(), [](const Attribute &val) {
+          return val.cast<IntegerAttr>().getValue().getSExtValue();
+        }));
+
+    // Build new const op with correct output shape
+    ShapedType inputShape = input.getType().cast<ShapedType>();
+    DenseElementsAttr outputAttr =
+        inputAttr.reshape(inputShape.clone(newShapeValues));
+    rewriter.replaceOpWithNewOp<tosa::ConstOp>(op, outputAttr.getType(),
+                                               outputAttr);
+    return success();
+  }
+};
+
 void ReshapeOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
                                             MLIRContext *context) {
   results.insert<ReshapeReshapeOptimization>(context);
+  results.insert<ReshapeConstOptimization>(context);
 }
 
 struct ConstantTransposeOptimization
@@ -196,6 +230,7 @@ struct ConstantTransposeOptimization
     // Transpose the input constant. Because we don't know its rank in advance,
     // we need to loop over the range [0, element count) and delinearize the
     // index.
+    auto attrValues = inputValues.getValues<Attribute>();
     for (int srcLinearIndex = 0; srcLinearIndex < numElements;
          ++srcLinearIndex) {
       SmallVector<uint64_t, 6> srcIndices(inputType.getRank(), 0);
@@ -213,7 +248,7 @@ struct ConstantTransposeOptimization
       for (int dim = 1; dim < outputType.getRank(); ++dim)
         dstLinearIndex = dstLinearIndex * outputShape[dim] + dstIndices[dim];
 
-      outputValues[dstLinearIndex] = inputValues.getValue(srcIndices);
+      outputValues[dstLinearIndex] = attrValues[srcIndices];
     }
 
     rewriter.replaceOpWithNewOp<tosa::ConstOp>(
@@ -222,9 +257,86 @@ struct ConstantTransposeOptimization
   }
 };
 
+struct NoOpOptimization : public OpRewritePattern<tosa::TransposeOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tosa::TransposeOp op,
+                                PatternRewriter &rewriter) const override {
+    auto perm = op.perms();
+
+    DenseIntElementsAttr permAttr;
+    if (!matchPattern(perm, m_Constant(&permAttr))) {
+      return failure();
+    }
+
+    SmallVector<int64_t> permValues = llvm::to_vector<6>(
+        llvm::map_range(permAttr.getValues<APInt>(),
+                        [](const APInt &val) { return val.getSExtValue(); }));
+
+    for (int i = 0, s = permValues.size(); i < s; i++) {
+      if (i != permValues[i]) {
+        return failure();
+      }
+    }
+
+    rewriter.replaceOp(op, op.input1());
+    return success();
+  }
+};
+
 void TransposeOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
                                               MLIRContext *context) {
   results.insert<ConstantTransposeOptimization>(context);
+  results.insert<NoOpOptimization>(context);
+}
+
+struct AddZeroOptimization : public OpRewritePattern<tosa::AddOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tosa::AddOp op,
+                                PatternRewriter &rewriter) const override {
+    auto input1 = op.input1();
+    auto input2 = op.input2();
+
+    DenseElementsAttr input1Attr;
+    if (matchPattern(input1, m_Constant(&input1Attr)) && input1Attr.isSplat() &&
+        input2.getType() == op.getType()) {
+      if (input1Attr.getType().getElementType().isa<FloatType>() &&
+          input1Attr.getSplatValue<APFloat>().isZero()) {
+        rewriter.replaceOp(op, op.input2());
+        return success();
+      }
+
+      if (input1Attr.getType().getElementType().isa<IntegerType>() &&
+          input1Attr.getSplatValue<APInt>().isZero()) {
+        rewriter.replaceOp(op, op.input2());
+        return success();
+      }
+    }
+
+    DenseElementsAttr input2Attr;
+    if (matchPattern(input2, m_Constant(&input2Attr)) && input2Attr.isSplat() &&
+        input1.getType() == op.getType()) {
+      if (input2Attr.getType().getElementType().isa<FloatType>() &&
+          input2Attr.getSplatValue<APFloat>().isZero()) {
+        rewriter.replaceOp(op, op.input1());
+        return success();
+      }
+
+      if (input2Attr.getType().getElementType().isa<IntegerType>() &&
+          input2Attr.getSplatValue<APInt>().isZero()) {
+        rewriter.replaceOp(op, op.input1());
+        return success();
+      }
+    }
+
+    return failure();
+  }
+};
+
+void AddOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+                                        MLIRContext *context) {
+  results.insert<AddZeroOptimization>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -313,8 +425,7 @@ OpFoldResult TransposeOp::fold(ArrayRef<Attribute> operands) {
 // TOSA Operator Verifiers.
 //===----------------------------------------------------------------------===//
 
-template <typename T>
-static LogicalResult verifyConvOp(T op) {
+template <typename T> static LogicalResult verifyConvOp(T op) {
   // All TOSA conv ops have an input() and weight().
   auto inputType = op.input().getType().template dyn_cast<RankedTensorType>();
   auto weightType = op.weight().getType().template dyn_cast<RankedTensorType>();
@@ -340,6 +451,26 @@ static LogicalResult verifyConvOp(T op) {
     return failure();
 
   return success();
+}
+
+static LogicalResult verifyAveragePoolOp(tosa::AvgPool2dOp op) {
+  auto inputETy = op.input().getType().cast<ShapedType>().getElementType();
+  auto resultETy = op.getType().cast<ShapedType>().getElementType();
+
+  if (auto quantType = inputETy.dyn_cast<mlir::quant::UniformQuantizedType>())
+    inputETy = quantType.getStorageType();
+
+  if (auto quantType = resultETy.dyn_cast<mlir::quant::UniformQuantizedType>())
+    resultETy = quantType.getStorageType();
+
+  if (inputETy.isF32() && resultETy.isF32())
+    return success();
+  if (inputETy.isInteger(8) && resultETy.isInteger(8))
+    return success();
+  if (inputETy.isInteger(16) && resultETy.isInteger(16))
+    return success();
+
+  return op.emitOpError("input/output element types are incompatible.");
 }
 
 //===----------------------------------------------------------------------===//
@@ -478,11 +609,25 @@ static void buildUnaryOpWithQuantInfo(OpBuilder &builder,
 
 /// This builder is called on TOSA pad operator that needs to create its own
 /// OptionalAttr quantization_attr parameter to scale the padding values
-/// correctly.
+/// correctly. No pad_const is interpreted as zero-padding.
 static void buildPadOpWithQuantInfo(OpBuilder &builder, OperationState &result,
                                     Type outputType, Value input,
                                     Value paddings) {
   result.addOperands({input, paddings});
+  auto quantAttr = buildPadOpQuantizationAttr(builder, input);
+  if (quantAttr)
+    result.addAttribute("quantization_info", quantAttr);
+  result.types.push_back(outputType);
+}
+
+/// This builder is called on TOSA pad operator when an explicit pad_const
+/// value is passed in. It also optionally constructs quantization_attr.
+static void buildExplicitValuePadOpWithQuantInfo(OpBuilder &builder,
+                                                 OperationState &result,
+                                                 Type outputType, Value input,
+                                                 Value paddings,
+                                                 Value pad_const) {
+  result.addOperands({input, paddings, pad_const});
   auto quantAttr = buildPadOpQuantizationAttr(builder, input);
   if (quantAttr)
     result.addAttribute("quantization_info", quantAttr);
@@ -813,10 +958,16 @@ LogicalResult tosa::TransposeOp::inferReturnTypeComponents(
 
   // If input rank and permutation length is unknown, the output rank is
   // unknown.
-  if (!inputShape.hasRank() &&
-      (!permsShape.hasRank() || permsShape.isDynamicDim(0))) {
+  if (!inputShape.hasRank() || !permsShape.hasRank() ||
+      permsShape.isDynamicDim(0)) {
     inferredReturnShapes.push_back(ShapedTypeComponents());
     return success();
+  }
+
+  // This would imply the number of permutations does not match the rank of the
+  // input which is illegal.
+  if (permsShape.getDimSize(0) != inputShape.getRank()) {
+    return failure();
   }
 
   // Without the input dims we cannot determine the output dim sizes but we

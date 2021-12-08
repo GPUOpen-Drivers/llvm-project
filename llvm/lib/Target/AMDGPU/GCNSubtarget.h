@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //==-----------------------------------------------------------------------===//
 //
@@ -90,7 +88,6 @@ protected:
   // Used as options.
   bool EnableLoadStoreOpt;
   bool EnableUnsafeDSOffsetFolding;
-  bool EnableScratchBoundsChecks;
   bool EnableSIScheduler;
   bool EnableDS128;
   bool EnablePRTStrictNull;
@@ -100,7 +97,6 @@ protected:
   bool FP64;
   bool FMA;
   bool MIMG_R128;
-  bool IsGCN;
   bool CIInsts;
   bool GFX8Insts;
   bool GFX9Insts;
@@ -168,13 +164,8 @@ protected:
   bool HasArchitectedFlatScratch;
   bool AddNoCarryInsts;
   bool HasUnpackedD16VMem;
-  bool R600ALUInst;
-  bool CaymanISA;
-  bool CFALUBug;
   bool LDSMisalignedBug;
   bool HasMFMAInlineLiteralBug;
-  bool HasVertexCache;
-  short TexVTXClauseSize;
   bool UnalignedBufferAccess;
   bool UnalignedDSAccess;
   bool HasPackedTID;
@@ -888,10 +879,6 @@ public:
   }
 
   bool hasMadF16() const;
-
-  bool enableScratchBoundsChecks() const {
-    return EnableScratchBoundsChecks;
-  }
 
   bool enableSIScheduler() const {
     return EnableSIScheduler;

@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===------------------------------------------------------------===//
 
@@ -19,7 +17,6 @@ def p3 : PtrValueType<i32, 3>;
 def p4 : PtrValueType<i64, 4>;
 def p5 : PtrValueType<i32, 5>;
 def p6 : PtrValueType<i32, 6>;
-
 
 class BoolToList<bit Value> {
   list<int> ret = !if(Value, [1]<int>, []<int>);
@@ -685,13 +682,6 @@ def FeatureEnableUnsafeDSOffsetFolding : SubtargetFeature <
   "EnableUnsafeDSOffsetFolding",
   "true",
   "Force using DS instruction immediate offsets on SI"
->;
-
-def FeatureEnableScratchBoundsChecks : SubtargetFeature<
-  "enable-scratch-bounds-checks",
-  "EnableScratchBoundsChecks",
-  "true",
-  "Enable insertion of bounds checks on scratch accesses"
 >;
 
 def FeatureEnableSIScheduler : SubtargetFeature<"si-scheduler",

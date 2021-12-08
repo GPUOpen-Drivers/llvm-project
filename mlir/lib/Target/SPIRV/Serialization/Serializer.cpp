@@ -241,6 +241,7 @@ LogicalResult Serializer::processDecoration(Location loc, uint32_t resultID,
   case spirv::Decoration::NonWritable:
   case spirv::Decoration::NoPerspective:
   case spirv::Decoration::Restrict:
+  case spirv::Decoration::RelaxedPrecision:
     // For unit attributes, the args list has no values so we do nothing
     if (auto unitAttr = attr.second.dyn_cast<UnitAttr>())
       break;
@@ -705,11 +706,12 @@ Serializer::prepareDenseElementsConstant(Location loc, Type constType,
   if (shapedType.getRank() == dim) {
     if (auto attr = valueAttr.dyn_cast<DenseIntElementsAttr>()) {
       return attr.getType().getElementType().isInteger(1)
-                 ? prepareConstantBool(loc, attr.getValue<BoolAttr>(index))
-                 : prepareConstantInt(loc, attr.getValue<IntegerAttr>(index));
+                 ? prepareConstantBool(loc, attr.getValues<BoolAttr>()[index])
+                 : prepareConstantInt(loc,
+                                      attr.getValues<IntegerAttr>()[index]);
     }
     if (auto attr = valueAttr.dyn_cast<DenseFPElementsAttr>()) {
-      return prepareConstantFp(loc, attr.getValue<FloatAttr>(index));
+      return prepareConstantFp(loc, attr.getValues<FloatAttr>()[index]);
     }
     return 0;
   }

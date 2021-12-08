@@ -69,7 +69,8 @@ private:
 protected:
   IncludeStructure::HeaderID getID(StringRef Filename,
                                    IncludeStructure &Includes) {
-    auto Entry = Clang->getSourceManager().getFileManager().getFile(Filename);
+    auto &SM = Clang->getSourceManager();
+    auto Entry = SM.getFileManager().getFile(Filename);
     EXPECT_TRUE(Entry);
     return Includes.getOrCreateID(*Entry);
   }
@@ -81,7 +82,7 @@ protected:
         Action.BeginSourceFile(*Clang, Clang->getFrontendOpts().Inputs[0]));
     IncludeStructure Includes;
     Clang->getPreprocessor().addPPCallbacks(
-        collectIncludeStructureCallback(Clang->getSourceManager(), &Includes));
+        Includes.collect(Clang->getSourceManager()));
     EXPECT_FALSE(Action.Execute());
     Action.EndSourceFile();
     return Includes;
@@ -163,10 +164,9 @@ TEST_F(HeadersTest, CollectRewrittenAndResolved) {
   EXPECT_THAT(Includes.MainFileIncludes,
               UnorderedElementsAre(
                   AllOf(Written("\"sub/bar.h\""), Resolved(BarHeader))));
-  EXPECT_THAT(collectIncludes().includeDepth(getID(MainFile, Includes)),
-              UnorderedElementsAre(
-                  Distance(getID(MainFile, Includes), 0u),
-                  Distance(getID(testPath("sub/bar.h"), Includes), 1u)));
+  EXPECT_THAT(Includes.includeDepth(getID(MainFile, Includes)),
+              UnorderedElementsAre(Distance(getID(MainFile, Includes), 0u),
+                                   Distance(getID(BarHeader, Includes), 1u)));
 }
 
 TEST_F(HeadersTest, OnlyCollectInclusionsInMain) {
@@ -181,19 +181,16 @@ TEST_F(HeadersTest, OnlyCollectInclusionsInMain) {
 )cpp";
   auto Includes = collectIncludes();
   EXPECT_THAT(
-      collectIncludes().MainFileIncludes,
+      Includes.MainFileIncludes,
       UnorderedElementsAre(AllOf(Written("\"bar.h\""), Resolved(BarHeader))));
   EXPECT_THAT(Includes.includeDepth(getID(MainFile, Includes)),
-              UnorderedElementsAre(
-                  Distance(getID(MainFile, Includes), 0u),
-                  Distance(getID(testPath("sub/bar.h"), Includes), 1u),
-                  Distance(getID(testPath("sub/baz.h"), Includes), 2u)));
+              UnorderedElementsAre(Distance(getID(MainFile, Includes), 0u),
+                                   Distance(getID(BarHeader, Includes), 1u),
+                                   Distance(getID(BazHeader, Includes), 2u)));
   // includeDepth() also works for non-main files.
-  EXPECT_THAT(
-      collectIncludes().includeDepth(getID(testPath("sub/bar.h"), Includes)),
-      UnorderedElementsAre(
-          Distance(getID(testPath("sub/bar.h"), Includes), 0u),
-          Distance(getID(testPath("sub/baz.h"), Includes), 1u)));
+  EXPECT_THAT(Includes.includeDepth(getID(BarHeader, Includes)),
+              UnorderedElementsAre(Distance(getID(BarHeader, Includes), 0u),
+                                   Distance(getID(BazHeader, Includes), 1u)));
 }
 
 TEST_F(HeadersTest, PreambleIncludesPresentOnce) {

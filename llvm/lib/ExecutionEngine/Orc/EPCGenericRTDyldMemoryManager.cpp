@@ -49,7 +49,7 @@ EPCGenericRTDyldMemoryManager::~EPCGenericRTDyldMemoryManager() {
   Error Err = Error::success();
   if (auto Err2 = EPC.callSPSWrapper<
                   rt::SPSSimpleExecutorMemoryManagerDeallocateSignature>(
-          SAs.Reserve.getValue(), Err, SAs.Instance, FinalizedAllocs)) {
+          SAs.Reserve, Err, SAs.Instance, FinalizedAllocs)) {
     // FIXME: Report errors through EPC once that functionality is available.
     logAllUnhandledErrors(std::move(Err2), errs(), "");
     return;
@@ -130,7 +130,7 @@ void EPCGenericRTDyldMemoryManager::reserveAllocationSpace(
   Expected<ExecutorAddr> TargetAllocAddr((ExecutorAddr()));
   if (auto Err = EPC.callSPSWrapper<
                  rt::SPSSimpleExecutorMemoryManagerReserveSignature>(
-          SAs.Reserve.getValue(), TargetAllocAddr, SAs.Instance, TotalSize)) {
+          SAs.Reserve, TargetAllocAddr, SAs.Instance, TotalSize)) {
     std::lock_guard<std::mutex> Lock(M);
     ErrMsg = toString(std::move(Err));
     return;
@@ -262,16 +262,18 @@ bool EPCGenericRTDyldMemoryManager::finalizeMemory(std::string *ErrMsg) {
     }
 
     for (auto &Frame : ObjAllocs.UnfinalizedEHFrames)
-      FR.Actions.push_back({{SAs.RegisterEHFrame, Frame.Addr, Frame.Size},
-                            {SAs.DeregisterEHFrame, Frame.Addr, Frame.Size}});
+      FR.Actions.push_back(
+          {{SAs.RegisterEHFrame,
+            {ExecutorAddr(Frame.Addr), ExecutorAddrDiff(Frame.Size)}},
+           {SAs.DeregisterEHFrame,
+            {ExecutorAddr(Frame.Addr), ExecutorAddrDiff(Frame.Size)}}});
 
     // We'll also need to make an extra allocation for the eh-frame wrapper call
     // arguments.
     Error FinalizeErr = Error::success();
     if (auto Err = EPC.callSPSWrapper<
                    rt::SPSSimpleExecutorMemoryManagerFinalizeSignature>(
-            SAs.Finalize.getValue(), FinalizeErr, SAs.Instance,
-            std::move(FR))) {
+            SAs.Finalize, FinalizeErr, SAs.Instance, std::move(FR))) {
       std::lock_guard<std::mutex> Lock(M);
       this->ErrMsg = toString(std::move(Err));
       dbgs() << "Serialization error: " << this->ErrMsg << "\n";
