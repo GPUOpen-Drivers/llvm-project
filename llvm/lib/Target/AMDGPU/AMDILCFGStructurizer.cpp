@@ -6,7 +6,6 @@
 //
 //==-----------------------------------------------------------------------===//
 
-#include "AMDGPU.h"
 #include "MCTargetDesc/R600MCTargetDesc.h"
 #include "R600.h"
 #include "R600RegisterInfo.h"
@@ -128,6 +127,10 @@ public:
   bool prepare();
 
   bool runOnMachineFunction(MachineFunction &MF) override {
+    // FIXME: This pass causes verification failures.
+    MF.getProperties().set(
+        MachineFunctionProperties::Property::FailsVerification);
+
     TII = MF.getSubtarget<R600Subtarget>().getInstrInfo();
     TRI = &TII->getRegisterInfo();
     LLVM_DEBUG(MF.dump(););
@@ -629,9 +632,8 @@ bool AMDGPUCFGStructurizer::isReturnBlock(MachineBasicBlock *MBB) {
 
 void AMDGPUCFGStructurizer::cloneSuccessorList(MachineBasicBlock *DstMBB,
     MachineBasicBlock *SrcMBB) {
-  for (MachineBasicBlock::succ_iterator It = SrcMBB->succ_begin(),
-       iterEnd = SrcMBB->succ_end(); It != iterEnd; ++It)
-    DstMBB->addSuccessor(*It);  // *iter's predecessor is also taken care of
+  for (MachineBasicBlock *Succ : SrcMBB->successors())
+    DstMBB->addSuccessor(Succ);  // *iter's predecessor is also taken care of
 }
 
 MachineBasicBlock *AMDGPUCFGStructurizer::clone(MachineBasicBlock *MBB) {
@@ -1320,12 +1322,9 @@ int AMDGPUCFGStructurizer::improveSimpleJumpintoIf(MachineBasicBlock *HeadMBB,
     insertInstrBefore(I, R600::ENDIF);
 
     // put initReg = 2 to other predecessors of landBlk
-    for (MachineBasicBlock::pred_iterator PI = LandBlk->pred_begin(),
-         PE = LandBlk->pred_end(); PI != PE; ++PI) {
-      MachineBasicBlock *MBB = *PI;
+    for (MachineBasicBlock *MBB : LandBlk->predecessors())
       if (MBB != TrueMBB && MBB != FalseMBB)
         report_fatal_error("Extra register needed to handle CFG");
-    }
   }
   LLVM_DEBUG(
       dbgs() << "result from improveSimpleJumpintoIf: ";

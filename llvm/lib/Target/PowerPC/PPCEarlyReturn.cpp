@@ -25,9 +25,9 @@
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -185,12 +185,9 @@ public:
       // nothing to do.
       if (MF.size() < 2)
         return Changed;
-      
-      // We can't use a range-based for loop due to clobbering the iterator.
-      for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E;) {
-        MachineBasicBlock &B = *I++;
+
+      for (MachineBasicBlock &B : llvm::make_early_inc_range(MF))
         Changed |= processBlock(B);
-      }
 
       return Changed;
     }

@@ -16,6 +16,19 @@
 #include "gtest/gtest.h"
 #include "tsan_rtl.h"
 
+#if SANITIZER_MAC || !defined(__x86_64__)
+// These tests are currently crashing on Mac:
+// https://reviews.llvm.org/D107911
+// and on ppc64: https://reviews.llvm.org/D110546#3025422
+// due to the way we create thread contexts
+// (but they crashed on Mac with normal pthread_create as well).
+// There must be some difference in thread initialization
+// between normal execution and unit tests.
+#  define TRACE_TEST(SUITE, NAME) TEST(SUITE, DISABLED_##NAME)
+#else
+#  define TRACE_TEST(SUITE, NAME) TEST(SUITE, NAME)
+#endif
+
 namespace __tsan {
 
 using namespace v3;
@@ -31,7 +44,7 @@ struct ThreadArray {
       Tid tid = ThreadCreate(cur_thread(), 0, 0, true);
       Processor *proc = ProcCreate();
       ProcWire(proc, thr);
-      ThreadStart(thr, tid, 0, ThreadType::Regular);
+      ThreadStart(thr, tid, 0, ThreadType::Fiber);
     }
   }
 
@@ -58,7 +71,7 @@ struct ThreadArray {
   operator ThreadState *() { return threads[0]; }
 };
 
-TEST(Trace, RestoreAccess) {
+TRACE_TEST(Trace, RestoreAccess) {
   // A basic test with some function entry/exit events,
   // some mutex lock/unlock events and some other distracting
   // memory events.
@@ -100,7 +113,7 @@ TEST(Trace, RestoreAccess) {
   CHECK_EQ(tag, kExternalTagNone);
 }
 
-TEST(Trace, MemoryAccessSize) {
+TRACE_TEST(Trace, MemoryAccessSize) {
   // Test tracing and matching of accesses of different sizes.
   struct Params {
     uptr access_size, offset, size;
@@ -152,7 +165,7 @@ TEST(Trace, MemoryAccessSize) {
   }
 }
 
-TEST(Trace, RestoreMutexLock) {
+TRACE_TEST(Trace, RestoreMutexLock) {
   // Check of restoration of a mutex lock event.
   ThreadArray<1> thr;
   TraceFunc(thr, 0x1000);
@@ -179,7 +192,7 @@ TEST(Trace, RestoreMutexLock) {
   CHECK_EQ(mset.Get(1).write, false);
 }
 
-TEST(Trace, MultiPart) {
+TRACE_TEST(Trace, MultiPart) {
   // Check replay of a trace with multiple parts.
   ThreadArray<1> thr;
   TraceFunc(thr, 0x1000);

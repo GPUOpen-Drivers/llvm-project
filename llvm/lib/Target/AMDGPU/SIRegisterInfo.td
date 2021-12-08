@@ -691,6 +691,14 @@ def CCR_SGPR_64 : RegisterClass<"AMDGPU", SGPR_64.RegTypes, 32,
   let AllocationPriority = SGPR_64.AllocationPriority;
 }
 
+// Call clobbered 64-bit SGPRs for AMDGPU_Gfx CC
+def Gfx_CCR_SGPR_64 : RegisterClass<"AMDGPU", SGPR_64.RegTypes, 32,
+                                (add (trunc (shl SGPR_64, 15), 1), // s[30:31]
+                                     (trunc (shl SGPR_64, 18), 14))> { // s[36:37]-s[s62:63]
+  let CopyCost = SGPR_64.CopyCost;
+  let AllocationPriority = SGPR_64.AllocationPriority;
+}
+
 def TTMP_64 : RegisterClass<"AMDGPU", [v2i32, i64, f64, v4i16, v4f16], 32,
                             (add TTMP_64Regs)> {
   let isAllocatable = 0;
@@ -1018,6 +1026,30 @@ defm VSrc : RegImmOperand<"VS", "VSrc">;
 def VSrc_128 : RegisterOperand<VReg_128> {
   let DecoderMethod = "DecodeVS_128RegisterClass";
 }
+
+//===----------------------------------------------------------------------===//
+//  VSrc_*_Deferred Operands with an SGPR, VGPR or a 32-bit immediate for use
+//  with FMAMK/FMAAK
+//===----------------------------------------------------------------------===//
+
+multiclass SIRegOperand32_Deferred <string rc, string MatchName, string opType,
+                           string rc_suffix = "_32"> {
+  let OperandNamespace = "AMDGPU" in {
+    def _f16_Deferred : RegisterOperand<!cast<RegisterClass>(rc#rc_suffix)> {
+      let OperandType = opType#"_FP16_DEFERRED";
+      let ParserMatchClass = RegImmMatcher<MatchName#"F16">;
+      let DecoderMethod = "decodeOperand_" # rc # "_16_Deferred";
+    }
+
+    def _f32_Deferred : RegisterOperand<!cast<RegisterClass>(rc#rc_suffix)> {
+      let OperandType = opType#"_FP32_DEFERRED";
+      let ParserMatchClass = RegImmMatcher<MatchName#"F32">;
+      let DecoderMethod = "decodeOperand_" # rc # "_32_Deferred";
+    }
+  }
+}
+
+defm VSrc : SIRegOperand32_Deferred<"VS", "VSrc", "OPERAND_REG_IMM">;
 
 //===----------------------------------------------------------------------===//
 //  VRegSrc_* Operands with a VGPR

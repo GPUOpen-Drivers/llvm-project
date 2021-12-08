@@ -55,6 +55,7 @@ class MDNode;
 class MemorySSAUpdater;
 class PHINode;
 class StoreInst;
+class SwitchInst;
 class TargetLibraryInfo;
 class TargetTransformInfo;
 
@@ -78,7 +79,8 @@ bool ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions = false,
 //
 
 /// Return true if the result produced by the instruction is not used, and the
-/// instruction has no side effects.
+/// instruction will return. Certain side-effecting instructions are also
+/// considered dead if there are no uses of the instruction.
 bool isInstructionTriviallyDead(Instruction *I,
                                 const TargetLibraryInfo *TLI = nullptr);
 
@@ -235,6 +237,10 @@ CallInst *createCallMatchingInvoke(InvokeInst *II);
 
 /// This function converts the specified invoek into a normall call.
 void changeToCall(InvokeInst *II, DomTreeUpdater *DTU = nullptr);
+
+/// This function removes the default destination from the specified switch.
+void createUnreachableSwitchDefault(SwitchInst *Switch,
+                                    DomTreeUpdater *DTU = nullptr);
 
 ///===---------------------------------------------------------------------===//
 ///  Dbg Intrinsic utilities

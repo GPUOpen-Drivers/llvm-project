@@ -1,3 +1,4 @@
+//===- Dialect.h - Dialect class --------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -84,6 +85,10 @@ public:
 
   // Returns whether the dialect is defined.
   explicit operator bool() const { return def != nullptr; }
+
+  // Returns how the accessors should be prefixed in dialect.
+  enum class EmitPrefix { Raw = 0, Prefixed = 1, Both = 2 };
+  EmitPrefix getEmitAccessorPrefix() const;
 
 private:
   const llvm::Record *def;

@@ -164,25 +164,25 @@ struct FusionInfo {
 /// Implements the fusion part of the "tileAndFuse on buffers" transformation
 /// and thus requires the `consumerOpOperand` to be a `subview` op (generally
 /// obtained by applying the tiling transformation).
-Optional<FusionInfo> fuseProducerOfBuffer(OpBuilder &b,
-                                          OpOperand &consumerOpOperand,
-                                          const LinalgDependenceGraph &graph);
+FailureOr<FusionInfo> fuseProducerOfBuffer(OpBuilder &b,
+                                           OpOperand &consumerOpOperand,
+                                           const LinalgDependenceGraph &graph);
 /// Tensor counterpart of `fuseProducerOfBuffer`.
 /// This implements the fusion part of the "tileAndFuse on tensors"
 /// transformation and thus requires the `consumerOpOperand` to be a
 /// `extract_slice` op (generally obtained by applying the tiling
 /// transformation).
-Optional<FusionInfo> fuseProducerOfTensor(OpBuilder &b,
-                                          OpOperand &consumerOpOperand);
+FailureOr<FusionInfo> fuseProducerOfTensor(OpBuilder &b,
+                                           OpOperand &consumerOpOperand);
 /// Tensor counterpart of `fuseProducerOfBuffer`.
 /// This implements the fusion part of the "tileAndFuse on tensors"
 /// transformation and thus requires the `consumerOpOperand` to be a
 /// `extract_slice` op (generally obtained by applying the tiling
 /// transformation). Assumes `producerOfTensor` is a Linalg op that produces
 /// `consumerOpOperand`.
-Optional<FusionInfo> fuseProducerOfTensor(OpBuilder &b,
-                                          OpResult producerOpResult,
-                                          OpOperand &consumerOpOperand);
+FailureOr<FusionInfo> fuseProducerOfTensor(OpBuilder &b,
+                                           OpResult producerOpResult,
+                                           OpOperand &consumerOpOperand);
 
 //===----------------------------------------------------------------------===//
 // Fusion on tensor utilities
@@ -212,6 +212,7 @@ private:
   bool isEmpty();
 
   /// Returns true if the tile loop nest invariants are satisfied:
+  /// - The `rootOp` has been tiled at least once.
   /// - The number of tile loop operations and dimensions match.
   /// - The innermost tile loop is the parent of `tiledOp`.
   /// - The tile loops are directly nested.
@@ -233,8 +234,8 @@ private:
   bool hasOtherUses(BlockArgument bbArg, tensor::ExtractSliceOp sliceOp);
 
   LinalgOp rootOp;
-  SmallVector<scf::ForOp> loopOps;
-  SmallVector<int64_t> loopDims;
+  SmallVector<scf::ForOp> tileLoopOps;
+  DenseMap<Operation *, SmallVector<int64_t>> tiledRootAndFusedOpsLoops;
 };
 
 /// Tiles `consumerOp` and fuses its dependencies if possible. Uses the
@@ -271,7 +272,7 @@ enum class DistributionMethod {
   /// to
   ///
   /// %iv = %lb + %procId * %step
-  /// %cond = cmpi "slt", %iv, %ub
+  /// %cond = arith.cmpi "slt", %iv, %ub
   /// scf.if %cond {
   ///   ...
   /// }
