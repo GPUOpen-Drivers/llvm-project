@@ -709,9 +709,6 @@ bool AMDGPURegisterBankInfo::executeInWaterfallLoop(
   iterator_range<MachineBasicBlock::iterator> Range,
   SmallSet<Register, 4> &SGPROperandRegs,
   MachineRegisterInfo &MRI) const {
-  SmallVector<Register, 4> ResultRegs;
-  SmallVector<Register, 4> InitResultRegs;
-  SmallVector<Register, 4> PhiRegs;
 
   // Track use registers which have already been expanded with a readfirstlane
   // sequence. This may have multiple uses if moving a sequence.
@@ -775,15 +772,6 @@ bool AMDGPURegisterBankInfo::executeInWaterfallLoop(
     .addMBB(&MBB)
     .addReg(NewExec)
     .addMBB(LoopBB);
-
-  for (auto Result : zip(InitResultRegs, ResultRegs, PhiRegs)) {
-    B.buildInstr(TargetOpcode::G_PHI)
-      .addDef(std::get<2>(Result))
-      .addReg(std::get<0>(Result)) // Initial value / implicit_def
-      .addMBB(&MBB)
-      .addReg(std::get<1>(Result)) // Mid-loop value.
-      .addMBB(LoopBB);
-  }
 
   const DebugLoc &DL = B.getDL();
 
@@ -3191,10 +3179,10 @@ unsigned AMDGPURegisterBankInfo::getMappingType(const MachineRegisterInfo &MRI,
                                                 const MachineInstr &MI) const {
   unsigned RegBank = AMDGPU::InvalidRegBankID;
 
-  for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
-    if (!MI.getOperand(i).isReg())
+  for (const MachineOperand &MO : MI.operands()) {
+    if (!MO.isReg())
       continue;
-    Register Reg = MI.getOperand(i).getReg();
+    Register Reg = MO.getReg();
     if (const RegisterBank *Bank = getRegBank(Reg, MRI, *TRI)) {
       RegBank = regBankUnion(RegBank, Bank->getID());
       if (RegBank == AMDGPU::VGPRRegBankID)
@@ -3208,10 +3196,10 @@ unsigned AMDGPURegisterBankInfo::getMappingType(const MachineRegisterInfo &MRI,
 bool AMDGPURegisterBankInfo::isSALUMapping(const MachineInstr &MI) const {
   const MachineFunction &MF = *MI.getParent()->getParent();
   const MachineRegisterInfo &MRI = MF.getRegInfo();
-  for (unsigned i = 0, e = MI.getNumOperands();i != e; ++i) {
-    if (!MI.getOperand(i).isReg())
+  for (const MachineOperand &MO : MI.operands()) {
+    if (!MO.isReg())
       continue;
-    Register Reg = MI.getOperand(i).getReg();
+    Register Reg = MO.getReg();
     if (const RegisterBank *Bank = getRegBank(Reg, MRI, *TRI)) {
       if (Bank->getID() != AMDGPU::SGPRRegBankID)
         return false;

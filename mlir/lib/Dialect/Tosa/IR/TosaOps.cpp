@@ -60,7 +60,7 @@ struct TosaInlinerInterface : public DialectInlinerInterface {
             isa<tosa::WhileOp>(dest->getParentOp()));
   }
 };
-} // end anonymous namespace
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // TOSA control flow support.
@@ -376,6 +376,88 @@ void MulOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
   results.insert<MulOneOptimization>(context);
 }
 
+struct MaterializePadValue : public OpRewritePattern<tosa::PadOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tosa::PadOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.pad_const())
+      return failure();
+
+    auto input = op.input1();
+    auto padding = op.padding();
+
+    ShapedType inputTy = input.getType().cast<ShapedType>();
+    Type elementTy = inputTy.getElementType();
+
+    Attribute constantAttr;
+    if (elementTy.isa<FloatType>())
+      constantAttr = rewriter.getFloatAttr(elementTy, 0.0);
+    else if (elementTy.isa<IntegerType>() && !op.quantization_info())
+      constantAttr = rewriter.getIntegerAttr(elementTy, 0);
+    else if (elementTy.isa<IntegerType>() && op.quantization_info()) {
+      auto value = op.quantization_info().getValue().input_zp().getValue();
+      constantAttr = rewriter.getIntegerAttr(elementTy, value.getZExtValue());
+    }
+
+    if (!constantAttr) {
+      return rewriter.notifyMatchFailure(
+          op,
+          "tosa.pad to linalg lowering encountered an unknown element type");
+    }
+
+    auto denseAttr = DenseElementsAttr::get(
+        RankedTensorType::get({}, elementTy), constantAttr);
+    auto constantVal = rewriter.create<tosa::ConstOp>(
+        op.getLoc(), denseAttr.getType(), denseAttr);
+
+    rewriter.replaceOpWithNewOp<tosa::PadOp>(
+        op, op.getType(), ValueRange{input, padding, constantVal},
+        op->getAttrs());
+    return success();
+  }
+};
+
+void PadOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+                                        MLIRContext *context) {
+  results.insert<MaterializePadValue>(context);
+}
+
+struct MaxPool2dIsNoOp : public OpRewritePattern<tosa::MaxPool2dOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tosa::MaxPool2dOp op,
+                                PatternRewriter &rewriter) const override {
+    Value input = op.input();
+    Value output = op.output();
+    ShapedType inputType = input.getType().cast<ShapedType>();
+    ShapedType outputType = output.getType().cast<ShapedType>();
+
+    if (!inputType.hasStaticShape() || !outputType.hasStaticShape()) {
+      return failure();
+    }
+
+    // If the output and input shapes are 1x1, then this is a no op.
+    ArrayRef<int64_t> outputShape = outputType.getShape();
+    if (outputShape[1] != 1 || outputShape[2] != 1) {
+      return failure();
+    }
+
+    ArrayRef<int64_t> inputShape = inputType.getShape();
+    if (inputShape[1] != 1 || inputShape[2] != 1) {
+      return failure();
+    }
+
+    rewriter.replaceOp(op, input);
+    return success();
+  }
+};
+
+void MaxPool2dOp::getCanonicalizationPatterns(OwningRewritePatternList &results,
+                                              MLIRContext *context) {
+  results.insert<MaxPool2dIsNoOp>(context);
+}
+
 //===----------------------------------------------------------------------===//
 // Operator Folders.
 //===----------------------------------------------------------------------===//
@@ -413,6 +495,18 @@ ReduceFolder(ReduceAllOp) ReduceFolder(ReduceAnyOp) ReduceFolder(ReduceMaxOp)
   if (!inputTy || !outputTy || inputTy != outputTy)
     return {};
   return input1();
+}
+
+OpFoldResult PadOp::fold(ArrayRef<Attribute> operands) {
+  // If the pad is all zeros we can fold this operation away.
+  if (operands[1]) {
+    auto densePad = operands[1].cast<DenseElementsAttr>();
+    if (densePad.isSplat() && densePad.getSplatValue<APInt>().isZero()) {
+      return input1();
+    }
+  }
+
+  return {};
 }
 
 OpFoldResult SliceOp::fold(ArrayRef<Attribute> operands) {
@@ -462,14 +556,21 @@ OpFoldResult TransposeOp::fold(ArrayRef<Attribute> operands) {
 // TOSA Operator Verifiers.
 //===----------------------------------------------------------------------===//
 
-template <typename T> static LogicalResult verifyConvOp(T op) {
+template <typename T>
+static LogicalResult verifyConvOp(T op) {
   // All TOSA conv ops have an input() and weight().
   auto inputType = op.input().getType().template dyn_cast<RankedTensorType>();
   auto weightType = op.weight().getType().template dyn_cast<RankedTensorType>();
 
   // Must be ranked tensor types
-  if (!inputType || !weightType)
+  if (!inputType) {
+    op.emitOpError("expect a ranked tensor for input, got ") << op.input();
     return failure();
+  }
+  if (!weightType) {
+    op.emitOpError("expect a ranked tensor for weight, got ") << op.weight();
+    return failure();
+  }
 
   auto inputEType = inputType.getElementType();
   auto weightEType = weightType.getElementType();
@@ -478,14 +579,21 @@ template <typename T> static LogicalResult verifyConvOp(T op) {
   bool weightIsQuant = !weightEType.template isa<FloatType>();
 
   // Either both must be quantized or both unquantized.
-  if (inputIsQuant != weightIsQuant)
+  if (inputIsQuant != weightIsQuant) {
+    op.emitOpError(
+        "expect both input and weight to be float or not together, got ")
+        << inputEType << " and " << weightEType;
     return failure();
+  }
 
   // Quantized type must have constructed the quantizationattr, and unquantized
   // types should not have a quantizationattr.
   if ((inputIsQuant && !op.quantization_info()) ||
-      (!inputIsQuant && op.quantization_info()))
+      (!inputIsQuant && op.quantization_info())) {
+    op.emitOpError("quantizationattr is required for quantized type, and not "
+                   "allowed for float type");
     return failure();
+  }
 
   return success();
 }
@@ -663,8 +771,8 @@ static void buildExplicitValuePadOpWithQuantInfo(OpBuilder &builder,
                                                  OperationState &result,
                                                  Type outputType, Value input,
                                                  Value paddings,
-                                                 Value pad_const) {
-  result.addOperands({input, paddings, pad_const});
+                                                 Value padConst) {
+  result.addOperands({input, paddings, padConst});
   auto quantAttr = buildPadOpQuantizationAttr(builder, input);
   if (quantAttr)
     result.addAttribute("quantization_info", quantAttr);

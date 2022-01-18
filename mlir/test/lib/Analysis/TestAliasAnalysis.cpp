@@ -67,7 +67,7 @@ struct TestAliasAnalysisPass
 
     // Check for aliasing behavior between each of the values.
     for (auto it = valsToCheck.begin(), e = valsToCheck.end(); it != e; ++it)
-      for (auto innerIt = valsToCheck.begin(); innerIt != it; ++innerIt)
+      for (auto *innerIt = valsToCheck.begin(); innerIt != it; ++innerIt)
         printAliasResult(aliasAnalysis.alias(*innerIt, *it), *innerIt, *it);
   }
 
@@ -79,7 +79,7 @@ struct TestAliasAnalysisPass
     llvm::errs() << ": " << result << "\n";
   }
 };
-} // end anonymous namespace
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Testing ModRefResult
@@ -125,7 +125,7 @@ struct TestAliasAnalysisModRefPass
     llvm::errs() << ": " << result << "\n";
   }
 };
-} // end anonymous namespace
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Pass Registration

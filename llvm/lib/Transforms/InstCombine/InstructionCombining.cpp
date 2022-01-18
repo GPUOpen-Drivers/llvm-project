@@ -967,6 +967,29 @@ Value *InstCombinerImpl::dyn_castNegVal(Value *V) const {
   return nullptr;
 }
 
+/// A binop with a constant operand and a sign-extended boolean operand may be
+/// converted into a select of constants by applying the binary operation to
+/// the constant with the two possible values of the extended boolean (0 or -1).
+Instruction *InstCombinerImpl::foldBinopOfSextBoolToSelect(BinaryOperator &BO) {
+  // TODO: Handle non-commutative binop (constant is operand 0).
+  // TODO: Handle zext.
+  // TODO: Peek through 'not' of cast.
+  Value *BO0 = BO.getOperand(0);
+  Value *BO1 = BO.getOperand(1);
+  Value *X;
+  Constant *C;
+  if (!match(BO0, m_SExt(m_Value(X))) || !match(BO1, m_ImmConstant(C)) ||
+      !X->getType()->isIntOrIntVectorTy(1))
+    return nullptr;
+
+  // bo (sext i1 X), C --> select X, (bo -1, C), (bo 0, C)
+  Constant *Ones = ConstantInt::getAllOnesValue(BO.getType());
+  Constant *Zero = ConstantInt::getNullValue(BO.getType());
+  Constant *TVal = ConstantExpr::get(BO.getOpcode(), Ones, C);
+  Constant *FVal = ConstantExpr::get(BO.getOpcode(), Zero, C);
+  return SelectInst::Create(X, TVal, FVal);
+}
+
 static Value *foldOperationIntoSelectOperand(Instruction &I, Value *SO,
                                              InstCombiner::BuilderTy &Builder) {
   if (auto *Cast = dyn_cast<CastInst>(&I))
@@ -2523,7 +2546,7 @@ Instruction *InstCombinerImpl::visitGetElementPtrInst(GetElementPtrInst &GEP) {
   return nullptr;
 }
 
-static bool isNeverEqualToUnescapedAlloc(Value *V, const TargetLibraryInfo *TLI,
+static bool isNeverEqualToUnescapedAlloc(Value *V, const TargetLibraryInfo &TLI,
                                          Instruction *AI) {
   if (isa<ConstantPointerNull>(V))
     return true;
@@ -2534,12 +2557,34 @@ static bool isNeverEqualToUnescapedAlloc(Value *V, const TargetLibraryInfo *TLI,
   // through bitcasts of V can cause
   // the result statement below to be true, even when AI and V (ex:
   // i8* ->i32* ->i8* of AI) are the same allocations.
-  return isAllocLikeFn(V, TLI) && V != AI;
+  return isAllocLikeFn(V, &TLI) && V != AI;
+}
+
+/// Given a call CB which uses an address UsedV, return true if we can prove the
+/// call's only possible effect is storing to V.
+static bool isRemovableWrite(CallBase &CB, Value *UsedV,
+                             const TargetLibraryInfo &TLI) {
+  if (!CB.use_empty())
+    // TODO: add recursion if returned attribute is present
+    return false;
+
+  if (CB.isTerminator())
+    // TODO: remove implementation restriction
+    return false;
+
+  if (!CB.willReturn() || !CB.doesNotThrow())
+    return false;
+
+  // If the only possible side effect of the call is writing to the alloca,
+  // and the result isn't used, we can safely remove any reads implied by the
+  // call including those which might read the alloca itself.
+  Optional<MemoryLocation> Dest = MemoryLocation::getForDest(&CB, TLI);
+  return Dest && Dest->Ptr == UsedV;
 }
 
 static bool isAllocSiteRemovable(Instruction *AI,
                                  SmallVectorImpl<WeakTrackingVH> &Users,
-                                 const TargetLibraryInfo *TLI) {
+                                 const TargetLibraryInfo &TLI) {
   SmallVector<Instruction*, 4> Worklist;
   Worklist.push_back(AI);
 
@@ -2604,12 +2649,17 @@ static bool isAllocSiteRemovable(Instruction *AI,
           }
         }
 
-        if (isFreeCall(I, TLI)) {
+        if (isRemovableWrite(*cast<CallBase>(I), PI, TLI)) {
           Users.emplace_back(I);
           continue;
         }
 
-        if (isReallocLikeFn(I, TLI, true)) {
+        if (isFreeCall(I, &TLI)) {
+          Users.emplace_back(I);
+          continue;
+        }
+
+        if (isReallocLikeFn(I, &TLI, true)) {
           Users.emplace_back(I);
           Worklist.push_back(I);
           continue;
@@ -2653,7 +2703,7 @@ Instruction *InstCombinerImpl::visitAllocSite(Instruction &MI) {
     DIB.reset(new DIBuilder(*MI.getModule(), /*AllowUnresolved=*/false));
   }
 
-  if (isAllocSiteRemovable(&MI, Users, &TLI)) {
+  if (isAllocSiteRemovable(&MI, Users, TLI)) {
     for (unsigned i = 0, e = Users.size(); i != e; ++i) {
       // Lowering all @llvm.objectsize calls first because they may
       // use a bitcast/GEP of the alloca we are removing.

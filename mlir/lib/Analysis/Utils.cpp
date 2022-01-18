@@ -207,7 +207,8 @@ Optional<bool> ComputationSliceState::isSliceMaximalFastCheck() const {
 
     // Check if src and dst loop bounds are the same. If not, we can guarantee
     // that the slice is not maximal.
-    if (srcLbResult != dstLbResult || srcUbResult != dstUbResult)
+    if (srcLbResult != dstLbResult || srcUbResult != dstUbResult ||
+        srcLoop.getStep() != dstLoop.getStep())
       return false;
   }
 
@@ -1277,10 +1278,10 @@ bool MemRefAccess::operator==(const MemRefAccess &rhs) const {
 
 /// Returns the number of surrounding loops common to 'loopsA' and 'loopsB',
 /// where each lists loops from outer-most to inner-most in loop nest.
-unsigned mlir::getNumCommonSurroundingLoops(Operation &A, Operation &B) {
+unsigned mlir::getNumCommonSurroundingLoops(Operation &a, Operation &b) {
   SmallVector<AffineForOp, 4> loopsA, loopsB;
-  getLoopIVs(A, &loopsA);
-  getLoopIVs(B, &loopsB);
+  getLoopIVs(a, &loopsA);
+  getLoopIVs(b, &loopsB);
 
   unsigned minNumLoops = std::min(loopsA.size(), loopsB.size());
   unsigned numCommonLoops = 0;
