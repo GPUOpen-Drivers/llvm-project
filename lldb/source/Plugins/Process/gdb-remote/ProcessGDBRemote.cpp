@@ -282,9 +282,7 @@ ProcessGDBRemote::ProcessGDBRemote(lldb::TargetSP target_sp,
               __FUNCTION__);
   }
 
-  const uint32_t gdb_event_mask =
-      Communication::eBroadcastBitReadThreadDidExit |
-      GDBRemoteCommunication::eBroadcastBitGdbReadThreadGotNotify;
+  const uint32_t gdb_event_mask = Communication::eBroadcastBitReadThreadDidExit;
   if (m_async_listener_sp->StartListeningForEvents(
           &m_gdb_comm, gdb_event_mask) != gdb_event_mask) {
     LLDB_LOGF(log,
@@ -528,18 +526,15 @@ Status ProcessGDBRemote::WillAttachToProcessWithName(const char *process_name,
 
 Status ProcessGDBRemote::DoConnectRemote(llvm::StringRef remote_url) {
   Log *log(ProcessGDBRemoteLog::GetLogIfAllCategoriesSet(GDBR_LOG_PROCESS));
+
   Status error(WillLaunchOrAttach());
-
   if (error.Fail())
     return error;
 
-  if (repro::Reproducer::Instance().IsReplaying())
-    error = ConnectToReplayServer();
-  else
-    error = ConnectToDebugserver(remote_url);
-
+  error = ConnectToDebugserver(remote_url);
   if (error.Fail())
     return error;
+
   StartAsyncThread();
 
   lldb::pid_t pid = m_gdb_comm.GetCurrentProcessID();
@@ -1322,24 +1317,6 @@ Status ProcessGDBRemote::DoResume() {
   }
 
   return error;
-}
-
-void ProcessGDBRemote::HandleStopReplySequence() {
-  while (true) {
-    // Send vStopped
-    StringExtractorGDBRemote response;
-    m_gdb_comm.SendPacketAndWaitForResponse("vStopped", response);
-
-    // OK represents end of signal list
-    if (response.IsOKResponse())
-      break;
-
-    // If not OK or a normal packet we have a problem
-    if (!response.IsNormalResponse())
-      break;
-
-    SetLastStopPacket(response);
-  }
 }
 
 void ProcessGDBRemote::ClearThreadIDList() {
@@ -2897,8 +2874,8 @@ lldb::addr_t ProcessGDBRemote::DoAllocateMemory(size_t size,
   return allocated_addr;
 }
 
-Status ProcessGDBRemote::DoGetMemoryRegionInfo(addr_t load_addr,
-                                               MemoryRegionInfo &region_info) {
+Status ProcessGDBRemote::GetMemoryRegionInfo(addr_t load_addr,
+                                             MemoryRegionInfo &region_info) {
 
   Status error(m_gdb_comm.GetMemoryRegionInfo(load_addr, region_info));
   return error;
@@ -3279,9 +3256,6 @@ ProcessGDBRemote::EstablishConnectionIfNeeded(const ProcessInfo &process_info) {
   if (platform_sp && !platform_sp->IsHost())
     return Status("Lost debug server connection");
 
-  if (repro::Reproducer::Instance().IsReplaying())
-    return ConnectToReplayServer();
-
   auto error = LaunchAndConnectToDebugserver(process_info);
   if (error.Fail()) {
     const char *error_string = error.AsCString();
@@ -3539,31 +3513,6 @@ void ProcessGDBRemote::StopAsyncThread() {
         __FUNCTION__);
 }
 
-bool ProcessGDBRemote::HandleNotifyPacket(StringExtractorGDBRemote &packet) {
-  // get the packet at a string
-  const std::string &pkt = std::string(packet.GetStringRef());
-  // skip %stop:
-  StringExtractorGDBRemote stop_info(pkt.c_str() + 5);
-
-  // pass as a thread stop info packet
-  SetLastStopPacket(stop_info);
-
-  // check for more stop reasons
-  HandleStopReplySequence();
-
-  // if the process is stopped then we need to fake a resume so that we can
-  // stop properly with the new break. This is possible due to
-  // SetPrivateState() broadcasting the state change as a side effect.
-  if (GetPrivateState() == lldb::StateType::eStateStopped) {
-    SetPrivateState(lldb::StateType::eStateRunning);
-  }
-
-  // since we have some stopped packets we can halt the process
-  SetPrivateState(lldb::StateType::eStateStopped);
-
-  return true;
-}
-
 thread_result_t ProcessGDBRemote::AsyncThread(void *arg) {
   ProcessGDBRemote *process = (ProcessGDBRemote *)arg;
 
@@ -3585,7 +3534,7 @@ thread_result_t ProcessGDBRemote::AsyncThread(void *arg) {
   // So it is safer to simply ignore any remaining packets by
   // explicitly checking for eStateExited before reentering the
   // fetch loop.
-  
+
   bool done = false;
   while (!done && process->GetPrivateState() != eStateExited) {
     LLDB_LOGF(log,
@@ -3711,17 +3660,6 @@ thread_result_t ProcessGDBRemote::AsyncThread(void *arg) {
           process->SetExitStatus(-1, "lost connection");
           done = true;
           break;
-
-        case GDBRemoteCommunication::eBroadcastBitGdbReadThreadGotNotify: {
-          lldb_private::Event *event = event_sp.get();
-          const EventDataBytes *continue_packet =
-              EventDataBytes::GetEventDataFromEvent(event);
-          StringExtractorGDBRemote notify(
-              (const char *)continue_packet->GetBytes());
-          // Hand this over to the process to handle
-          process->HandleNotifyPacket(notify);
-          break;
-        }
 
         default:
           LLDB_LOGF(log,

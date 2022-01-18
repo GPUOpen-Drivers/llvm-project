@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -892,6 +894,31 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
     }
     break;
   }
+  case Intrinsic::amdgcn_is_shared:
+  case Intrinsic::amdgcn_is_private: {
+    if (isa<UndefValue>(II.getArgOperand(0)))
+      return IC.replaceInstUsesWith(II, UndefValue::get(II.getType()));
+
+    if (isa<ConstantPointerNull>(II.getArgOperand(0)))
+      return IC.replaceInstUsesWith(II, ConstantInt::getFalse(II.getType()));
+    break;
+  }
+  case Intrinsic::amdgcn_waterfall_begin: {
+    Value *Index = II.getArgOperand(1);
+    // If there is a previous waterfall begin with the same index, we can remove
+    // this one.
+    IntrinsicInst *PrevII;
+    for (Value *Token = II.getArgOperand(0);
+         (PrevII = dyn_cast<IntrinsicInst>(Token)) &&
+         PrevII->getIntrinsicID() == Intrinsic::amdgcn_waterfall_begin;
+         Token = PrevII->getArgOperand(0)) {
+      if (Index == PrevII->getArgOperand(1)) {
+        IC.replaceInstUsesWith(II, II.getArgOperand(0));
+        return IC.eraseInstFromFunction(II);
+      }
+    }
+    break;
+  }
   default: {
     if (const AMDGPU::ImageDimIntrinsicInfo *ImageDimIntr =
             AMDGPU::getImageDimIntrinsicInfo(II.getIntrinsicID())) {
@@ -1061,6 +1088,11 @@ Optional<Value *> GCNTTIImpl::simplifyDemandedVectorEltsIntrinsic(
   case Intrinsic::amdgcn_struct_tbuffer_load:
   case Intrinsic::amdgcn_tbuffer_load:
     return simplifyAMDGCNMemoryIntrinsicDemanded(IC, II, DemandedElts);
+  case Intrinsic::amdgcn_waterfall_end:
+    // Propagate demanded elements through to the value being returned by the
+    // waterfall loop.
+    SimplifyAndSetOp(&II, 1, DemandedElts, UndefElts);
+    break;
   default: {
     if (getAMDGPUImageDMaskIntrinsic(II.getIntrinsicID())) {
       return simplifyAMDGCNMemoryIntrinsicDemanded(IC, II, DemandedElts, 0);
