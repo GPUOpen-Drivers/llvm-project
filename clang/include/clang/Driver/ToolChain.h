@@ -384,6 +384,9 @@ public:
   /// Check if the toolchain should use the integrated assembler.
   virtual bool useIntegratedAs() const;
 
+  /// Check if the toolchain should use the integrated backend.
+  virtual bool useIntegratedBackend() const { return true; }
+
   /// Check if the toolchain should use AsmParser to parse inlineAsm when
   /// integrated assembler is not default.
   virtual bool parseInlineAsmUsingAsmParser() const { return false; }
@@ -449,11 +452,11 @@ public:
                                     StringRef Component,
                                     FileType Type = ToolChain::FT_Static) const;
 
-  // Returns target specific runtime path if it exists.
-  virtual std::string getRuntimePath() const;
+  // Returns target specific runtime paths.
+  path_list getRuntimePaths() const;
 
-  // Returns target specific standard library path if it exists.
-  virtual std::string getStdlibPath() const;
+  // Returns target specific standard library paths.
+  path_list getStdlibPaths() const;
 
   // Returns <ResourceDir>/lib/<OSName>/<arch>.  This is used by runtimes (such
   // as OpenMP) to find arch-specific libraries.

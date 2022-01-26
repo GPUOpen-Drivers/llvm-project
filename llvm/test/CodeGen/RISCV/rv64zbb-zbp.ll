@@ -544,25 +544,27 @@ define i64 @rori_i64_fshr(i64 %a) nounwind {
 define i8 @srli_i8(i8 %a) nounwind {
 ; RV64I-LABEL: srli_i8:
 ; RV64I:       # %bb.0:
-; RV64I-NEXT:    andi a0, a0, 192
-; RV64I-NEXT:    srli a0, a0, 6
+; RV64I-NEXT:    slli a0, a0, 56
+; RV64I-NEXT:    srli a0, a0, 62
 ; RV64I-NEXT:    ret
 ;
 ; RV64ZBB-LABEL: srli_i8:
 ; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    andi a0, a0, 192
-; RV64ZBB-NEXT:    srli a0, a0, 6
+; RV64ZBB-NEXT:    slli a0, a0, 56
+; RV64ZBB-NEXT:    srli a0, a0, 62
 ; RV64ZBB-NEXT:    ret
 ;
 ; RV64ZBP-LABEL: srli_i8:
 ; RV64ZBP:       # %bb.0:
-; RV64ZBP-NEXT:    andi a0, a0, 192
-; RV64ZBP-NEXT:    srli a0, a0, 6
+; RV64ZBP-NEXT:    slli a0, a0, 56
+; RV64ZBP-NEXT:    srli a0, a0, 62
 ; RV64ZBP-NEXT:    ret
   %1 = lshr i8 %a, 6
   ret i8 %1
 }
 
+; We could use sext.b+srai, but slli+srai offers more opportunities for
+; comppressed instructions.
 define i8 @srai_i8(i8 %a) nounwind {
 ; RV64I-LABEL: srai_i8:
 ; RV64I:       # %bb.0:
@@ -572,8 +574,8 @@ define i8 @srai_i8(i8 %a) nounwind {
 ;
 ; RV64ZBB-LABEL: srai_i8:
 ; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    sext.b a0, a0
-; RV64ZBB-NEXT:    srai a0, a0, 5
+; RV64ZBB-NEXT:    slli a0, a0, 56
+; RV64ZBB-NEXT:    srai a0, a0, 61
 ; RV64ZBB-NEXT:    ret
 ;
 ; RV64ZBP-LABEL: srai_i8:
@@ -585,6 +587,8 @@ define i8 @srai_i8(i8 %a) nounwind {
   ret i8 %1
 }
 
+; We could use zext.h+srli, but slli+srli offers more opportunities for
+; comppressed instructions.
 define i16 @srli_i16(i16 %a) nounwind {
 ; RV64I-LABEL: srli_i16:
 ; RV64I:       # %bb.0:
@@ -594,19 +598,21 @@ define i16 @srli_i16(i16 %a) nounwind {
 ;
 ; RV64ZBB-LABEL: srli_i16:
 ; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    zext.h a0, a0
-; RV64ZBB-NEXT:    srli a0, a0, 6
+; RV64ZBB-NEXT:    slli a0, a0, 48
+; RV64ZBB-NEXT:    srli a0, a0, 54
 ; RV64ZBB-NEXT:    ret
 ;
 ; RV64ZBP-LABEL: srli_i16:
 ; RV64ZBP:       # %bb.0:
-; RV64ZBP-NEXT:    zext.h a0, a0
-; RV64ZBP-NEXT:    srli a0, a0, 6
+; RV64ZBP-NEXT:    slli a0, a0, 48
+; RV64ZBP-NEXT:    srli a0, a0, 54
 ; RV64ZBP-NEXT:    ret
   %1 = lshr i16 %a, 6
   ret i16 %1
 }
 
+; We could use sext.h+srai, but slli+srai offers more opportunities for
+; comppressed instructions.
 define i16 @srai_i16(i16 %a) nounwind {
 ; RV64I-LABEL: srai_i16:
 ; RV64I:       # %bb.0:
@@ -616,8 +622,8 @@ define i16 @srai_i16(i16 %a) nounwind {
 ;
 ; RV64ZBB-LABEL: srai_i16:
 ; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    sext.h a0, a0
-; RV64ZBB-NEXT:    srai a0, a0, 9
+; RV64ZBB-NEXT:    slli a0, a0, 48
+; RV64ZBB-NEXT:    srai a0, a0, 57
 ; RV64ZBB-NEXT:    ret
 ;
 ; RV64ZBP-LABEL: srai_i16:
@@ -639,8 +645,7 @@ define i1 @andn_seqz_i32(i32 signext %a, i32 signext %b) nounwind {
 ;
 ; RV64ZBB-LABEL: andn_seqz_i32:
 ; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    and a0, a0, a1
-; RV64ZBB-NEXT:    xor a0, a0, a1
+; RV64ZBB-NEXT:    andn a0, a1, a0
 ; RV64ZBB-NEXT:    seqz a0, a0
 ; RV64ZBB-NEXT:    ret
 ;
@@ -665,8 +670,7 @@ define i1 @andn_seqz_i64(i64 %a, i64 %b) nounwind {
 ;
 ; RV64ZBB-LABEL: andn_seqz_i64:
 ; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    and a0, a0, a1
-; RV64ZBB-NEXT:    xor a0, a0, a1
+; RV64ZBB-NEXT:    andn a0, a1, a0
 ; RV64ZBB-NEXT:    seqz a0, a0
 ; RV64ZBB-NEXT:    ret
 ;
@@ -691,8 +695,7 @@ define i1 @andn_snez_i32(i32 signext %a, i32 signext %b) nounwind {
 ;
 ; RV64ZBB-LABEL: andn_snez_i32:
 ; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    and a0, a0, a1
-; RV64ZBB-NEXT:    xor a0, a0, a1
+; RV64ZBB-NEXT:    andn a0, a1, a0
 ; RV64ZBB-NEXT:    snez a0, a0
 ; RV64ZBB-NEXT:    ret
 ;
@@ -717,8 +720,7 @@ define i1 @andn_snez_i64(i64 %a, i64 %b) nounwind {
 ;
 ; RV64ZBB-LABEL: andn_snez_i64:
 ; RV64ZBB:       # %bb.0:
-; RV64ZBB-NEXT:    and a0, a0, a1
-; RV64ZBB-NEXT:    xor a0, a0, a1
+; RV64ZBB-NEXT:    andn a0, a1, a0
 ; RV64ZBB-NEXT:    snez a0, a0
 ; RV64ZBB-NEXT:    ret
 ;

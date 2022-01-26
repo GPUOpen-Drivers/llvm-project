@@ -34,7 +34,6 @@
 #include "sanitizer_common/sanitizer_suppressions.h"
 #include "sanitizer_common/sanitizer_thread_registry.h"
 #include "sanitizer_common/sanitizer_vector.h"
-#include "tsan_clock.h"
 #include "tsan_defs.h"
 #include "tsan_flags.h"
 #include "tsan_ignoreset.h"
@@ -323,8 +322,6 @@ struct Context {
   InternalMmapVector<FiredSuppression> fired_suppressions;
   DDetector *dd;
 
-  ClockAlloc clock_alloc;
-
   Flags flags;
   fd_t memprof_fd;
 
@@ -335,12 +332,12 @@ struct Context {
   Mutex slot_mtx;
   uptr global_epoch;  // guarded by slot_mtx and by all slot mutexes
   bool resetting;     // global reset is in progress
-  IList<TidSlot, &TidSlot::node> slot_queue GUARDED_BY(slot_mtx);
+  IList<TidSlot, &TidSlot::node> slot_queue SANITIZER_GUARDED_BY(slot_mtx);
   IList<TraceHeader, &TraceHeader::global, TracePart> trace_part_recycle
-      GUARDED_BY(slot_mtx);
-  uptr trace_part_total_allocated GUARDED_BY(slot_mtx);
-  uptr trace_part_recycle_finished GUARDED_BY(slot_mtx);
-  uptr trace_part_finished_excess GUARDED_BY(slot_mtx);
+      SANITIZER_GUARDED_BY(slot_mtx);
+  uptr trace_part_total_allocated SANITIZER_GUARDED_BY(slot_mtx);
+  uptr trace_part_recycle_finished SANITIZER_GUARDED_BY(slot_mtx);
+  uptr trace_part_finished_excess SANITIZER_GUARDED_BY(slot_mtx);
 };
 
 extern Context *ctx;  // The one and the only global runtime context.
@@ -563,37 +560,16 @@ void ReleaseStore(ThreadState *thr, uptr pc, uptr addr);
 void AfterSleep(ThreadState *thr, uptr pc);
 void IncrementEpoch(ThreadState *thr);
 
-// The hacky call uses custom calling convention and an assembly thunk.
-// It is considerably faster that a normal call for the caller
-// if it is not executed (it is intended for slow paths from hot functions).
-// The trick is that the call preserves all registers and the compiler
-// does not treat it as a call.
-// If it does not work for you, use normal call.
-#if !SANITIZER_DEBUG && defined(__x86_64__) && !SANITIZER_MAC
-// The caller may not create the stack frame for itself at all,
-// so we create a reserve stack frame for it (1024b must be enough).
-#define HACKY_CALL(f) \
-  __asm__ __volatile__("sub $1024, %%rsp;" \
-                       CFI_INL_ADJUST_CFA_OFFSET(1024) \
-                       ".hidden " #f "_thunk;" \
-                       "call " #f "_thunk;" \
-                       "add $1024, %%rsp;" \
-                       CFI_INL_ADJUST_CFA_OFFSET(-1024) \
-                       ::: "memory", "cc");
-#else
-#define HACKY_CALL(f) f()
-#endif
-
 #if !SANITIZER_GO
 uptr ALWAYS_INLINE HeapEnd() {
   return HeapMemEnd() + PrimaryAllocator::AdditionalSize();
 }
 #endif
 
-void SlotAttachAndLock(ThreadState *thr) ACQUIRE(thr->slot->mtx);
+void SlotAttachAndLock(ThreadState *thr) SANITIZER_ACQUIRE(thr->slot->mtx);
 void SlotDetach(ThreadState *thr);
-void SlotLock(ThreadState *thr) ACQUIRE(thr->slot->mtx);
-void SlotUnlock(ThreadState *thr) RELEASE(thr->slot->mtx);
+void SlotLock(ThreadState *thr) SANITIZER_ACQUIRE(thr->slot->mtx);
+void SlotUnlock(ThreadState *thr) SANITIZER_RELEASE(thr->slot->mtx);
 void DoReset(ThreadState *thr, uptr epoch);
 void FlushShadowMemory();
 
