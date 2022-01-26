@@ -32,7 +32,7 @@ public:
   // Returns the next token in the token stream.
   virtual FormatToken *getNextToken() = 0;
 
-  // Returns the token precedint the token returned by the last call to
+  // Returns the token preceding the token returned by the last call to
   // getNextToken() in the token stream, or nullptr if no such token exists.
   virtual FormatToken *getPreviousToken() = 0;
 
@@ -246,8 +246,7 @@ public:
   }
 
   FormatToken *getPreviousToken() override {
-    assert(Position > 0);
-    return Tokens[Position - 1];
+    return Position > 0 ? Tokens[Position - 1] : nullptr;
   }
 
   FormatToken *peekNextToken() override {
@@ -343,11 +342,9 @@ void UnwrappedLineParser::parse() {
     pushToken(FormatTok);
     addUnwrappedLine();
 
-    for (SmallVectorImpl<UnwrappedLine>::iterator I = Lines.begin(),
-                                                  E = Lines.end();
-         I != E; ++I) {
-      Callback.consumeUnwrappedLine(*I);
-    }
+    for (const UnwrappedLine &Line : Lines)
+      Callback.consumeUnwrappedLine(Line);
+
     Callback.finishRun();
     Lines.clear();
     while (!PPLevelBranchIndex.empty() &&
@@ -782,6 +779,8 @@ static bool ShouldBreakBeforeBrace(const FormatStyle &Style,
     return Style.BraceWrapping.AfterUnion;
   if (InitialToken.is(tok::kw_struct))
     return Style.BraceWrapping.AfterStruct;
+  if (InitialToken.is(tok::kw_enum))
+    return Style.BraceWrapping.AfterEnum;
   return false;
 }
 
@@ -1138,7 +1137,6 @@ void UnwrappedLineParser::parseModuleImport() {
   }
 
   addUnwrappedLine();
-  return;
 }
 
 // readTokenWithJavaScriptASI reads the next token and terminates the current
@@ -1439,7 +1437,7 @@ void UnwrappedLineParser::parseStructuralElement(bool IsTopLevel) {
       return;
     case tok::kw_requires:
       parseRequires();
-      break;
+      return;
     case tok::kw_enum:
       // Ignore if this is part of "template <enum ...".
       if (Previous && Previous->is(tok::less)) {
@@ -1524,8 +1522,16 @@ void UnwrappedLineParser::parseStructuralElement(bool IsTopLevel) {
         // structural element.
         // FIXME: Figure out cases where this is not true, and add projections
         // for them (the one we know is missing are lambdas).
-        if (Style.BraceWrapping.AfterFunction)
+        if (Style.Language == FormatStyle::LK_Java &&
+            Line->Tokens.front().Tok->is(Keywords.kw_synchronized)) {
+          // If necessary, we could set the type to something different than
+          // TT_FunctionLBrace.
+          if (Style.BraceWrapping.AfterControlStatement ==
+              FormatStyle::BWACS_Always)
+            addUnwrappedLine();
+        } else if (Style.BraceWrapping.AfterFunction) {
           addUnwrappedLine();
+        }
         FormatTok->setType(TT_FunctionLBrace);
         parseBlock();
         addUnwrappedLine();
@@ -1637,19 +1643,9 @@ void UnwrappedLineParser::parseStructuralElement(bool IsTopLevel) {
       break;
     }
     case tok::equal:
-      // Fat arrows (=>) have tok::TokenKind tok::equal but TokenType
-      // TT_FatArrow. They always start an expression or a child block if
-      // followed by a curly brace.
-      if (FormatTok->is(TT_FatArrow)) {
-        nextToken();
-        if (FormatTok->is(tok::l_brace)) {
-          // C# may break after => if the next character is a newline.
-          if (Style.isCSharp() && Style.BraceWrapping.AfterFunction == true) {
-            // calling `addUnwrappedLine()` here causes odd parsing errors.
-            FormatTok->MustBreakBefore = true;
-          }
-          parseChildBlock();
-        }
+      if ((Style.isJavaScript() || Style.isCSharp()) &&
+          FormatTok->is(TT_FatArrow)) {
+        tryToParseChildBlock();
         break;
       }
 
@@ -1725,7 +1721,7 @@ bool UnwrappedLineParser::tryToParsePropertyAccessor() {
   // Try to parse the property accessor:
   // https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/properties
   Tokens->setPosition(StoredPosition);
-  if (!IsTrivialPropertyAccessor && Style.BraceWrapping.AfterFunction == true)
+  if (!IsTrivialPropertyAccessor && Style.BraceWrapping.AfterFunction)
     addUnwrappedLine();
   nextToken();
   do {
@@ -1794,6 +1790,9 @@ bool UnwrappedLineParser::tryToParseLambda() {
       break;
     case tok::l_paren:
       parseParens();
+      break;
+    case tok::l_square:
+      parseSquare();
       break;
     case tok::amp:
     case tok::star:
@@ -1940,18 +1939,15 @@ bool UnwrappedLineParser::tryToParseBracedList() {
   return true;
 }
 
-bool UnwrappedLineParser::tryToParseCSharpLambda() {
-  // Fat arrows (=>) have tok::TokenKind tok::equal but TokenType
-  // TT_FatArrow. They always start an expression or a child block if
-  // followed by a curly brace.
+bool UnwrappedLineParser::tryToParseChildBlock() {
+  assert(Style.isJavaScript() || Style.isCSharp());
+  assert(FormatTok->is(TT_FatArrow));
+  // Fat arrows (=>) have tok::TokenKind tok::equal but TokenType TT_FatArrow.
+  // They always start an expression or a child block if followed by a curly
+  // brace.
   nextToken();
   if (FormatTok->isNot(tok::l_brace))
     return false;
-  // C# may break after => if the next character is a newline.
-  if (Style.BraceWrapping.AfterFunction) {
-    // calling `addUnwrappedLine()` here causes odd parsing errors.
-    FormatTok->MustBreakBefore = true;
-  }
   parseChildBlock();
   return true;
 }
@@ -1964,23 +1960,14 @@ bool UnwrappedLineParser::parseBracedList(bool ContinueOnSemicolons,
   // FIXME: Once we have an expression parser in the UnwrappedLineParser,
   // replace this by using parseAssignmentExpression() inside.
   do {
-    if (Style.isCSharp() && FormatTok->is(TT_FatArrow))
-      if (tryToParseCSharpLambda())
-        continue;
+    if (Style.isCSharp() && FormatTok->is(TT_FatArrow) &&
+        tryToParseChildBlock())
+      continue;
     if (Style.isJavaScript()) {
       if (FormatTok->is(Keywords.kw_function) ||
           FormatTok->startsSequence(Keywords.kw_async, Keywords.kw_function)) {
         tryToParseJSFunction();
         continue;
-      }
-      if (FormatTok->is(TT_FatArrow)) {
-        nextToken();
-        // Fat arrows can be followed by simple expressions or by child blocks
-        // in curly braces.
-        if (FormatTok->is(tok::l_brace)) {
-          parseChildBlock();
-          continue;
-        }
       }
       if (FormatTok->is(tok::l_brace)) {
         // Could be a method inside of a braced list `{a() { return 1; }}`.
@@ -1996,12 +1983,6 @@ bool UnwrappedLineParser::parseBracedList(bool ContinueOnSemicolons,
       return !HasError;
     }
     switch (FormatTok->Tok.getKind()) {
-    case tok::caret:
-      nextToken();
-      if (FormatTok->is(tok::l_brace)) {
-        parseChildBlock();
-      }
-      break;
     case tok::l_square:
       if (Style.isCSharp())
         parseSquare();
@@ -2093,7 +2074,7 @@ void UnwrappedLineParser::parseParens() {
       break;
     case tok::equal:
       if (Style.isCSharp() && FormatTok->is(TT_FatArrow))
-        tryToParseCSharpLambda();
+        tryToParseChildBlock();
       else
         nextToken();
       break;
@@ -2270,7 +2251,7 @@ void UnwrappedLineParser::parseTryCatch() {
     parseStructuralElement();
     --Line->Level;
   }
-  while (1) {
+  while (true) {
     if (FormatTok->is(tok::at))
       nextToken();
     if (!(FormatTok->isOneOf(tok::kw_catch, Keywords.kw___except,
@@ -2467,7 +2448,7 @@ void UnwrappedLineParser::parseLabel(bool LeftAlignLabel) {
         addUnwrappedLine();
         if (!Style.IndentCaseBlocks &&
             Style.BreakBeforeBraces == FormatStyle::BS_Whitesmiths) {
-          Line->Level++;
+          ++Line->Level;
         }
       }
       parseStructuralElement();
@@ -2626,7 +2607,7 @@ void UnwrappedLineParser::parseRequires() {
   if (FormatTok->Previous && FormatTok->Previous->is(tok::greater)) {
     addUnwrappedLine();
     if (Style.IndentRequires) {
-      Line->Level++;
+      ++Line->Level;
     }
   }
   nextToken();
@@ -2635,11 +2616,11 @@ void UnwrappedLineParser::parseRequires() {
 }
 
 bool UnwrappedLineParser::parseEnum() {
+  const FormatToken &InitialToken = *FormatTok;
+
   // Won't be 'enum' for NS_ENUMs.
   if (FormatTok->Tok.is(tok::kw_enum))
     nextToken();
-
-  const FormatToken &InitialToken = *FormatTok;
 
   // In TypeScript, "enum" can also be used as property name, e.g. in interface
   // declarations. An "enum" keyword followed by a colon would be a syntax
@@ -2893,6 +2874,8 @@ void UnwrappedLineParser::parseRecord(bool ParseAsExpr) {
         if (!tryToParseBracedList())
           break;
       }
+      if (FormatTok->is(tok::l_square) && !tryToParseLambda())
+        break;
       if (FormatTok->Tok.is(tok::semi))
         return;
       if (Style.isCSharp() && FormatTok->is(Keywords.kw_where)) {
@@ -3293,10 +3276,7 @@ continuesLineCommentSection(const FormatToken &FormatTok,
 
 void UnwrappedLineParser::flushComments(bool NewlineBeforeNext) {
   bool JustComments = Line->Tokens.empty();
-  for (SmallVectorImpl<FormatToken *>::const_iterator
-           I = CommentsBeforeNextToken.begin(),
-           E = CommentsBeforeNextToken.end();
-       I != E; ++I) {
+  for (FormatToken *Tok : CommentsBeforeNextToken) {
     // Line comments that belong to the same line comment section are put on the
     // same line since later we might want to reflow content between them.
     // Additional fine-grained breaking of line comment sections is controlled
@@ -3305,11 +3285,11 @@ void UnwrappedLineParser::flushComments(bool NewlineBeforeNext) {
     //
     // FIXME: Consider putting separate line comment sections as children to the
     // unwrapped line instead.
-    (*I)->ContinuesLineCommentSection =
-        continuesLineCommentSection(**I, *Line, CommentPragmasRegex);
-    if (isOnNewLine(**I) && JustComments && !(*I)->ContinuesLineCommentSection)
+    Tok->ContinuesLineCommentSection =
+        continuesLineCommentSection(*Tok, *Line, CommentPragmasRegex);
+    if (isOnNewLine(*Tok) && JustComments && !Tok->ContinuesLineCommentSection)
       addUnwrappedLine();
-    pushToken(*I);
+    pushToken(Tok);
   }
   if (NewlineBeforeNext && JustComments)
     addUnwrappedLine();

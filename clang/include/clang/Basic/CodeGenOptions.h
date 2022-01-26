@@ -307,7 +307,7 @@ public:
     std::shared_ptr<llvm::Regex> Regex;
 
     /// By default, optimization remark is missing.
-    OptRemark() : Kind(RK_Missing), Pattern(""), Regex(nullptr) {}
+    OptRemark() : Kind(RK_Missing), Regex(nullptr) {}
 
     /// Returns true iff the optimization remark holds a valid regular
     /// expression.
@@ -398,7 +398,7 @@ public:
   /// Executable and command-line used to create a given CompilerInvocation.
   /// Most of the time this will be the full -cc1 command.
   const char *Argv0 = nullptr;
-  ArrayRef<const char *> CommandLineArgs;
+  std::vector<std::string> CommandLineArgs;
 
   /// The minimum hotness value a diagnostic needs in order to be included in
   /// optimization diagnostics.

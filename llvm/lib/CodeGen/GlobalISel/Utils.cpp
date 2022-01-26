@@ -704,8 +704,7 @@ Register llvm::getFunctionLiveInPhysReg(MachineFunction &MF,
                                         const TargetInstrInfo &TII,
                                         MCRegister PhysReg,
                                         const TargetRegisterClass &RC,
-                                        LLT RegTy) {
-  DebugLoc DL; // FIXME: Is no location the right choice?
+                                        const DebugLoc &DL, LLT RegTy) {
   MachineBasicBlock &EntryMBB = MF.front();
   MachineRegisterInfo &MRI = MF.getRegInfo();
   Register LiveIn = MRI.getLiveInVirtReg(PhysReg);
@@ -921,6 +920,21 @@ LLT llvm::getLCMType(LLT OrigTy, LLT TargetTy) {
     return TargetTy;
 
   return LLT::scalar(LCMSize);
+}
+
+LLT llvm::getCoverTy(LLT OrigTy, LLT TargetTy) {
+  if (!OrigTy.isVector() || !TargetTy.isVector() || OrigTy == TargetTy ||
+      (OrigTy.getScalarSizeInBits() != TargetTy.getScalarSizeInBits()))
+    return getLCMType(OrigTy, TargetTy);
+
+  unsigned OrigTyNumElts = OrigTy.getNumElements();
+  unsigned TargetTyNumElts = TargetTy.getNumElements();
+  if (OrigTyNumElts % TargetTyNumElts == 0)
+    return OrigTy;
+
+  unsigned NumElts = alignTo(OrigTyNumElts, TargetTyNumElts);
+  return LLT::scalarOrVector(ElementCount::getFixed(NumElts),
+                             OrigTy.getElementType());
 }
 
 LLT llvm::getGCDType(LLT OrigTy, LLT TargetTy) {

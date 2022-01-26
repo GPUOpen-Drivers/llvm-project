@@ -407,7 +407,7 @@ LogicalResult mlir::affineForOpBodySkew(AffineForOp forOp,
       lbShift = d * step;
     }
     // Augment the list of operations that get into the current open interval.
-    opGroupQueue.push_back({d, sortedOpGroups[d]});
+    opGroupQueue.emplace_back(d, sortedOpGroups[d]);
   }
 
   // Those operations groups left in the queue now need to be processed (FIFO)
@@ -510,20 +510,55 @@ checkTilingLegality(MutableArrayRef<mlir::AffineForOp> origLoops) {
   return success(checkTilingLegalityImpl(origLoops));
 }
 
-/// Check if the input data is valid and whether tiled code will be legal or
-/// not.
+/// Checks whether a loop nest is hyper-rectangular or not.
+LogicalResult checkIfHyperRectangular(MutableArrayRef<AffineForOp> input) {
+  FlatAffineValueConstraints cst;
+  SmallVector<Operation *, 8> ops(input.begin(), input.end());
+  // 0-d or 1-d is trivially hyper-rectangular.
+  if (input.size() <= 1)
+    return success();
+  if (failed(getIndexSet(ops, &cst))) {
+    LLVM_DEBUG(llvm::dbgs() << "Index set computation failed!\n");
+    return failure();
+  }
+  if (!cst.isHyperRectangular(0, input.size())) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "Non-hyperrectangular nests not supported for tiling!\n");
+    return failure();
+  }
+  return success();
+}
+
+/// Check if the input nest is supported for tiling and whether tiling would be
+/// legal or not.
 template <typename t>
-void performPreTilingChecks(MutableArrayRef<AffineForOp> input,
-                            ArrayRef<t> tileSizes) {
-  // Check if the supplied for op's are all successively nested.
-  assert(!input.empty() && "no loops in input band");
+LogicalResult performPreTilingChecks(MutableArrayRef<AffineForOp> input,
+                                     ArrayRef<t> tileSizes) {
   assert(input.size() == tileSizes.size() && "Too few/many tile sizes");
 
-  assert(isPerfectlyNested(input) && "input loops not perfectly nested");
+  if (llvm::any_of(input,
+                   [](AffineForOp op) { return op.getNumResults() > 0; })) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "Cannot tile nest where a loop has yield values\n");
+    return failure();
+  }
 
-  // Perform tiling legality test.
-  if (failed(checkTilingLegality(input)))
-    input[0].emitRemark("tiled code is illegal due to dependences");
+  // Check if the supplied `for` ops are all successively nested.
+  if (!isPerfectlyNested(input)) {
+    LLVM_DEBUG(llvm::dbgs() << "input loops not perfectly nested");
+    return failure();
+  }
+
+  if (failed(checkIfHyperRectangular(input)))
+    return failure();
+
+  // Check if tiling is legal.
+  if (failed(checkTilingLegality(input))) {
+    input[0].emitRemark("tiling code is illegal due to dependences");
+    return failure();
+  }
+
+  return success();
 }
 
 /// Move the loop body of AffineForOp 'src' from 'src' into the specified
@@ -580,21 +615,6 @@ void constructTiledLoopNest(MutableArrayRef<AffineForOp> origLoops,
 
   // Move the loop body of the original nest to the new one.
   moveLoopBody(origLoops.back(), innermostPointLoop);
-}
-
-/// Checks whether a loop nest is hyper-rectangular or not.
-LogicalResult checkIfHyperRectangular(MutableArrayRef<AffineForOp> input,
-                                      AffineForOp rootAffineForOp,
-                                      unsigned width) {
-  FlatAffineValueConstraints cst;
-  SmallVector<Operation *, 8> ops(input.begin(), input.end());
-  (void)getIndexSet(ops, &cst);
-  if (!cst.isHyperRectangular(0, width)) {
-    rootAffineForOp.emitError("tiled code generation unimplemented for the "
-                              "non-hyperrectangular case");
-    return failure();
-  }
-  return success();
 }
 
 /// Set lower and upper bounds of intra-tile loops for parametric tiling.
@@ -912,11 +932,16 @@ LogicalResult
 mlir::tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
                           ArrayRef<unsigned> tileSizes,
                           SmallVectorImpl<AffineForOp> *tiledNest) {
-  performPreTilingChecks(input, tileSizes);
+  if (input.empty())
+    return success();
+
+  if (failed(performPreTilingChecks(input, tileSizes)))
+    return failure();
 
   MutableArrayRef<AffineForOp> origLoops = input;
   AffineForOp rootAffineForOp = origLoops[0];
-  // Note that width is at least one since band isn't empty.
+
+  // Note that width is at least one since the band isn't empty.
   unsigned width = input.size();
   SmallVector<AffineForOp, 6> tiledLoops(2 * width);
 
@@ -926,9 +951,6 @@ mlir::tilePerfectlyNested(MutableArrayRef<AffineForOp> input,
 
   SmallVector<Value, 8> origLoopIVs;
   extractForInductionVars(input, &origLoopIVs);
-
-  if (failed(checkIfHyperRectangular(input, rootAffineForOp, width)))
-    return failure();
 
   // Set loop bounds for the tiled loop nest.
   constructTiledIndexSetHyperRect(origLoops, tiledLoops, tileSizes);
@@ -954,11 +976,14 @@ LogicalResult
 mlir::tilePerfectlyNestedParametric(MutableArrayRef<AffineForOp> input,
                                     ArrayRef<Value> tileSizes,
                                     SmallVectorImpl<AffineForOp> *tiledNest) {
-  performPreTilingChecks(input, tileSizes);
+  if (input.empty())
+    return success();
+
+  if (failed(performPreTilingChecks(input, tileSizes)))
+    return failure();
 
   MutableArrayRef<AffineForOp> origLoops = input;
   AffineForOp rootAffineForOp = origLoops[0];
-  // Note that width is at least one since band isn't empty.
   unsigned width = input.size();
   SmallVector<AffineForOp, 6> tiledLoops(2 * width);
 
@@ -968,9 +993,6 @@ mlir::tilePerfectlyNestedParametric(MutableArrayRef<AffineForOp> input,
 
   SmallVector<Value, 8> origLoopIVs;
   extractForInductionVars(input, &origLoopIVs);
-
-  if (failed(checkIfHyperRectangular(input, rootAffineForOp, width)))
-    return failure();
 
   // Set loop bounds for the tiled loop nest.
   constructParametricallyTiledIndexSetHyperRect(origLoops, tiledLoops,
@@ -1160,8 +1182,14 @@ LogicalResult mlir::loopUnrollByFactor(
     function_ref<void(unsigned, Operation *, OpBuilder)> annotateFn) {
   assert(unrollFactor > 0 && "unroll factor should be positive");
 
-  if (unrollFactor == 1)
-    return promoteIfSingleIteration(forOp);
+  Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
+  if (unrollFactor == 1) {
+    if (mayBeConstantTripCount.hasValue() &&
+        mayBeConstantTripCount.getValue() == 1 &&
+        failed(promoteIfSingleIteration(forOp)))
+      return failure();
+    return success();
+  }
 
   // Nothing in the loop body other than the terminator.
   if (llvm::hasSingleElement(forOp.getBody()->getOperations()))
@@ -1169,7 +1197,6 @@ LogicalResult mlir::loopUnrollByFactor(
 
   // If the trip count is lower than the unroll factor, no unrolled body.
   // TODO: option to specify cleanup loop unrolling.
-  Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
   if (mayBeConstantTripCount.hasValue() &&
       mayBeConstantTripCount.getValue() < unrollFactor)
     return failure();
@@ -1215,8 +1242,6 @@ LogicalResult mlir::loopUnrollByFactor(
     scf::ForOp forOp, uint64_t unrollFactor,
     function_ref<void(unsigned, Operation *, OpBuilder)> annotateFn) {
   assert(unrollFactor > 0 && "expected positive unroll factor");
-  if (unrollFactor == 1)
-    return promoteIfSingleIteration(forOp);
 
   // Return if the loop body is empty.
   if (llvm::hasSingleElement(forOp.getBody()->getOperations()))
@@ -1242,6 +1267,13 @@ LogicalResult mlir::loopUnrollByFactor(
     assert(lbCst >= 0 && ubCst >= 0 && stepCst >= 0 &&
            "expected positive loop bounds and step");
     int64_t tripCount = mlir::ceilDiv(ubCst - lbCst, stepCst);
+
+    if (unrollFactor == 1) {
+      if (tripCount == 1 && failed(promoteIfSingleIteration(forOp)))
+        return failure();
+      return success();
+    }
+
     int64_t tripCountEvenMultiple = tripCount - (tripCount % unrollFactor);
     int64_t upperBoundUnrolledCst = lbCst + tripCountEvenMultiple * stepCst;
     assert(upperBoundUnrolledCst <= ubCst);
@@ -1345,9 +1377,7 @@ static bool areInnerBoundsInvariant(AffineForOp forOp) {
     }
     return WalkResult::advance();
   });
-  if (walkResult.wasInterrupted())
-    return false;
-  return true;
+  return !walkResult.wasInterrupted();
 }
 
 // Gathers all maximal sub-blocks of operations that do not themselves
@@ -1370,7 +1400,7 @@ struct JamBlockGatherer {
       while (it != e && !isa<AffineForOp>(&*it))
         ++it;
       if (it != subBlockStart)
-        subBlocks.push_back({subBlockStart, std::prev(it)});
+        subBlocks.emplace_back(subBlockStart, std::prev(it));
       // Process all for ops that appear next.
       while (it != e && isa<AffineForOp>(&*it))
         walk(&*it++);
@@ -1383,14 +1413,19 @@ LogicalResult mlir::loopUnrollJamByFactor(AffineForOp forOp,
                                           uint64_t unrollJamFactor) {
   assert(unrollJamFactor > 0 && "unroll jam factor should be positive");
 
-  if (unrollJamFactor == 1)
-    return promoteIfSingleIteration(forOp);
+  Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
+  if (unrollJamFactor == 1) {
+    if (mayBeConstantTripCount.hasValue() &&
+        mayBeConstantTripCount.getValue() == 1 &&
+        failed(promoteIfSingleIteration(forOp)))
+      return failure();
+    return success();
+  }
 
   // Nothing in the loop body other than the terminator.
   if (llvm::hasSingleElement(forOp.getBody()->getOperations()))
     return success();
 
-  Optional<uint64_t> mayBeConstantTripCount = getConstantTripCount(forOp);
   // If the trip count is lower than the unroll jam factor, no unroll jam.
   if (mayBeConstantTripCount.hasValue() &&
       mayBeConstantTripCount.getValue() < unrollJamFactor) {
@@ -1551,7 +1586,7 @@ LogicalResult mlir::loopUnrollJamByFactor(AffineForOp forOp,
       for (unsigned i = unrollJamFactor - 1; i >= 1; --i) {
         rhs = forOp.getResult(i * oldNumResults + pos);
         // Create ops based on reduction type.
-        lhs = getReductionOp(reduction.kind, builder, loc, lhs, rhs);
+        lhs = arith::getReductionOp(reduction.kind, builder, loc, lhs, rhs);
         if (!lhs)
           return failure();
         Operation *op = lhs.getDefiningOp();
@@ -1608,8 +1643,7 @@ static bool checkLoopInterchangeDependences(
   // lexicographically negative.
   // Example 1: [-1, 1][0, 0]
   // Example 2: [0, 0][-1, 1]
-  for (unsigned i = 0, e = depCompsVec.size(); i < e; ++i) {
-    const SmallVector<DependenceComponent, 2> &depComps = depCompsVec[i];
+  for (const auto &depComps : depCompsVec) {
     assert(depComps.size() >= maxLoopDepth);
     // Check if the first non-zero dependence component is positive.
     // This iterates through loops in the desired order.
@@ -1748,8 +1782,7 @@ AffineForOp mlir::sinkSequentialLoops(AffineForOp forOp) {
 
   // Mark loops as either parallel or sequential.
   SmallVector<bool, 8> isParallelLoop(maxLoopDepth, true);
-  for (unsigned i = 0, e = depCompsVec.size(); i < e; ++i) {
-    SmallVector<DependenceComponent, 2> &depComps = depCompsVec[i];
+  for (auto &depComps : depCompsVec) {
     assert(depComps.size() >= maxLoopDepth);
     for (unsigned j = 0; j < maxLoopDepth; ++j) {
       DependenceComponent &depComp = depComps[j];
@@ -2884,8 +2917,8 @@ static LogicalResult generateCopy(
                                  /*extraIndices=*/{}, indexRemap,
                                  /*extraOperands=*/regionSymbols,
                                  /*symbolOperands=*/{},
-                                 /*domInstFilter=*/&*begin,
-                                 /*postDomInstFilter=*/&*postDomFilter);
+                                 /*domOpFilter=*/&*begin,
+                                 /*postDomOpFilter=*/&*postDomFilter);
 
   *nBegin = isBeginAtStartOfBlock ? block->begin() : std::next(prevOfBegin);
 
@@ -3181,7 +3214,7 @@ gatherLoopsInBlock(Block *block, unsigned currLoopDepth,
   // Add a new empty level to output if it doesn't exist level already.
   assert(currLoopDepth <= depthToLoops.size() && "Unexpected currLoopDepth");
   if (currLoopDepth == depthToLoops.size())
-    depthToLoops.push_back(SmallVector<AffineForOp, 2>());
+    depthToLoops.emplace_back();
 
   for (auto &op : *block) {
     if (auto forOp = dyn_cast<AffineForOp>(op)) {
@@ -3260,7 +3293,7 @@ static AffineIfOp createSeparationCondition(MutableArrayRef<AffineForOp> loops,
                                1);
     unsigned fullTileLbPos, fullTileUbPos;
     if (!cst.getConstantBoundOnDimSize(0, /*lb=*/nullptr,
-                                       /*lbFloorDivisor=*/nullptr,
+                                       /*boundFloorDivisor=*/nullptr,
                                        /*ub=*/nullptr, &fullTileLbPos,
                                        &fullTileUbPos)) {
       LLVM_DEBUG(llvm::dbgs() << "Can't get constant diff pair for a loop\n");
@@ -3357,7 +3390,7 @@ createFullTiles(MutableArrayRef<AffineForOp> inputNest,
 
   // Add the body for the full tile loop nest.
   BlockAndValueMapping operandMap;
-  for (auto loopEn : llvm::enumerate(inputNest))
+  for (const auto &loopEn : llvm::enumerate(inputNest))
     operandMap.map(loopEn.value().getInductionVar(),
                    fullTileLoops[loopEn.index()].getInductionVar());
   b = OpBuilder::atBlockTerminator(fullTileLoops.back().getBody());
