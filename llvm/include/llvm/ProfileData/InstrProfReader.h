@@ -100,6 +100,10 @@ public:
   /// Return true if we must provide debug info to create PGO profiles.
   virtual bool useDebugInfoCorrelate() const { return false; }
 
+  /// Returns a BitsetEnum describing the attributes of the profile. To check
+  /// individual attributes prefer using the helpers above.
+  virtual InstrProfKind getProfileKind() const = 0;
+
   /// Return the PGO symtab. There are three different readers:
   /// Raw, Text, and Indexed profile readers. The first two types
   /// of readers are used only by llvm-profdata tool, while the indexed
@@ -176,9 +180,8 @@ private:
   std::unique_ptr<MemoryBuffer> DataBuffer;
   /// Iterator over the profile data.
   line_iterator Line;
-  bool IsIRLevelProfile = false;
-  bool HasCSIRLevelProfile = false;
-  bool InstrEntryBBEnabled = false;
+  /// The attributes of the current profile.
+  InstrProfKind ProfileKind = InstrProfKind::Unknown;
 
   Error readValueProfileData(InstrProfRecord &Record);
 
@@ -191,11 +194,19 @@ public:
   /// Return true if the given buffer is in text instrprof format.
   static bool hasFormat(const MemoryBuffer &Buffer);
 
-  bool isIRLevelProfile() const override { return IsIRLevelProfile; }
+  bool isIRLevelProfile() const override {
+    return static_cast<bool>(ProfileKind & InstrProfKind::IR);
+  }
 
-  bool hasCSIRLevelProfile() const override { return HasCSIRLevelProfile; }
+  bool hasCSIRLevelProfile() const override {
+    return static_cast<bool>(ProfileKind & InstrProfKind::CS);
+  }
 
-  bool instrEntryBBEnabled() const override { return InstrEntryBBEnabled; }
+  bool instrEntryBBEnabled() const override {
+    return static_cast<bool>(ProfileKind & InstrProfKind::BB);
+  }
+
+  InstrProfKind getProfileKind() const override { return ProfileKind; }
 
   /// Read the header.
   Error readHeader() override;
@@ -233,7 +244,8 @@ private:
   uint64_t NamesDelta;
   const RawInstrProf::ProfileData<IntPtrT> *Data;
   const RawInstrProf::ProfileData<IntPtrT> *DataEnd;
-  const uint64_t *CountersStart;
+  const char *CountersStart;
+  const char *CountersEnd;
   const char *NamesStart;
   const char *NamesEnd;
   // After value profile is all read, this pointer points to
@@ -275,6 +287,21 @@ public:
     return (Version & VARIANT_MASK_DBG_CORRELATE) != 0;
   }
 
+  /// Returns a BitsetEnum describing the attributes of the raw instr profile.
+  InstrProfKind getProfileKind() const override {
+    InstrProfKind ProfileKind = InstrProfKind::Unknown;
+    if (Version & VARIANT_MASK_IR_PROF) {
+      ProfileKind |= InstrProfKind::IR;
+    }
+    if (Version & VARIANT_MASK_CSIR_PROF) {
+      ProfileKind |= InstrProfKind::CS;
+    }
+    if (Version & VARIANT_MASK_INSTR_ENTRY) {
+      ProfileKind |= InstrProfKind::BB;
+    }
+    return ProfileKind;
+  }
+
   InstrProfSymtab &getSymtab() override {
     assert(Symtab.get());
     return *Symtab.get();
@@ -310,6 +337,15 @@ private:
   bool atEnd() const { return Data == DataEnd; }
 
   void advanceData() {
+    // `CountersDelta` is a constant zero when using debug info correlation.
+    if (!Correlator) {
+      // The initial CountersDelta is the in-memory address difference between
+      // the data and counts sections:
+      // start(__llvm_prf_cnts) - start(__llvm_prf_data)
+      // As we advance to the next record, we maintain the correct CountersDelta
+      // with respect to the next record.
+      CountersDelta -= sizeof(*Data);
+    }
     Data++;
     ValueDataStart += CurValueDataSize;
   }
@@ -319,20 +355,11 @@ private:
       return (const char *)ValueDataStart;
   }
 
-  /// Get the offset of \p CounterPtr from the start of the counters section of
-  /// the profile. The offset has units of "number of counters", i.e. increasing
-  /// the offset by 1 corresponds to an increase in the *byte offset* by 8.
-  ptrdiff_t getCounterOffset(IntPtrT CounterPtr) const {
-    return (swap(CounterPtr) - CountersDelta) / sizeof(uint64_t);
-  }
-
-  const uint64_t *getCounter(ptrdiff_t Offset) const {
-    return CountersStart + Offset;
-  }
-
   StringRef getName(uint64_t NameRef) const {
     return Symtab->getFuncName(swap(NameRef));
   }
+
+  int getCounterTypeSize() const { return sizeof(uint64_t); }
 };
 
 using RawInstrProfReader32 = RawInstrProfReader<uint32_t>;
@@ -412,6 +439,7 @@ struct InstrProfReaderIndexBase {
   virtual bool isIRLevelProfile() const = 0;
   virtual bool hasCSIRLevelProfile() const = 0;
   virtual bool instrEntryBBEnabled() const = 0;
+  virtual InstrProfKind getProfileKind() const = 0;
   virtual Error populateSymtab(InstrProfSymtab &) = 0;
 };
 
@@ -462,6 +490,20 @@ public:
 
   bool instrEntryBBEnabled() const override {
     return (FormatVersion & VARIANT_MASK_INSTR_ENTRY) != 0;
+  }
+
+  InstrProfKind getProfileKind() const override {
+    InstrProfKind ProfileKind = InstrProfKind::Unknown;
+    if (FormatVersion & VARIANT_MASK_IR_PROF) {
+      ProfileKind |= InstrProfKind::IR;
+    }
+    if (FormatVersion & VARIANT_MASK_CSIR_PROF) {
+      ProfileKind |= InstrProfKind::CS;
+    }
+    if (FormatVersion & VARIANT_MASK_INSTR_ENTRY) {
+      ProfileKind |= InstrProfKind::BB;
+    }
+    return ProfileKind;
   }
 
   Error populateSymtab(InstrProfSymtab &Symtab) override {
@@ -520,6 +562,12 @@ public:
 
   bool instrEntryBBEnabled() const override {
     return Index->instrEntryBBEnabled();
+  }
+
+  /// Returns a BitsetEnum describing the attributes of the indexed instr
+  /// profile.
+  InstrProfKind getProfileKind() const override {
+    return Index->getProfileKind();
   }
 
   /// Return true if the given buffer is in an indexed instrprof format.
