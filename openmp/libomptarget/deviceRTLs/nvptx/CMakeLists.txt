@@ -11,11 +11,11 @@
 ##===----------------------------------------------------------------------===##
 
 # By default we will build NVPTX deviceRTL on a CUDA free system
-set(LIBOMPTARGET_BUILD_NVPTX_BCLIB TRUE CACHE BOOL
+set(LIBOMPTARGET_BUILD_NVPTX_BCLIB FALSE CACHE BOOL
   "Whether build NVPTX deviceRTL on CUDA free system.")
 
-if (NOT (LIBOMPTARGET_DEP_CUDA_FOUND OR LIBOMPTARGET_BUILD_NVPTX_BCLIB))
-  libomptarget_say("Not building NVPTX deviceRTL by default on CUDA free system.")
+if (NOT LIBOMPTARGET_BUILD_NVPTX_BCLIB)
+  libomptarget_say("Not building NVPTX deviceRTL: Disabled by LIBOMPTARGET_BUILD_NVPTX_BCLIB")
   return()
 endif()
 
@@ -165,6 +165,7 @@ set(bc_flags -S -x c++ -O1 -std=c++14
              -mllvm -openmp-opt-disable
              -ffreestanding
              -target nvptx64
+             -fvisibility=hidden
              -Xclang -emit-llvm-bc
              -Xclang -aux-triple -Xclang ${aux_triple}
              -fopenmp -fopenmp-cuda-mode -Xclang -fopenmp-is-device

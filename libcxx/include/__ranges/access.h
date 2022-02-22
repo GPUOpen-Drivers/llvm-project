@@ -25,7 +25,7 @@
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
-#if !defined(_LIBCPP_HAS_NO_RANGES)
+#if !defined(_LIBCPP_HAS_NO_CONCEPTS)
 
 namespace ranges {
   template <class _Tp>
@@ -83,7 +83,7 @@ namespace __begin {
 
     void operator()(auto&&) const = delete;
   };
-}
+} // namespace __begin
 
 inline namespace __cpo {
   inline constexpr auto begin = __begin::__fn{};
@@ -150,7 +150,7 @@ namespace __end {
 
     void operator()(auto&&) const = delete;
   };
-}
+} // namespace __end
 
 inline namespace __cpo {
   inline constexpr auto end = __end::__fn{};
@@ -163,11 +163,12 @@ namespace ranges {
 namespace __cbegin {
   struct __fn {
     template <class _Tp>
+      requires is_lvalue_reference_v<_Tp&&>
     [[nodiscard]] _LIBCPP_HIDE_FROM_ABI
-    constexpr auto operator()(_Tp& __t) const
-      noexcept(noexcept(ranges::begin(static_cast<const _Tp&>(__t))))
-      -> decltype(      ranges::begin(static_cast<const _Tp&>(__t)))
-      { return          ranges::begin(static_cast<const _Tp&>(__t)); }
+    constexpr auto operator()(_Tp&& __t) const
+      noexcept(noexcept(ranges::begin(static_cast<const remove_reference_t<_Tp>&>(__t))))
+      -> decltype(      ranges::begin(static_cast<const remove_reference_t<_Tp>&>(__t)))
+      { return          ranges::begin(static_cast<const remove_reference_t<_Tp>&>(__t)); }
 
     template <class _Tp>
       requires is_rvalue_reference_v<_Tp&&>
@@ -177,7 +178,7 @@ namespace __cbegin {
       -> decltype(      ranges::begin(static_cast<const _Tp&&>(__t)))
       { return          ranges::begin(static_cast<const _Tp&&>(__t)); }
   };
-}
+} // namespace __cbegin
 
 inline namespace __cpo {
   inline constexpr auto cbegin = __cbegin::__fn{};
@@ -190,11 +191,12 @@ namespace ranges {
 namespace __cend {
   struct __fn {
     template <class _Tp>
+      requires is_lvalue_reference_v<_Tp&&>
     [[nodiscard]] _LIBCPP_HIDE_FROM_ABI
-    constexpr auto operator()(_Tp& __t) const
-      noexcept(noexcept(ranges::end(static_cast<const _Tp&>(__t))))
-      -> decltype(      ranges::end(static_cast<const _Tp&>(__t)))
-      { return          ranges::end(static_cast<const _Tp&>(__t)); }
+    constexpr auto operator()(_Tp&& __t) const
+      noexcept(noexcept(ranges::end(static_cast<const remove_reference_t<_Tp>&>(__t))))
+      -> decltype(      ranges::end(static_cast<const remove_reference_t<_Tp>&>(__t)))
+      { return          ranges::end(static_cast<const remove_reference_t<_Tp>&>(__t)); }
 
     template <class _Tp>
       requires is_rvalue_reference_v<_Tp&&>
@@ -204,14 +206,14 @@ namespace __cend {
       -> decltype(      ranges::end(static_cast<const _Tp&&>(__t)))
       { return          ranges::end(static_cast<const _Tp&&>(__t)); }
   };
-}
+} // namespace __cend
 
 inline namespace __cpo {
   inline constexpr auto cend = __cend::__fn{};
 } // namespace __cpo
 } // namespace ranges
 
-#endif // !defined(_LIBCPP_HAS_NO_RANGES)
+#endif // !defined(_LIBCPP_HAS_NO_CONCEPTS)
 
 _LIBCPP_END_NAMESPACE_STD
 

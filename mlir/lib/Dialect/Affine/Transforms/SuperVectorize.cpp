@@ -12,14 +12,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "PassDetail.h"
-#include "mlir/Analysis/AffineAnalysis.h"
-#include "mlir/Analysis/LoopAnalysis.h"
-#include "mlir/Analysis/NestedMatcher.h"
+#include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/NestedMatcher.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
-#include "mlir/Dialect/Vector/VectorOps.h"
-#include "mlir/Dialect/Vector/VectorUtils.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Utils/VectorUtils.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
@@ -608,7 +608,7 @@ namespace {
 struct Vectorize : public AffineVectorizeBase<Vectorize> {
   Vectorize() = default;
   Vectorize(ArrayRef<int64_t> virtualVectorSize);
-  void runOnFunction() override;
+  void runOnOperation() override;
 };
 
 } // namespace
@@ -1406,9 +1406,9 @@ static Operation *widenOp(Operation *op, VectorizationState &state) {
   // name that works both in scalar mode and vector mode.
   // TODO: Is it worth considering an Operation.clone operation which
   // changes the type so we can promote an Operation with less boilerplate?
-  OperationState vecOpState(op->getLoc(), op->getName().getStringRef(),
-                            vectorOperands, vectorTypes, op->getAttrs(),
-                            /*successors=*/{}, /*regions=*/{});
+  OperationState vecOpState(op->getLoc(), op->getName(), vectorOperands,
+                            vectorTypes, op->getAttrs(), /*successors=*/{},
+                            /*regions=*/{});
   Operation *vecOp = state.builder.createOperation(vecOpState);
   state.registerOpVectorReplacement(op, vecOp);
   return vecOp;
@@ -1436,8 +1436,8 @@ static Operation *vectorizeAffineYieldOp(AffineYieldOp yieldOp,
     for (unsigned i = 0; i < newYieldOp->getNumOperands(); ++i) {
       Value result = newYieldOp->getOperand(i);
       Value iterArg = cast<AffineForOp>(newParentOp).getRegionIterArgs()[i];
-      Value maskedResult = state.builder.create<SelectOp>(result.getLoc(), mask,
-                                                          result, iterArg);
+      Value maskedResult = state.builder.create<arith::SelectOp>(
+          result.getLoc(), mask, result, iterArg);
       LLVM_DEBUG(
           dbgs() << "\n[early-vect]+++++ masking a yielded vector value: "
                  << maskedResult);
@@ -1709,8 +1709,8 @@ std::unique_ptr<OperationPass<FuncOp>> createSuperVectorizePass() {
 
 /// Applies vectorization to the current function by searching over a bunch of
 /// predetermined patterns.
-void Vectorize::runOnFunction() {
-  FuncOp f = getFunction();
+void Vectorize::runOnOperation() {
+  FuncOp f = getOperation();
   if (!fastestVaryingPattern.empty() &&
       fastestVaryingPattern.size() != vectorSizes.size()) {
     f.emitRemark("Fastest varying pattern specified with different size than "

@@ -80,6 +80,8 @@ if(LLVM_LIBC_INCLUDE_SCUDO)
   endif()
 endif()
 
+option(LIBC_INCLUDE_DOCS "Build the libc documentation." ${LLVM_INCLUDE_DOCS})
+
 include(CMakeParseArguments)
 include(LLVMLibCRules)
 include(LLVMLibCCheckCpuFeatures)
@@ -89,7 +91,7 @@ if(EXISTS "${LIBC_SOURCE_DIR}/config/${LIBC_TARGET_OS}/${LIBC_TARGET_ARCHITECTUR
 elseif(EXISTS "${LIBC_SOURCE_DIR}/config/${LIBC_TARGET_OS}/entrypoints.txt")
   set(entrypoint_file "${LIBC_SOURCE_DIR}/config/${LIBC_TARGET_OS}/entrypoints.txt")
 else()
-  message(FATAL_ERROR "entrypoints.txt file for the target platform not found.")
+  message(FATAL_ERROR "entrypoints.txt file for the target platform '${LIBC_TARGET_OS}/${LIBC_TARGET_ARCHITECTURE}' not found.")
 endif()
 include(${entrypoint_file})
 
@@ -138,3 +140,7 @@ if(LLVM_INCLUDE_TESTS)
 endif()
 
 add_subdirectory(benchmarks)
+
+if (LIBC_INCLUDE_DOCS)
+  add_subdirectory(docs)
+endif()
