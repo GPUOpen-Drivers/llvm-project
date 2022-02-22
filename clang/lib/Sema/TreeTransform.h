@@ -6635,6 +6635,7 @@ QualType TreeTransform<Derived>::TransformAutoType(TypeLocBuilder &TLB,
   NewTL.setFoundDecl(TL.getFoundDecl());
   NewTL.setLAngleLoc(TL.getLAngleLoc());
   NewTL.setRAngleLoc(TL.getRAngleLoc());
+  NewTL.setRParenLoc(TL.getRParenLoc());
   for (unsigned I = 0; I < NewTL.getNumArgs(); ++I)
     NewTL.setArgLocInfo(I, NewTemplateArgs.arguments()[I].getLocInfo());
 
@@ -12493,6 +12494,8 @@ TreeTransform<Derived>::TransformExprRequirement(concepts::ExprRequirement *Req)
     TransExpr = Req->getExprSubstitutionDiagnostic();
   else {
     ExprResult TransExprRes = getDerived().TransformExpr(Req->getExpr());
+    if (TransExprRes.isUsable() && TransExprRes.get()->hasPlaceholderType())
+      TransExprRes = SemaRef.CheckPlaceholderExpr(TransExprRes.get());
     if (TransExprRes.isInvalid())
       return nullptr;
     TransExpr = TransExprRes.get();

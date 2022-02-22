@@ -22,7 +22,6 @@
 #include "llvm/ADT/StringRef.h"
 #include <cstdint>
 #include <cstring>
-#include <string>
 
 namespace llvm {
 namespace ELF {
@@ -373,7 +372,8 @@ enum {
   // was never defined for V1.
   ELFABIVERSION_AMDGPU_HSA_V2 = 0,
   ELFABIVERSION_AMDGPU_HSA_V3 = 1,
-  ELFABIVERSION_AMDGPU_HSA_V4 = 2
+  ELFABIVERSION_AMDGPU_HSA_V4 = 2,
+  ELFABIVERSION_AMDGPU_HSA_V5 = 3
 };
 
 #define ELF_RELOC(name, value) name = value,

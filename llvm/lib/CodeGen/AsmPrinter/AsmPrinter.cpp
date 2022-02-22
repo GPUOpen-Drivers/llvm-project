@@ -247,6 +247,11 @@ void AsmPrinter::emitInitialRawDwarfLocDirective(const MachineFunction &MF) {
   if (DD) {
     assert(OutStreamer->hasRawTextSupport() &&
            "Expected assembly output mode.");
+    // This is NVPTX specific and it's unclear why.
+    // PR51079: If we have code without debug information we need to give up.
+    DISubprogram *MFSP = MF.getFunction().getSubprogram();
+    if (!MFSP)
+      return;
     (void)DD->emitInitialLocDirective(MF, /*CUID=*/0);
   }
 }
@@ -1642,8 +1647,18 @@ void AsmPrinter::emitGlobalAlias(Module &M, const GlobalAlias &GA) {
 
   // Set the symbol type to function if the alias has a function type.
   // This affects codegen when the aliasee is not a function.
-  if (IsFunction)
+  if (IsFunction) {
     OutStreamer->emitSymbolAttribute(Name, MCSA_ELF_TypeFunction);
+    if (TM.getTargetTriple().isOSBinFormatCOFF()) {
+      OutStreamer->BeginCOFFSymbolDef(Name);
+      OutStreamer->EmitCOFFSymbolStorageClass(
+          GA.hasLocalLinkage() ? COFF::IMAGE_SYM_CLASS_STATIC
+                               : COFF::IMAGE_SYM_CLASS_EXTERNAL);
+      OutStreamer->EmitCOFFSymbolType(COFF::IMAGE_SYM_DTYPE_FUNCTION
+                                      << COFF::SCT_COMPLEX_TYPE_SHIFT);
+      OutStreamer->EndCOFFSymbolDef();
+    }
+  }
 
   emitVisibility(Name, GA.getVisibility());
 
@@ -3647,6 +3662,12 @@ bool AsmPrinter::isDwarf64() const {
 unsigned int AsmPrinter::getDwarfOffsetByteSize() const {
   return dwarf::getDwarfOffsetByteSize(
       OutStreamer->getContext().getDwarfFormat());
+}
+
+dwarf::FormParams AsmPrinter::getDwarfFormParams() const {
+  return {getDwarfVersion(), uint8_t(getPointerSize()),
+          OutStreamer->getContext().getDwarfFormat(),
+          MAI->doesDwarfUseRelocationsAcrossSections()};
 }
 
 unsigned int AsmPrinter::getUnitLengthFieldByteSize() const {

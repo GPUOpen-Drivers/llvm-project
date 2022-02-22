@@ -45,6 +45,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -2189,8 +2190,8 @@ CallInst *llvm::createCallMatchingInvoke(InvokeInst *II) {
   return NewCall;
 }
 
-/// changeToCall - Convert the specified invoke into a normal call.
-void llvm::changeToCall(InvokeInst *II, DomTreeUpdater *DTU) {
+// changeToCall - Convert the specified invoke into a normal call.
+CallInst *llvm::changeToCall(InvokeInst *II, DomTreeUpdater *DTU) {
   CallInst *NewCall = createCallMatchingInvoke(II);
   NewCall->takeName(II);
   NewCall->insertBefore(II);
@@ -2207,6 +2208,7 @@ void llvm::changeToCall(InvokeInst *II, DomTreeUpdater *DTU) {
   II->eraseFromParent();
   if (DTU)
     DTU->applyUpdates({{DominatorTree::Delete, BB, UnwindDestBB}});
+  return NewCall;
 }
 
 BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,

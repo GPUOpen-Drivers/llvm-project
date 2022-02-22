@@ -138,7 +138,7 @@ bool AArch64TargetInfo::setABI(const std::string &Name) {
   return true;
 }
 
-bool AArch64TargetInfo::validateBranchProtection(StringRef Spec,
+bool AArch64TargetInfo::validateBranchProtection(StringRef Spec, StringRef,
                                                  BranchProtectionInfo &BPI,
                                                  StringRef &Err) const {
   llvm::ARM::ParsedBranchProtection PBP;
@@ -543,6 +543,8 @@ bool AArch64TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
   HasMatmulFP64 = false;
   HasMatmulFP32 = false;
   HasLSE = false;
+  HasHBC = false;
+  HasMOPS = false;
 
   ArchKind = llvm::AArch64::ArchKind::INVALID;
 
@@ -658,6 +660,8 @@ bool AArch64TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasRandGen = true;
     if (Feature == "+flagm")
       HasFlagM = true;
+    if (Feature == "+hbc")
+      HasHBC = true;
   }
 
   setDataLayout();

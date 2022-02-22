@@ -61,6 +61,17 @@ func @insert(%arg0 : vector<4xf32>, %arg1: f32) -> vector<4xf32> {
 
 // -----
 
+// CHECK-LABEL: @insert_size1_vector
+//  CHECK-SAME: %[[V:.*]]: vector<1xf32>, %[[S:.*]]: f32
+//       CHECK:   %[[R:.+]] = builtin.unrealized_conversion_cast %[[S]]
+//       CHECK:   return %[[R]]
+func @insert_size1_vector(%arg0 : vector<1xf32>, %arg1: f32) -> vector<1xf32> {
+  %1 = vector.insert %arg1, %arg0[0] : f32 into vector<1xf32>
+	return %1 : vector<1xf32>
+}
+
+// -----
+
 // CHECK-LABEL: @extract_element
 //  CHECK-SAME: %[[V:.*]]: vector<4xf32>, %[[ID:.*]]: i32
 //       CHECK:   spv.VectorExtractDynamic %[[V]][%[[ID]]] : vector<4xf32>, i32
@@ -139,10 +150,32 @@ func @insert_strided_slice(%arg0: vector<2xf32>, %arg1: vector<4xf32>) -> vector
 
 // -----
 
+// CHECK-LABEL: @insert_size1_vector
+//  CHECK-SAME: %[[SUB:.*]]: vector<1xf32>, %[[FULL:.*]]: vector<3xf32>
+//       CHECK:   %[[S:.+]] = builtin.unrealized_conversion_cast %[[SUB]]
+//       CHECK:   spv.CompositeInsert %[[S]], %[[FULL]][2 : i32] : f32 into vector<3xf32>
+func @insert_size1_vector(%arg0 : vector<1xf32>, %arg1: vector<3xf32>) -> vector<3xf32> {
+  %1 = vector.insert_strided_slice %arg0, %arg1 {offsets = [2], strides = [1]} : vector<1xf32> into vector<3xf32>
+	return %1 : vector<3xf32>
+}
+
+// -----
+
 // CHECK-LABEL: @fma
 //  CHECK-SAME: %[[A:.*]]: vector<4xf32>, %[[B:.*]]: vector<4xf32>, %[[C:.*]]: vector<4xf32>
 //       CHECK:   spv.GLSL.Fma %[[A]], %[[B]], %[[C]] : vector<4xf32>
 func @fma(%a: vector<4xf32>, %b: vector<4xf32>, %c: vector<4xf32>) -> vector<4xf32> {
   %0 = vector.fma %a, %b, %c: vector<4xf32>
 	return %0 : vector<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @splat
+//  CHECK-SAME: (%[[A:.+]]: f32)
+//       CHECK:   %[[VAL:.+]] = spv.CompositeConstruct %[[A]], %[[A]], %[[A]], %[[A]] : vector<4xf32>
+//       CHECK:   return %[[VAL]]
+func @splat(%f : f32) -> vector<4xf32> {
+  %splat = vector.splat %f : vector<4xf32>
+  return %splat : vector<4xf32>
 }

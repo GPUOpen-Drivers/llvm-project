@@ -12,6 +12,7 @@
 
 #include "mlir/Analysis/Presburger/IntegerPolyhedron.h"
 #include "mlir/Analysis/Presburger/LinearTransform.h"
+#include "mlir/Analysis/Presburger/PresburgerSet.h"
 #include "mlir/Analysis/Presburger/Simplex.h"
 #include "mlir/Analysis/Presburger/Utils.h"
 #include "llvm/ADT/DenseMap.h"
@@ -21,6 +22,7 @@
 #define DEBUG_TYPE "presburger"
 
 using namespace mlir;
+using namespace presburger_utils;
 using llvm::SmallDenseMap;
 using llvm::SmallDenseSet;
 
@@ -60,6 +62,34 @@ void IntegerPolyhedron::append(const IntegerPolyhedron &other) {
   for (unsigned r = 0, e = other.getNumEqualities(); r < e; r++) {
     addEquality(other.getEquality(r));
   }
+}
+
+bool IntegerPolyhedron::isEqual(const IntegerPolyhedron &other) const {
+  return PresburgerSet(*this).isEqual(PresburgerSet(other));
+}
+
+bool IntegerPolyhedron::isSubsetOf(const IntegerPolyhedron &other) const {
+  return PresburgerSet(*this).isSubsetOf(PresburgerSet(other));
+}
+
+Optional<SmallVector<Fraction, 8>>
+IntegerPolyhedron::getRationalLexMin() const {
+  assert(numSymbols == 0 && "Symbols are not supported!");
+  Optional<SmallVector<Fraction, 8>> maybeLexMin =
+      LexSimplex(*this).getRationalLexMin();
+
+  if (!maybeLexMin)
+    return {};
+
+  // The Simplex returns the lexmin over all the variables including locals. But
+  // locals are not actually part of the space and should not be returned in the
+  // result. Since the locals are placed last in the list of identifiers, they
+  // will be minimized last in the lexmin. So simply truncating out the locals
+  // from the end of the answer gives the desired lexmin over the dimensions.
+  assert(maybeLexMin->size() == getNumIds() &&
+         "Incorrect number of vars in lexMin!");
+  maybeLexMin->resize(getNumDimAndSymbolIds());
+  return maybeLexMin;
 }
 
 unsigned IntegerPolyhedron::insertDimId(unsigned pos, unsigned num) {
@@ -759,15 +789,17 @@ Optional<SmallVector<int64_t, 8>> IntegerPolyhedron::findIntegerSample() const {
   // full-dimensional cone and is hence non-empty.
   Simplex shrunkenConeSimplex(cone);
   assert(!shrunkenConeSimplex.isEmpty() && "Shrunken cone cannot be empty!");
+
+  // The sample will always exist since the shrunken cone is non-empty.
   SmallVector<Fraction, 8> shrunkenConeSample =
-      shrunkenConeSimplex.getRationalSample();
+      *shrunkenConeSimplex.getRationalSample();
 
   SmallVector<int64_t, 8> coneSample(llvm::map_range(shrunkenConeSample, ceil));
 
   // 6) Return transform * concat(boundedSample, coneSample).
   SmallVector<int64_t, 8> &sample = boundedSample.getValue();
   sample.append(coneSample.begin(), coneSample.end());
-  return transform.preMultiplyColumn(sample);
+  return transform.postMultiplyWithColumn(sample);
 }
 
 /// Helper to evaluate an affine expression at a point.
@@ -798,24 +830,23 @@ bool IntegerPolyhedron::containsPoint(ArrayRef<int64_t> point) const {
 }
 
 void IntegerPolyhedron::getLocalReprs(
-    std::vector<llvm::Optional<std::pair<unsigned, unsigned>>> &repr) const {
-  std::vector<SmallVector<int64_t, 8>> dividends(getNumLocalIds());
+    SmallVectorImpl<MaybeLocalRepr> &repr) const {
+  SmallVector<SmallVector<int64_t, 8>> dividends(getNumLocalIds());
   SmallVector<unsigned, 4> denominators(getNumLocalIds());
   getLocalReprs(dividends, denominators, repr);
 }
 
 void IntegerPolyhedron::getLocalReprs(
-    std::vector<SmallVector<int64_t, 8>> &dividends,
-    SmallVector<unsigned, 4> &denominators) const {
-  std::vector<llvm::Optional<std::pair<unsigned, unsigned>>> repr(
-      getNumLocalIds());
+    SmallVectorImpl<SmallVector<int64_t, 8>> &dividends,
+    SmallVectorImpl<unsigned> &denominators) const {
+  SmallVector<MaybeLocalRepr> repr(getNumLocalIds());
   getLocalReprs(dividends, denominators, repr);
 }
 
 void IntegerPolyhedron::getLocalReprs(
-    std::vector<SmallVector<int64_t, 8>> &dividends,
-    SmallVector<unsigned, 4> &denominators,
-    std::vector<llvm::Optional<std::pair<unsigned, unsigned>>> &repr) const {
+    SmallVectorImpl<SmallVector<int64_t, 8>> &dividends,
+    SmallVectorImpl<unsigned> &denominators,
+    SmallVectorImpl<MaybeLocalRepr> &repr) const {
 
   repr.resize(getNumLocalIds());
   dividends.resize(getNumLocalIds());
@@ -833,13 +864,13 @@ void IntegerPolyhedron::getLocalReprs(
     changed = false;
     for (unsigned i = 0, e = getNumLocalIds(); i < e; ++i) {
       if (!foundRepr[i + divOffset]) {
-        if (auto res = presburger_utils::computeSingleVarRepr(
-                *this, foundRepr, divOffset + i, dividends[i],
-                denominators[i])) {
-          foundRepr[i + divOffset] = true;
-          repr[i] = res;
-          changed = true;
-        }
+        auto res = computeSingleVarRepr(*this, foundRepr, divOffset + i,
+                                        dividends[i], denominators[i]);
+        if (res.kind == ReprKind::None)
+          continue;
+        foundRepr[i + divOffset] = true;
+        repr[i] = res;
+        changed = true;
       }
     }
   } while (changed);
@@ -847,7 +878,7 @@ void IntegerPolyhedron::getLocalReprs(
   // Set 0 denominator for identifiers for which no division representation
   // could be found.
   for (unsigned i = 0, e = repr.size(); i < e; ++i)
-    if (!repr[i].hasValue())
+    if (repr[i].kind == ReprKind::None)
       denominators[i] = 0;
 }
 
@@ -1073,7 +1104,7 @@ void IntegerPolyhedron::mergeLocalIds(IntegerPolyhedron &other) {
   polyB.insertLocalId(0, initLocals);
 
   // Get division representations from each poly.
-  std::vector<SmallVector<int64_t, 8>> divsA, divsB;
+  SmallVector<SmallVector<int64_t, 8>> divsA, divsB;
   SmallVector<unsigned, 4> denomsA, denomsB;
   polyA.getLocalReprs(divsA, denomsA);
   polyB.getLocalReprs(divsB, denomsB);
@@ -1087,47 +1118,17 @@ void IntegerPolyhedron::mergeLocalIds(IntegerPolyhedron &other) {
   std::copy(denomsB.begin() + initLocals, denomsB.end(),
             denomsA.begin() + initLocals);
 
-  // Find and merge duplicate divisions.
-  // TODO: Add division normalization to support divisions that differ by
-  // a constant.
-  // TODO: Add division ordering such that a division representation for local
-  // identifier at position `i` only depends on local identifiers at position <
-  // `i`. This would make sure that all divisions depending on other local
-  // variables that can be merged, are merged.
+  // Merge function that merges the local variables in both sets by treating
+  // them as the same identifier.
+  auto merge = [&polyA, &polyB](unsigned i, unsigned j) -> bool {
+    eliminateRedundantLocalId(polyA, i, j);
+    eliminateRedundantLocalId(polyB, i, j);
+    return true;
+  };
+
+  // Merge all divisions by removing duplicate divisions.
   unsigned localOffset = getIdKindOffset(IdKind::Local);
-  for (unsigned i = 0; i < divsA.size(); ++i) {
-    // Check if a division representation exists for the `i^th` local id.
-    if (denomsA[i] == 0)
-      continue;
-    // Check if a division exists which is a duplicate of the division at `i`.
-    for (unsigned j = i + 1; j < divsA.size(); ++j) {
-      // Check if a division representation exists for the `j^th` local id.
-      if (denomsA[j] == 0)
-        continue;
-      // Check if the denominators match.
-      if (denomsA[i] != denomsA[j])
-        continue;
-      // Check if the representations are equal.
-      if (divsA[i] != divsA[j])
-        continue;
-
-      // Merge divisions at position `j` into division at position `i`.
-      eliminateRedundantLocalId(polyA, i, j);
-      eliminateRedundantLocalId(polyB, i, j);
-      for (unsigned k = 0, g = divsA.size(); k < g; ++k) {
-        SmallVector<int64_t, 8> &div = divsA[k];
-        if (denomsA[k] != 0) {
-          div[localOffset + i] += div[localOffset + j];
-          div.erase(div.begin() + localOffset + j);
-        }
-      }
-
-      divsA.erase(divsA.begin() + j);
-      denomsA.erase(denomsA.begin() + j);
-      // Since `j` can never be zero, we do not need to worry about overflows.
-      --j;
-    }
-  }
+  removeDuplicateDivs(divsA, denomsA, localOffset, merge);
 }
 
 /// Removes local variables using equalities. Each equality is checked if it

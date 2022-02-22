@@ -513,6 +513,17 @@ class SVE_2_Op_Fp_Imm_Pat_Zero<ValueType vt, SDPatternOperator op,
                       (vt (AArch64dup (it immL))))),
       (inst $Pg, $Zs1, imm)>;
 
+//===----------------------------------------------------------------------===//
+// SVE pattern match helpers.
+//===----------------------------------------------------------------------===//
+
+// Matches either an intrinsic, or a predicated operation with an all active predicate
+class EitherVSelectOrPassthruPatFrags<SDPatternOperator intrinsic, SDPatternOperator sdnode>
+: PatFrags<(ops node:$Pg, node:$Op1, node:$Op2), [
+    (intrinsic node:$Pg, node:$Op1, node:$Op2),
+    (vselect node:$Pg, (sdnode (SVEAllActive), node:$Op1, node:$Op2), node:$Op1),
+  ]>;
+
 //
 // Pseudo -> Instruction mappings
 //
@@ -607,6 +618,15 @@ class sve_int_pfalse<bits<6> opc, string asm>
   let Inst{3-0}   = Pd;
 
   let isReMaterializable = 1;
+}
+
+multiclass sve_int_pfalse<bits<6> opc, string asm> {
+  def NAME : sve_int_pfalse<opc, asm>;
+
+  def : Pat<(nxv16i1 (splat_vector (i32 0))), (!cast<Instruction>(NAME))>;
+  def : Pat<(nxv8i1 (splat_vector (i32 0))), (!cast<Instruction>(NAME))>;
+  def : Pat<(nxv4i1 (splat_vector (i32 0))), (!cast<Instruction>(NAME))>;
+  def : Pat<(nxv2i1 (splat_vector (i32 0))), (!cast<Instruction>(NAME))>;
 }
 
 class sve_int_ptest<bits<6> opc, string asm>
@@ -762,7 +782,7 @@ multiclass sve_int_count_r_x64<bits<5> opc, string asm,
   def : Pat<(i64 (op GPR64:$Rn, (nxv2i1 PPRAny:$Pg))),
             (!cast<Instruction>(NAME # _D) PPRAny:$Pg, $Rn)>;
 
-  // Combine cntp with combine_op
+  // combine_op(x, cntp(all_active, p)) ==> inst p, x
   def : Pat<(i64 (combine_op GPR64:$Rn, (int_aarch64_sve_cntp_oneuse (nxv16i1 (SVEAllActive)), (nxv16i1 PPRAny:$pred)))),
             (!cast<Instruction>(NAME # _B) PPRAny:$pred, $Rn)>;
   def : Pat<(i64 (combine_op GPR64:$Rn, (int_aarch64_sve_cntp_oneuse (nxv8i1 (SVEAllActive)), (nxv8i1 PPRAny:$pred)))),
@@ -770,6 +790,16 @@ multiclass sve_int_count_r_x64<bits<5> opc, string asm,
   def : Pat<(i64 (combine_op GPR64:$Rn, (int_aarch64_sve_cntp_oneuse (nxv4i1 (SVEAllActive)), (nxv4i1 PPRAny:$pred)))),
             (!cast<Instruction>(NAME # _S) PPRAny:$pred, $Rn)>;
   def : Pat<(i64 (combine_op GPR64:$Rn, (int_aarch64_sve_cntp_oneuse (nxv2i1 (SVEAllActive)), (nxv2i1 PPRAny:$pred)))),
+            (!cast<Instruction>(NAME # _D) PPRAny:$pred, $Rn)>;
+
+  // combine_op(x, cntp(p, p)) ==> inst p, x
+  def : Pat<(i64 (combine_op GPR64:$Rn, (int_aarch64_sve_cntp_oneuse (nxv16i1 PPRAny:$pred), (nxv16i1 PPRAny:$pred)))),
+            (!cast<Instruction>(NAME # _B) PPRAny:$pred, $Rn)>;
+  def : Pat<(i64 (combine_op GPR64:$Rn, (int_aarch64_sve_cntp_oneuse (nxv8i1 PPRAny:$pred), (nxv8i1 PPRAny:$pred)))),
+            (!cast<Instruction>(NAME # _H) PPRAny:$pred, $Rn)>;
+  def : Pat<(i64 (combine_op GPR64:$Rn, (int_aarch64_sve_cntp_oneuse (nxv4i1 PPRAny:$pred), (nxv4i1 PPRAny:$pred)))),
+            (!cast<Instruction>(NAME # _S) PPRAny:$pred, $Rn)>;
+  def : Pat<(i64 (combine_op GPR64:$Rn, (int_aarch64_sve_cntp_oneuse (nxv2i1 PPRAny:$pred), (nxv2i1 PPRAny:$pred)))),
             (!cast<Instruction>(NAME # _D) PPRAny:$pred, $Rn)>;
 }
 
@@ -1622,6 +1652,21 @@ multiclass sve_int_pred_log<bits<4> opc, string asm, SDPatternOperator op,
                                !cast<Instruction>(NAME), PTRUE_D>;
 }
 
+// An instance of sve_int_pred_log_and but uses op_nopred's first operand as the
+// general predicate.
+multiclass sve_int_pred_log_v2<bits<4> opc, string asm, SDPatternOperator op,
+                               SDPatternOperator op_nopred> :
+  sve_int_pred_log<opc, asm, op> {
+  def : Pat<(nxv16i1 (op_nopred nxv16i1:$Op1, nxv16i1:$Op2)),
+            (!cast<Instruction>(NAME) $Op1, $Op1, $Op2)>;
+  def : Pat<(nxv8i1 (op_nopred nxv8i1:$Op1, nxv8i1:$Op2)),
+            (!cast<Instruction>(NAME) $Op1, $Op1, $Op2)>;
+  def : Pat<(nxv4i1 (op_nopred nxv4i1:$Op1, nxv4i1:$Op2)),
+            (!cast<Instruction>(NAME) $Op1, $Op1, $Op2)>;
+  def : Pat<(nxv2i1 (op_nopred nxv2i1:$Op1, nxv2i1:$Op2)),
+            (!cast<Instruction>(NAME) $Op1, $Op1, $Op2)>;
+}
+
 //===----------------------------------------------------------------------===//
 // SVE Logical Mask Immediate Group
 //===----------------------------------------------------------------------===//
@@ -1708,6 +1753,9 @@ multiclass sve_int_dup_mask_imm<string asm> {
                   (!cast<Instruction>(NAME) ZPR32:$Zd, sve_preferred_logical_imm32:$imm), 6>;
   def : InstAlias<"mov $Zd, $imm",
                   (!cast<Instruction>(NAME) ZPR64:$Zd, sve_preferred_logical_imm64:$imm), 5>;
+
+  def : Pat<(nxv2i64 (AArch64dup (i64 logical_imm64:$imm))),
+            (!cast<Instruction>(NAME) logical_imm64:$imm)>;
 }
 
 //===----------------------------------------------------------------------===//

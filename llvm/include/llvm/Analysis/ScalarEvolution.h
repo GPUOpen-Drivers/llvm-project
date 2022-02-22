@@ -568,6 +568,7 @@ public:
   const SCEV *getTruncateExpr(const SCEV *Op, Type *Ty, unsigned Depth = 0);
   const SCEV *getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth = 0);
   const SCEV *getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth = 0);
+  const SCEV *getCastExpr(SCEVTypes Kind, const SCEV *Op, Type *Ty);
   const SCEV *getAnyExtendExpr(const SCEV *Op, Type *Ty);
   const SCEV *getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
                          SCEV::NoWrapFlags Flags = SCEV::FlagAnyWrap,
@@ -1110,9 +1111,11 @@ public:
   /// Simplify LHS and RHS in a comparison with predicate Pred. Return true
   /// iff any changes were made. If the operands are provably equal or
   /// unequal, LHS and RHS are set to the same value and Pred is set to either
-  /// ICMP_EQ or ICMP_NE.
+  /// ICMP_EQ or ICMP_NE. ControllingFiniteLoop is set if this comparison
+  /// controls the exit of a loop known to have a finite number of iterations.
   bool SimplifyICmpOperands(ICmpInst::Predicate &Pred, const SCEV *&LHS,
-                            const SCEV *&RHS, unsigned Depth = 0);
+                            const SCEV *&RHS, unsigned Depth = 0,
+                            bool ControllingFiniteLoop = false);
 
   /// Return the "disposition" of the given SCEV with respect to the given
   /// loop.
@@ -1896,6 +1899,15 @@ private:
                          const SCEV *LHS, const SCEV *RHS,
                          const SCEV *FoundLHS, const SCEV *FoundRHS,
                          unsigned Depth);
+
+  /// Test whether the condition described by Pred, LHS, and RHS is true
+  /// whenever the condition described by Pred, FoundLHS, and FoundRHS is
+  /// true.
+  ///
+  /// This routine tries to reason about shifts.
+  bool isImpliedCondOperandsViaShift(ICmpInst::Predicate Pred, const SCEV *LHS,
+                                     const SCEV *RHS, const SCEV *FoundLHS,
+                                     const SCEV *FoundRHS);
 
   /// If we know that the specified Phi is in the header of its containing
   /// loop, we know the loop executes a constant number of times, and the PHI
