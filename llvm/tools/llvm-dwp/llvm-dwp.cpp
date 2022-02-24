@@ -26,6 +26,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/ToolOutputFile.h"
 
@@ -164,7 +165,7 @@ int main(int argc, char **argv) {
   if (!MII)
     return error("no instr info info for target " + TripleName, Context);
 
-  MCCodeEmitter *MCE = TheTarget->createMCCodeEmitter(*MII, *MRI, MC);
+  MCCodeEmitter *MCE = TheTarget->createMCCodeEmitter(*MII, MC);
   if (!MCE)
     return error("no code emitter for target " + TripleName, Context);
 

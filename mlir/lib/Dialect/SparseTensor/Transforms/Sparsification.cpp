@@ -354,21 +354,21 @@ static bool isAdmissableTensorExp(Merger &merger, linalg::GenericOp op,
 // Sparse compiler synthesis methods (reductions).
 //===----------------------------------------------------------------------===//
 
-/// Maps reduction kind to name encoding.
-static StringRef getReductionName(Reduction kind) {
+/// Maps reduction kind to vector::CombiningKind.
+static vector::CombiningKind getCombiningKind(Reduction kind) {
   switch (kind) {
   case kNoReduc:
     break;
   case kSum:
-    return "add";
+    return vector::CombiningKind::ADD;
   case kProduct:
-    return "mul";
+    return vector::CombiningKind::MUL;
   case kAnd:
-    return "and";
+    return vector::CombiningKind::AND;
   case kOr:
-    return "or";
+    return vector::CombiningKind::OR;
   case kXor:
-    return "xor";
+    return vector::CombiningKind::XOR;
   }
   llvm_unreachable("unknown reduction kind");
 }
@@ -427,10 +427,8 @@ static Value genVectorReducInit(CodeGen &codegen, PatternRewriter &rewriter,
 /// Generates final value for a vector reduction.
 static Value genVectorReducEnd(CodeGen &codegen, PatternRewriter &rewriter,
                                Location loc, VectorType vtp) {
-  StringRef name = getReductionName(codegen.redKind);
-  StringAttr kind = rewriter.getStringAttr(name);
-  return rewriter.create<vector::ReductionOp>(loc, vtp.getElementType(), kind,
-                                              codegen.redVal, ValueRange{});
+  vector::CombiningKind kind = getCombiningKind(codegen.redKind);
+  return rewriter.create<vector::ReductionOp>(loc, kind, codegen.redVal);
 }
 
 /// Updates scalarized reduction value.
@@ -466,15 +464,15 @@ static Value genOutputBuffer(CodeGen &codegen, PatternRewriter &rewriter,
   // impact the running complexity of the sparse kernel. If the tensor
   // materializes into the computation, we need to preserve the zero
   // initialization assumption of all sparse output buffers.
+  Value alloc = rewriter.create<memref::AllocOp>(loc, denseTp, args);
   if (isMaterializing(tensor)) {
-    Value alloc = rewriter.create<memref::AllocOp>(loc, denseTp, args);
     Value zero = constantZero(rewriter, loc, denseTp.getElementType());
     rewriter.create<linalg::FillOp>(loc, zero, alloc);
-    return alloc;
+  } else {
+    Value init =
+        rewriter.create<bufferization::ToMemrefOp>(loc, denseTp, tensor);
+    rewriter.create<memref::CopyOp>(loc, init, alloc);
   }
-  Value init = rewriter.create<bufferization::ToMemrefOp>(loc, denseTp, tensor);
-  Value alloc = rewriter.create<memref::AllocOp>(loc, denseTp, args);
-  rewriter.create<memref::CopyOp>(loc, init, alloc);
   return alloc;
 }
 

@@ -75,6 +75,7 @@ add_llvm_component_library(LLVMCodeGen
   InterleavedAccessPass.cpp
   InterleavedLoadCombinePass.cpp
   IntrinsicLowering.cpp
+  JMCInstrumenter.cpp
   LatencyPriorityQueue.cpp
   LazyMachineBlockFrequencyInfo.cpp
   LexicalScopes.cpp
@@ -187,6 +188,8 @@ add_llvm_component_library(LLVMCodeGen
   RegUsageInfoPropagate.cpp
   ReplaceWithVeclib.cpp
   ResetMachineFunctionPass.cpp
+  RegisterBank.cpp
+  RegisterBankInfo.cpp
   SafeStack.cpp
   SafeStackLayout.cpp
   ScheduleDAG.cpp

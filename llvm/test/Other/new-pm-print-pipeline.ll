@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ;; Test that the -print-pipeline-passes option correctly prints some explicitly specified pipelines.
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(adce),function(simplifycfg<bonus-inst-threshold=123;no-forward-switch-cond;switch-to-lookup;keep-loops;no-hoist-common-insts;sink-common-insts>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-0

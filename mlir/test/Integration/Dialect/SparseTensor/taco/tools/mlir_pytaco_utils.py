@@ -83,7 +83,7 @@ def sparse_tensor_to_coo_tensor(
     A tuple that contains the following values for the COO-flavored format
     tensor:
     rank: An integer for the rank of the tensor.
-    nse: An interger for the number of non-zero values in the tensor.
+    nse: An integer for the number of non-zero values in the tensor.
     shape: A 1D numpy array of integers, for the shape of the tensor.
     values: A 1D numpy array, for the non-zero values in the tensor.
     indices: A 2D numpy array of integers, representing the indices for the
@@ -154,19 +154,7 @@ def compile_and_build_engine(
     A JIT execution engine for the MLIR module.
 
   """
-  pipeline = (
-      f"sparsification,"
-      f"sparse-tensor-conversion,"
-      f"builtin.func(linalg-bufferize,convert-linalg-to-loops,convert-vector-to-scf),"
-      f"convert-scf-to-cf,"
-      f"func-bufferize,"
-      f"arith-bufferize,"
-      f"builtin.func(tensor-bufferize,finalizing-bufferize),"
-      f"convert-vector-to-llvm{{reassociate-fp-reductions=1 enable-index-optimizations=1}},"
-      f"lower-affine,"
-      f"convert-memref-to-llvm,"
-      f"convert-std-to-llvm,"
-      f"reconcile-unrealized-casts")
+  pipeline = f"sparse-compiler"
   PassManager.parse(pipeline).run(module)
   return execution_engine.ExecutionEngine(
       module, opt_level=_OPT_LEVEL, shared_libs=[_get_support_lib_name()])

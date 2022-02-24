@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: opt < %s -inline-threshold=0 -always-inline -enable-new-pm=0 -S | FileCheck %s --check-prefix=CHECK
 ;
 ; Ensure the threshold has no impact on these decisions.

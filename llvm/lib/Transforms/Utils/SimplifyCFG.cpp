@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -166,6 +168,10 @@ static cl::opt<unsigned> BranchFoldToCommonDestVectorMultiplier(
     cl::desc("Multiplier to apply to threshold when determining whether or not "
              "to fold branch to common destination when vector operations are "
              "present"));
+
+static cl::opt<bool> EnableMergeCompatibleInvokes(
+    "simplifycfg-merge-compatible-invokes", cl::Hidden, cl::init(true),
+    cl::desc("Allow SimplifyCFG to merge invokes together when appropriate"));
 
 STATISTIC(NumBitMaps, "Number of switch instructions turned into bitmaps");
 STATISTIC(NumLinearMaps,
@@ -2528,6 +2534,9 @@ static void MergeCompatibleInvokesImpl(ArrayRef<InvokeInst *> Invokes,
 /// edges invoke0->cont0 and invoke1->cont1 are "compatible",
 /// and the invoked functions are "compatible".
 static bool MergeCompatibleInvokes(BasicBlock *BB, DomTreeUpdater *DTU) {
+  if (!EnableMergeCompatibleInvokes)
+    return false;
+
   bool Changed = false;
 
   // FIXME: generalize to all exception handling blocks?
