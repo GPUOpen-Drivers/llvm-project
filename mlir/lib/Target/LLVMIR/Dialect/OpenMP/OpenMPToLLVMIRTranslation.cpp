@@ -335,8 +335,9 @@ convertOmpCritical(Operation &opInst, llvm::IRBuilderBase &builder,
     auto criticalDeclareOp =
         SymbolTable::lookupNearestSymbolFrom<omp::CriticalDeclareOp>(criticalOp,
                                                                      symbolRef);
-    hint = llvm::ConstantInt::get(llvm::Type::getInt32Ty(llvmContext),
-                                  static_cast<int>(criticalDeclareOp.hint()));
+    hint =
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(llvmContext),
+                               static_cast<int>(criticalDeclareOp.hint_val()));
   }
   builder.restoreIP(moduleTranslation.getOpenMPBuilder()->createCritical(
       ompLoc, bodyGenCB, finiCB, criticalOp.name().getValueOr(""), hint));
@@ -580,15 +581,12 @@ convertOmpSections(Operation &opInst, llvm::IRBuilderBase &builder,
 
   // TODO: Support the following clauses: private, firstprivate, lastprivate,
   // reduction, allocate
-  if (!sectionsOp.private_vars().empty() ||
-      !sectionsOp.firstprivate_vars().empty() ||
-      !sectionsOp.lastprivate_vars().empty() ||
-      !sectionsOp.reduction_vars().empty() || sectionsOp.reductions() ||
+  if (!sectionsOp.reduction_vars().empty() || sectionsOp.reductions() ||
       !sectionsOp.allocate_vars().empty() ||
       !sectionsOp.allocators_vars().empty())
     return emitError(sectionsOp.getLoc())
-           << "private, firstprivate, lastprivate, reduction and allocate "
-              "clauses are not supported for sections construct";
+           << "reduction and allocate clauses are not supported for sections "
+              "construct";
 
   LogicalResult bodyGenStatus = success();
   SmallVector<StorableBodyGenCallbackTy> sectionCBs;
@@ -783,8 +781,9 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
   bool isSimd = loop.simd_modifier();
 
   if (schedule == omp::ClauseScheduleKind::Static) {
-    ompBuilder->applyStaticWorkshareLoop(ompLoc.DL, loopInfo, allocaIP,
-                                         !loop.nowait(), chunk);
+    ompBuilder->applyWorkshareLoop(ompLoc.DL, loopInfo, allocaIP,
+                                   !loop.nowait(),
+                                   llvm::omp::OMP_SCHEDULE_Static, chunk);
   } else {
     llvm::omp::OMPScheduleType schedType;
     switch (schedule) {
@@ -824,8 +823,8 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
         break;
       }
     }
-    afterIP = ompBuilder->applyDynamicWorkshareLoop(
-        ompLoc.DL, loopInfo, allocaIP, schedType, !loop.nowait(), chunk);
+    ompBuilder->applyDynamicWorkshareLoop(ompLoc.DL, loopInfo, allocaIP,
+                                          schedType, !loop.nowait(), chunk);
   }
 
   // Continue building IR after the loop. Note that the LoopInfo returned by
@@ -912,7 +911,7 @@ convertOmpAtomicRead(Operation &opInst, llvm::IRBuilderBase &builder,
 
   llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
 
-  llvm::AtomicOrdering AO = convertAtomicOrdering(readOp.memory_order());
+  llvm::AtomicOrdering AO = convertAtomicOrdering(readOp.memory_order_val());
   llvm::Value *x = moduleTranslation.lookupValue(readOp.x());
   Type xTy = readOp.x().getType().cast<omp::PointerLikeType>().getElementType();
   llvm::Value *v = moduleTranslation.lookupValue(readOp.v());
@@ -933,7 +932,7 @@ convertOmpAtomicWrite(Operation &opInst, llvm::IRBuilderBase &builder,
   llvm::OpenMPIRBuilder *ompBuilder = moduleTranslation.getOpenMPBuilder();
 
   llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
-  llvm::AtomicOrdering ao = convertAtomicOrdering(writeOp.memory_order());
+  llvm::AtomicOrdering ao = convertAtomicOrdering(writeOp.memory_order_val());
   llvm::Value *expr = moduleTranslation.lookupValue(writeOp.value());
   llvm::Value *dest = moduleTranslation.lookupValue(writeOp.address());
   llvm::Type *ty = moduleTranslation.convertType(writeOp.value().getType());

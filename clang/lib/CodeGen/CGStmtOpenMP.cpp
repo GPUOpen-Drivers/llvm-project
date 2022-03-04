@@ -670,7 +670,8 @@ CodeGenFunction::GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S,
         LV.setAddress(WrapperCGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
             LV.getAddress(WrapperCGF),
             PI->getType()->getPointerTo(
-                LV.getAddress(WrapperCGF).getAddressSpace())));
+                LV.getAddress(WrapperCGF).getAddressSpace()),
+            PI->getType()));
       CallArg = WrapperCGF.EmitLoadOfScalar(LV, S.getBeginLoc());
     } else {
       auto EI = VLASizes.find(Arg);
@@ -3717,11 +3718,50 @@ static bool emitWorksharingDirective(CodeGenFunction &CGF,
 static bool isSupportedByOpenMPIRBuilder(const OMPForDirective &S) {
   if (S.hasCancel())
     return false;
-  for (OMPClause *C : S.clauses())
-    if (!isa<OMPNowaitClause>(C))
-      return false;
+  for (OMPClause *C : S.clauses()) {
+    if (isa<OMPNowaitClause>(C))
+      continue;
+
+    if (auto *SC = dyn_cast<OMPScheduleClause>(C)) {
+      if (SC->getFirstScheduleModifier() != OMPC_SCHEDULE_MODIFIER_unknown)
+        return false;
+      if (SC->getSecondScheduleModifier() != OMPC_SCHEDULE_MODIFIER_unknown)
+        return false;
+      switch (SC->getScheduleKind()) {
+      case OMPC_SCHEDULE_auto:
+      case OMPC_SCHEDULE_dynamic:
+      case OMPC_SCHEDULE_runtime:
+      case OMPC_SCHEDULE_guided:
+      case OMPC_SCHEDULE_static:
+        continue;
+      case OMPC_SCHEDULE_unknown:
+        return false;
+      }
+    }
+
+    return false;
+  }
 
   return true;
+}
+
+static llvm::omp::ScheduleKind
+convertClauseKindToSchedKind(OpenMPScheduleClauseKind ScheduleClauseKind) {
+  switch (ScheduleClauseKind) {
+  case OMPC_SCHEDULE_unknown:
+    return llvm::omp::OMP_SCHEDULE_Default;
+  case OMPC_SCHEDULE_auto:
+    return llvm::omp::OMP_SCHEDULE_Auto;
+  case OMPC_SCHEDULE_dynamic:
+    return llvm::omp::OMP_SCHEDULE_Dynamic;
+  case OMPC_SCHEDULE_guided:
+    return llvm::omp::OMP_SCHEDULE_Guided;
+  case OMPC_SCHEDULE_runtime:
+    return llvm::omp::OMP_SCHEDULE_Runtime;
+  case OMPC_SCHEDULE_static:
+    return llvm::omp::OMP_SCHEDULE_Static;
+  }
+  llvm_unreachable("Unhandled schedule kind");
 }
 
 void CodeGenFunction::EmitOMPForDirective(const OMPForDirective &S) {
@@ -3732,18 +3772,29 @@ void CodeGenFunction::EmitOMPForDirective(const OMPForDirective &S) {
                     UseOMPIRBuilder](CodeGenFunction &CGF, PrePostActionTy &) {
     // Use the OpenMPIRBuilder if enabled.
     if (UseOMPIRBuilder) {
+      bool NeedsBarrier = !S.getSingleClause<OMPNowaitClause>();
+
+      llvm::omp::ScheduleKind SchedKind = llvm::omp::OMP_SCHEDULE_Default;
+      llvm::Value *ChunkSize = nullptr;
+      if (auto *SchedClause = S.getSingleClause<OMPScheduleClause>()) {
+        SchedKind =
+            convertClauseKindToSchedKind(SchedClause->getScheduleKind());
+        if (const Expr *ChunkSizeExpr = SchedClause->getChunkSize())
+          ChunkSize = EmitScalarExpr(ChunkSizeExpr);
+      }
+
       // Emit the associated statement and get its loop representation.
       const Stmt *Inner = S.getRawStmt();
       llvm::CanonicalLoopInfo *CLI =
           EmitOMPCollapsedCanonicalLoopNest(Inner, 1);
 
-      bool NeedsBarrier = !S.getSingleClause<OMPNowaitClause>();
       llvm::OpenMPIRBuilder &OMPBuilder =
           CGM.getOpenMPRuntime().getOMPBuilder();
       llvm::OpenMPIRBuilder::InsertPointTy AllocaIP(
           AllocaInsertPt->getParent(), AllocaInsertPt->getIterator());
       OMPBuilder.applyWorkshareLoop(Builder.getCurrentDebugLocation(), CLI,
-                                    AllocaIP, NeedsBarrier);
+                                    AllocaIP, NeedsBarrier, SchedKind,
+                                    ChunkSize);
       return;
     }
 
@@ -6017,11 +6068,50 @@ static void emitOMPAtomicCaptureExpr(CodeGenFunction &CGF,
   }
 }
 
+static void emitOMPAtomicCompareExpr(CodeGenFunction &CGF,
+                                     llvm::AtomicOrdering AO, const Expr *X,
+                                     const Expr *E, const Expr *D,
+                                     const Expr *CE, bool IsXBinopExpr,
+                                     SourceLocation Loc) {
+  llvm::OpenMPIRBuilder &OMPBuilder =
+      CGF.CGM.getOpenMPRuntime().getOMPBuilder();
+
+  OMPAtomicCompareOp Op;
+  assert(isa<BinaryOperator>(CE) && "CE is not a BinaryOperator");
+  switch (cast<BinaryOperator>(CE)->getOpcode()) {
+  case BO_EQ:
+    Op = OMPAtomicCompareOp::EQ;
+    break;
+  case BO_LT:
+    Op = OMPAtomicCompareOp::MIN;
+    break;
+  case BO_GT:
+    Op = OMPAtomicCompareOp::MAX;
+    break;
+  default:
+    llvm_unreachable("unsupported atomic compare binary operator");
+  }
+
+  LValue XLVal = CGF.EmitLValue(X);
+  Address XAddr = XLVal.getAddress(CGF);
+  llvm::Value *EVal = CGF.EmitScalarExpr(E);
+  llvm::Value *DVal = D ? CGF.EmitScalarExpr(D) : nullptr;
+
+  llvm::OpenMPIRBuilder::AtomicOpValue XOpVal{
+      XAddr.getPointer(), XAddr.getElementType(),
+      X->getType().isVolatileQualified(),
+      X->getType()->hasSignedIntegerRepresentation()};
+
+  CGF.Builder.restoreIP(OMPBuilder.createAtomicCompare(
+      CGF.Builder, XOpVal, EVal, DVal, AO, Op, IsXBinopExpr));
+}
+
 static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
                               llvm::AtomicOrdering AO, bool IsPostfixUpdate,
                               const Expr *X, const Expr *V, const Expr *E,
-                              const Expr *UE, bool IsXLHSInRHSPart,
-                              bool IsCompareCapture, SourceLocation Loc) {
+                              const Expr *UE, const Expr *D, const Expr *CE,
+                              bool IsXLHSInRHSPart, bool IsCompareCapture,
+                              SourceLocation Loc) {
   switch (Kind) {
   case OMPC_read:
     emitOMPAtomicReadExpr(CGF, AO, X, V, Loc);
@@ -6045,11 +6135,7 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
           "'atomic compare capture' is not supported for now");
       CGF.CGM.getDiags().Report(DiagID);
     } else {
-      // Emit an error here.
-      unsigned DiagID = CGF.CGM.getDiags().getCustomDiagID(
-          DiagnosticsEngine::Error,
-          "'atomic compare' is not supported for now");
-      CGF.CGM.getDiags().Report(DiagID);
+      emitOMPAtomicCompareExpr(CGF, AO, X, E, D, CE, IsXLHSInRHSPart, Loc);
     }
     break;
   }
@@ -6202,8 +6288,8 @@ void CodeGenFunction::EmitOMPAtomicDirective(const OMPAtomicDirective &S) {
   LexicalScope Scope(*this, S.getSourceRange());
   EmitStopPoint(S.getAssociatedStmt());
   emitOMPAtomicExpr(*this, Kind, AO, S.isPostfixUpdate(), S.getX(), S.getV(),
-                    S.getExpr(), S.getUpdateExpr(), S.isXLHSInRHSPart(),
-                    IsCompareCapture, S.getBeginLoc());
+                    S.getExpr(), S.getUpdateExpr(), S.getD(), S.getCondExpr(),
+                    S.isXLHSInRHSPart(), IsCompareCapture, S.getBeginLoc());
 }
 
 static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
@@ -6253,6 +6339,13 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
   }
   if (CGM.getLangOpts().OMPTargetTriples.empty())
     IsOffloadEntry = false;
+
+  if (CGM.getLangOpts().OpenMPOffloadMandatory && !IsOffloadEntry) {
+    unsigned DiagID = CGM.getDiags().getCustomDiagID(
+        DiagnosticsEngine::Error,
+        "No offloading entry generated while offloading is mandatory.");
+    CGM.getDiags().Report(DiagID);
+  }
 
   assert(CGF.CurFuncDecl && "No parent declaration for target region!");
   StringRef ParentName;
@@ -6908,10 +7001,11 @@ void CodeGenFunction::EmitOMPUseDeviceAddrClause(
           EmitLoadOfPointer(PrivAddr, getContext()
                                           .getPointerType(OrigVD->getType())
                                           ->castAs<PointerType>());
-    llvm::Type *RealTy =
-        ConvertTypeForMem(OrigVD->getType().getNonReferenceType())
-            ->getPointerTo();
-    PrivAddr = Builder.CreatePointerBitCastOrAddrSpaceCast(PrivAddr, RealTy);
+    llvm::Type *RealElTy =
+        ConvertTypeForMem(OrigVD->getType().getNonReferenceType());
+    llvm::Type *RealTy = RealElTy->getPointerTo();
+    PrivAddr =
+        Builder.CreatePointerBitCastOrAddrSpaceCast(PrivAddr, RealTy, RealElTy);
 
     (void)PrivateScope.addPrivate(OrigVD, [PrivAddr]() { return PrivAddr; });
   }

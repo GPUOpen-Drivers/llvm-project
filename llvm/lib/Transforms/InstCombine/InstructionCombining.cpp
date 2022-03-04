@@ -42,7 +42,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
@@ -60,6 +59,7 @@
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/Utils/Local.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/BasicBlock.h"
@@ -90,8 +90,6 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
-#include "llvm/Pass.h"
-#include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -3249,6 +3247,15 @@ Instruction *InstCombinerImpl::visitExtractValueInst(ExtractValueInst &EV) {
                                       makeArrayRef(exti, exte));
   }
   if (WithOverflowInst *WO = dyn_cast<WithOverflowInst>(Agg)) {
+    // extractvalue (any_mul_with_overflow X, -1), 0 --> -X
+    Intrinsic::ID OvID = WO->getIntrinsicID();
+    if (*EV.idx_begin() == 0 &&
+        (OvID == Intrinsic::smul_with_overflow ||
+         OvID == Intrinsic::umul_with_overflow) &&
+        match(WO->getArgOperand(1), m_AllOnes())) {
+      return BinaryOperator::CreateNeg(WO->getArgOperand(0));
+    }
+
     // We're extracting from an overflow intrinsic, see if we're the only user,
     // which allows us to simplify multiple result intrinsics to simpler
     // things that just get one value.

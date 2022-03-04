@@ -566,7 +566,7 @@ static void getCopyToParts(SelectionDAG &DAG, const SDLoc &DL, SDValue Val,
     unsigned RoundBits = RoundParts * PartBits;
     unsigned OddParts = NumParts - RoundParts;
     SDValue OddVal = DAG.getNode(ISD::SRL, DL, ValueVT, Val,
-      DAG.getShiftAmountConstant(RoundBits, ValueVT, DL, /*LegalTypes*/false));
+      DAG.getShiftAmountConstant(RoundBits, ValueVT, DL));
 
     getCopyToParts(DAG, DL, OddVal, Parts + RoundParts, OddParts, PartVT, V,
                    CallConv);
@@ -2751,7 +2751,7 @@ SelectionDAGBuilder::visitSPDescriptorFailure(StackProtectorDescriptor &SPD) {
   // On PS4, the "return address" must still be within the calling function,
   // even if it's at the very end, so emit an explicit TRAP here.
   // Passing 'true' for doesNotReturn above won't generate the trap for us.
-  if (TM.getTargetTriple().isPS4CPU())
+  if (TM.getTargetTriple().isPS4())
     Chain = DAG.getNode(ISD::TRAP, getCurSDLoc(), MVT::Other, Chain);
   // WebAssembly needs an unreachable instruction after a non-returning call,
   // because the function return type can be different from __stack_chk_fail's
@@ -3150,26 +3150,12 @@ void SelectionDAGBuilder::visitShift(const User &I, unsigned Opcode) {
   EVT ShiftTy = DAG.getTargetLoweringInfo().getShiftAmountTy(
       Op1.getValueType(), DAG.getDataLayout());
 
-  // Coerce the shift amount to the right type if we can.
+  // Coerce the shift amount to the right type if we can. This exposes the
+  // truncate or zext to optimization early.
   if (!I.getType()->isVectorTy() && Op2.getValueType() != ShiftTy) {
-    unsigned ShiftSize = ShiftTy.getSizeInBits();
-    unsigned Op2Size = Op2.getValueSizeInBits();
-    SDLoc DL = getCurSDLoc();
-
-    // If the operand is smaller than the shift count type, promote it.
-    if (ShiftSize > Op2Size)
-      Op2 = DAG.getNode(ISD::ZERO_EXTEND, DL, ShiftTy, Op2);
-
-    // If the operand is larger than the shift count type but the shift
-    // count type has enough bits to represent any shift value, truncate
-    // it now. This is a common case and it exposes the truncate to
-    // optimization early.
-    else if (ShiftSize >= Log2_32_Ceil(Op1.getValueSizeInBits()))
-      Op2 = DAG.getNode(ISD::TRUNCATE, DL, ShiftTy, Op2);
-    // Otherwise we'll need to temporarily settle for some other convenient
-    // type.  Type legalization will make adjustments once the shiftee is split.
-    else
-      Op2 = DAG.getZExtOrTrunc(Op2, DL, MVT::i32);
+    assert(ShiftTy.getSizeInBits() >= Log2_32_Ceil(Op1.getValueSizeInBits()) &&
+           "Unexpected shift type");
+    Op2 = DAG.getZExtOrTrunc(Op2, getCurSDLoc(), ShiftTy);
   }
 
   bool nuw = false;
@@ -8602,7 +8588,7 @@ void SelectionDAGBuilder::visitInlineAsm(const CallBase &Call,
     if (OpInfo.hasArg()) {
       OpInfo.CallOperandVal = Call.getArgOperand(ArgNo);
       OpInfo.CallOperand = getValue(OpInfo.CallOperandVal);
-      Type *ParamElemTy = Call.getAttributes().getParamElementType(ArgNo);
+      Type *ParamElemTy = Call.getParamElementType(ArgNo);
       EVT VT = OpInfo.getCallOperandValEVT(*DAG.getContext(), TLI,
                                            DAG.getDataLayout(), ParamElemTy);
       OpInfo.ConstraintVT = VT.isSimple() ? VT.getSimpleVT() : MVT::Other;

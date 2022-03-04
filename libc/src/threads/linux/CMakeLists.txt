@@ -18,6 +18,7 @@ add_entrypoint_object(
     .threads_utils
     libc.include.sys_syscall
     libc.include.threads
+    libc.src.__support.CPP.atomic
     libc.src.__support.OSUtil.osutil
 )
 
@@ -32,6 +33,7 @@ add_header_library(
     .thread_start_args_h
     libc.include.sys_syscall
     libc.include.threads
+    libc.src.__support.CPP.atomic
     libc.src.__support.OSUtil.osutil
 )
 
@@ -66,6 +68,7 @@ add_entrypoint_object(
     .threads_utils
     libc.include.sys_syscall
     libc.include.threads
+    libc.src.__support.CPP.atomic
     libc.src.__support.common
     libc.src.__support.OSUtil.osutil
     libc.src.sys.mman.munmap

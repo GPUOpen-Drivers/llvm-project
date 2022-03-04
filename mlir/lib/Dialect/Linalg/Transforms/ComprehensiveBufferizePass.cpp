@@ -12,10 +12,11 @@
 #include "mlir/Dialect/Bufferization/IR/BufferizableOpInterface.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/ComprehensiveBufferize/AffineInterfaceImpl.h"
-#include "mlir/Dialect/Linalg/ComprehensiveBufferize/LinalgInterfaceImpl.h"
 #include "mlir/Dialect/Linalg/ComprehensiveBufferize/ModuleBufferization.h"
 #include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/SCF/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Vector/Transforms/BufferizableOpInterfaceImpl.h"
@@ -49,10 +50,10 @@ struct LinalgComprehensiveModuleBufferize
         .insert<bufferization::BufferizationDialect, linalg::LinalgDialect,
                 memref::MemRefDialect, tensor::TensorDialect,
                 vector::VectorDialect, scf::SCFDialect,
-                arith::ArithmeticDialect, StandardOpsDialect, AffineDialect>();
+                arith::ArithmeticDialect, func::FuncDialect, AffineDialect>();
     affine_ext::registerBufferizableOpInterfaceExternalModels(registry);
     arith::registerBufferizableOpInterfaceExternalModels(registry);
-    linalg_ext::registerBufferizableOpInterfaceExternalModels(registry);
+    linalg::registerBufferizableOpInterfaceExternalModels(registry);
     scf::registerBufferizableOpInterfaceExternalModels(registry);
     std_ext::registerModuleBufferizationExternalModels(registry);
     tensor::registerBufferizableOpInterfaceExternalModels(registry);
@@ -97,16 +98,13 @@ void LinalgComprehensiveModuleBufferize::runOnOperation() {
     opt.fullyDynamicLayoutMaps = fullyDynamicLayoutMaps;
     opt.printConflicts = printConflicts;
     opt.testAnalysisOnly = testAnalysisOnly;
+    opt.alwaysAliasingWithDest = alwaysAliasingWithDest;
     if (initTensorElimination) {
-      opt.addPostAnalysisStep(
-          linalg_ext::insertSliceAnchoredInitTensorEliminationStep);
+      opt.addPostAnalysisStep(insertSliceAnchoredInitTensorEliminationStep);
     }
   } else {
     opt = *options;
   }
-
-  // Only certain scf.for ops are supported by the analysis.
-  opt.addPostAnalysisStep(scf::assertScfForAliasingProperties);
 
   ModuleOp moduleOp = getOperation();
   applyEnablingTransformations(moduleOp);

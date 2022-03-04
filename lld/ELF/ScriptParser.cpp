@@ -14,6 +14,7 @@
 #include "ScriptParser.h"
 #include "Config.h"
 #include "Driver.h"
+#include "InputFiles.h"
 #include "LinkerScript.h"
 #include "OutputSections.h"
 #include "ScriptLexer.h"
@@ -1273,9 +1274,9 @@ StringRef ScriptParser::readParenLiteral() {
   return tok;
 }
 
-static void checkIfExists(OutputSection *cmd, StringRef location) {
-  if (cmd->location.empty() && script->errorOnMissingSection)
-    error(location + ": undefined section " + cmd->name);
+static void checkIfExists(const OutputSection &osec, StringRef location) {
+  if (osec.location.empty() && script->errorOnMissingSection)
+    error(location + ": undefined section " + osec.name);
 }
 
 static bool isValidSymbolName(StringRef s) {
@@ -1317,11 +1318,11 @@ Expr ScriptParser::readPrimary() {
   }
   if (tok == "ADDR") {
     StringRef name = readParenLiteral();
-    OutputSection *sec = script->getOrCreateOutputSection(name);
-    sec->usedInExpression = true;
+    OutputSection *osec = script->getOrCreateOutputSection(name);
+    osec->usedInExpression = true;
     return [=]() -> ExprValue {
-      checkIfExists(sec, location);
-      return {sec, false, 0, location};
+      checkIfExists(*osec, location);
+      return {osec, false, 0, location};
     };
   }
   if (tok == "ALIGN") {
@@ -1342,10 +1343,10 @@ Expr ScriptParser::readPrimary() {
   }
   if (tok == "ALIGNOF") {
     StringRef name = readParenLiteral();
-    OutputSection *cmd = script->getOrCreateOutputSection(name);
+    OutputSection *osec = script->getOrCreateOutputSection(name);
     return [=] {
-      checkIfExists(cmd, location);
-      return cmd->alignment;
+      checkIfExists(*osec, location);
+      return osec->alignment;
     };
   }
   if (tok == "ASSERT")
@@ -1397,11 +1398,11 @@ Expr ScriptParser::readPrimary() {
   }
   if (tok == "LOADADDR") {
     StringRef name = readParenLiteral();
-    OutputSection *cmd = script->getOrCreateOutputSection(name);
-    cmd->usedInExpression = true;
+    OutputSection *osec = script->getOrCreateOutputSection(name);
+    osec->usedInExpression = true;
     return [=] {
-      checkIfExists(cmd, location);
-      return cmd->getLMA();
+      checkIfExists(*osec, location);
+      return osec->getLMA();
     };
   }
   if (tok == "LOG2CEIL") {

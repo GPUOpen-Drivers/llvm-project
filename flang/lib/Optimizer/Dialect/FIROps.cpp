@@ -16,7 +16,7 @@
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Support/Utils.h"
 #include "mlir/Dialect/CommonFolders.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
@@ -1414,6 +1414,13 @@ void fir::FieldIndexOp::build(mlir::OpBuilder &builder,
   result.addAttribute(fieldAttrName(), builder.getStringAttr(fieldName));
   result.addAttribute(typeAttrName(), TypeAttr::get(recTy));
   result.addOperands(operands);
+}
+
+llvm::SmallVector<mlir::Attribute> fir::FieldIndexOp::getAttributes() {
+  llvm::SmallVector<mlir::Attribute> attrs;
+  attrs.push_back(getFieldIdAttr());
+  attrs.push_back(getOnTypeAttr());
+  return attrs;
 }
 
 //===----------------------------------------------------------------------===//
@@ -3288,6 +3295,13 @@ bool fir::valueHasFirAttribute(mlir::Value value,
   }
   // TODO: Construct associated entities attributes. Decide where the fir
   // attributes must be placed/looked for in this case.
+  return false;
+}
+
+bool fir::anyFuncArgsHaveAttr(mlir::FuncOp func, llvm::StringRef attr) {
+  for (unsigned i = 0, end = func.getNumArguments(); i < end; ++i)
+    if (func.getArgAttr(i, attr))
+      return true;
   return false;
 }
 

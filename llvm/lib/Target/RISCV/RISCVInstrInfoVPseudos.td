@@ -7,8 +7,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// This file contains the required infrastructure to support code generation
-/// for the standard 'V' (Vector) extension, version 0.10.  This version is still
-/// experimental as the 'V' extension hasn't been ratified yet.
+/// for the standard 'V' (Vector) extension, version 1.0.
 ///
 /// This file is included from RISCVInstrInfoV.td
 ///
@@ -3497,23 +3496,6 @@ multiclass VPatBinaryMaskOut<string intrinsic,
                          (op1_type op1_reg_class:$rs1),
                          (op2_type op2_kind:$rs2),
                          GPR:$vl, sew)>;
-}
-
-multiclass VPatConversion<string intrinsic,
-                          string inst,
-                          string kind,
-                          ValueType result_type,
-                          ValueType op1_type,
-                          ValueType mask_type,
-                          int sew,
-                          LMULInfo vlmul,
-                          VReg result_reg_class,
-                          VReg op1_reg_class>
-{
-  def : VPatUnaryNoMask<intrinsic, inst, kind, result_type, op1_type,
-                        sew, vlmul, op1_reg_class>;
-  def : VPatUnaryMask<intrinsic, inst, kind, result_type, op1_type,
-                      mask_type, sew, vlmul, result_reg_class, op1_reg_class>;
 }
 
 multiclass VPatConversionTA<string intrinsic,

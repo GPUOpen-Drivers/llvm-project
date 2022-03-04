@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: opt < %s -inline-threshold=0 -always-inline -enable-new-pm=0 -S | FileCheck %s --check-prefix=CHECK
 ;
 ; Ensure the threshold has no impact on these decisions.
@@ -315,4 +313,58 @@ define void @outer14() {
 ; CHECK: call void @inner14
   call void @inner14()
   ret void
+}
+
+define internal i32 @inner15() {
+; CHECK: @inner15(
+  ret i32 1
+}
+
+define i32 @outer15() {
+; CHECK-LABEL: @outer15(
+; CHECK: call
+
+   %r = call i32 @inner15() noinline
+   ret i32 %r
+}
+
+define internal i32 @inner16() alwaysinline {
+; CHECK: @inner16(
+  ret i32 1
+}
+
+define i32 @outer16() {
+; CHECK-LABEL: @outer16(
+; CHECK: call
+
+   %r = call i32 @inner16() noinline
+   ret i32 %r
+}
+
+define i32 @inner17() alwaysinline {
+; CHECK: @inner17(
+  ret i32 1
+}
+
+define i32 @outer17() {
+; CHECK-LABEL: @outer17(
+; CHECK: call
+
+   %r = call i32 @inner17() noinline
+   ret i32 %r
+}
+
+define i32 @inner18() noinline {
+; CHECK: @inner18(
+  ret i32 1
+}
+
+define i32 @outer18() {
+; CHECK-LABEL: @outer18(
+; CHECK-NOT: call
+; CHECK: ret
+
+   %r = call i32 @inner18() alwaysinline
+
+   ret i32 %r
 }

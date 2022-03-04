@@ -19,9 +19,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/LEB128.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
 #include <string>
@@ -43,7 +41,6 @@ cl::opt<bool> GenerateMergedBaseProfiles(
 
 namespace llvm {
 namespace sampleprof {
-SampleProfileFormat FunctionSamples::Format;
 bool FunctionSamples::ProfileIsProbeBased = false;
 bool FunctionSamples::ProfileIsCSFlat = false;
 bool FunctionSamples::ProfileIsCSNested = false;

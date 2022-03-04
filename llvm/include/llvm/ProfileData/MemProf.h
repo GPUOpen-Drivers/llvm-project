@@ -1,17 +1,16 @@
 #ifndef LLVM_PROFILEDATA_MEMPROF_H_
 #define LLVM_PROFILEDATA_MEMPROF_H_
 
-#include <cstdint>
-#include <string>
-#include <vector>
-
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Function.h"
 #include "llvm/ProfileData/MemProfData.inc"
-#include "llvm/ProfileData/ProfileCommon.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/EndianStream.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <cstdint>
+#include <vector>
 
 namespace llvm {
 namespace memprof {
@@ -138,7 +137,7 @@ struct MemProfRecord {
   // Describes a call frame for a dynamic allocation context. The contents of
   // the frame are populated by symbolizing the stack depot call frame from the
   // compiler runtime.
-  PACKED(struct Frame {
+  struct Frame {
     // A uuid (uint64_t) identifying the function. It is obtained by
     // llvm::md5(FunctionName) which returns the lower 64 bits.
     GlobalValue::GUID Function;
@@ -194,7 +193,7 @@ struct MemProfRecord {
       return sizeof(Frame::Function) + sizeof(Frame::LineOffset) +
              sizeof(Frame::Column) + sizeof(Frame::IsInlineFrame);
     }
-  });
+  };
 
   // The dynamic calling context for the allocation.
   std::vector<Frame> CallStack;
@@ -208,7 +207,8 @@ struct MemProfRecord {
 
   size_t serializedSize() const {
     return sizeof(uint64_t) + // The number of frames to serialize.
-           sizeof(Frame) * CallStack.size() + // The contents of the frames.
+           Frame::serializedSize() *
+               CallStack.size() + // The contents of the frames.
            PortableMemInfoBlock::serializedSize(); // The size of the payload.
   }
 

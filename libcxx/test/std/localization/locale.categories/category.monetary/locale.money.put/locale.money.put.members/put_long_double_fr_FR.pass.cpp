@@ -11,7 +11,6 @@
 // NetBSD does not support LC_MONETARY at the moment
 // XFAIL: netbsd
 
-// XFAIL: LIBCXX-WINDOWS-FIXME
 // XFAIL: LIBCXX-AIX-FIXME
 
 // REQUIRES: locale.fr_FR.UTF-8
@@ -29,6 +28,7 @@
 #include <cassert>
 #include "test_iterators.h"
 
+#include "locale_helpers.h"
 #include "platform_support.h" // locale name macros
 #include "test_macros.h"
 
@@ -53,33 +53,8 @@ public:
         : Fw(refs) {}
 };
 
-// GLIBC 2.27 and newer use U2027 (narrow non-breaking space) as a thousands sep.
-// this function converts the spaces in string inputs to that character if need
-// be. FreeBSD's locale data also uses U2027 since 2018.
 static std::wstring convert_thousands_sep(std::wstring const& in) {
-#if defined(_CS_GNU_LIBC_VERSION) || defined(__FreeBSD__)
-#if defined(_CS_GNU_LIBC_VERSION)
-  if (glibc_version_less_than("2.27"))
-    return in;
-#endif
-  std::wstring out;
-  unsigned I = 0;
-  bool seen_num_start = false;
-  bool seen_decimal = false;
-  for (; I < in.size(); ++I) {
-    seen_decimal |= in[I] == L',';
-    seen_num_start |= in[I] == '-' || std::iswdigit(in[I]);
-    if (seen_decimal || !seen_num_start || in[I] != L' ') {
-      out.push_back(in[I]);
-      continue;
-    }
-    assert(in[I] == L' ');
-    out.push_back(L'\u202F');
-  }
-  return out;
-#else
-  return in;
-#endif
+  return LocaleHelpers::convert_thousands_sep_fr_FR(in);
 }
 #endif // TEST_HAS_NO_WIDE_CHARACTERS
 

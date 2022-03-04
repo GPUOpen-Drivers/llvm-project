@@ -53,9 +53,17 @@ API Changes
   ``<filesystem>`` header. The associated macro
   ``_LIBCPP_DEPRECATED_EXPERIMENTAL_FILESYSTEM`` has also been removed.
 
-- Transitive includes of ``<algorithm>`` have been removed. If you see compiler errors
-  related to missing declarations inside namespace ``std`` when updating libc++,
-  you are probably missing ``#include <algorithm>`` in a file where you use algorithms.
+- Some libc++ headers no longer transitively include all of ``<algorithm>``and ``<chrono>``.
+  If, after updating libc++, you see compiler errors related to missing declarations in
+  namespace ``std``, it might be because one of your source files now needs to
+  ``#include <algorithm>`` and/or ``#include <chrono>``.
+
+- The integer distributions ``binomial_distribution``, ``discrete_distribution``,
+  ``geometric_distribution``, ``negative_binomial_distribution``, ``poisson_distribution``,
+  and ``uniform_int_distribution`` now conform to the Standard by rejecting
+  template parameter types other than ``short``, ``int``, ``long``, ``long long``,
+  (as an extension) ``__int128_t``, and the unsigned versions thereof.
+  In particular, ``uniform_int_distribution<int8_t>`` is no longer supported.
 
 ABI Changes
 -----------
@@ -71,3 +79,8 @@ Build System Changes
 - Support for standalone builds have been entirely removed from libc++, libc++abi and
   libunwind. Please use :ref:`these instructions <build instructions>` for building
   libc++, libc++abi and/or libunwind.
+
+- The ``{LIBCXX,LIBCXXABI,LIBUNWIND}_TARGET_TRIPLE``, ``{LIBCXX,LIBCXXABI,LIBUNWIND}_SYSROOT`` and
+  ``{LIBCXX,LIBCXXABI,LIBUNWIND}_GCC_TOOLCHAIN`` CMake variables have been removed. Instead, please
+  use the ``CMAKE_CXX_COMPILER_TARGET``, ``CMAKE_SYSROOT`` and ``CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN``
+  variables provided by CMake.

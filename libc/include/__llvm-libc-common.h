@@ -20,6 +20,15 @@
 #undef _Noreturn
 #define _Noreturn [[noreturn]]
 
+#undef _Alignas
+#define _Alignas alignas
+
+#undef _Static_assert
+#define _Static_assert static_assert
+
+#undef _Alignof
+#define _Alignof alignof
+
 #else // not __cplusplus
 
 #undef __BEGIN_C_DECLS
