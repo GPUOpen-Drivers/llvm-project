@@ -18,6 +18,7 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/Support/LLVM.h"
@@ -415,7 +416,7 @@ SmallVector<LinalgOp> TileLoopNest::getAllTiledAndFusedOps() {
 FailureOr<TileLoopNest> mlir::linalg::tileConsumerAndFuseProducers(
     OpBuilder &b, LinalgOp consumerOp, ArrayRef<int64_t> tileSizes,
     ArrayRef<int64_t> tileInterchange,
-    Optional<LinalgLoopDistributionOptions> tileDistribution) {
+    const Optional<LinalgLoopDistributionOptions> &tileDistribution) {
   assert(tileSizes.size() == tileInterchange.size() &&
          "expect the number of tile sizes and interchange dims to match");
   assert(isPermutation(tileInterchange) &&

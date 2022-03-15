@@ -12,7 +12,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/BinaryFormat/COFF.h"
+#include "llvm/ObjCopy/CommonConfig.h"
 #include "llvm/ObjCopy/ConfigManager.h"
+#include "llvm/ObjCopy/MachO/MachOConfig.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/CRC.h"
@@ -363,41 +365,6 @@ static Error addSymbolsFromFile(NameMatcher &Symbols, BumpPtrAllocator &Alloc,
   }
 
   return Error::success();
-}
-
-Expected<NameOrPattern>
-NameOrPattern::create(StringRef Pattern, MatchStyle MS,
-                      function_ref<Error(Error)> ErrorCallback) {
-  switch (MS) {
-  case MatchStyle::Literal:
-    return NameOrPattern(Pattern);
-  case MatchStyle::Wildcard: {
-    SmallVector<char, 32> Data;
-    bool IsPositiveMatch = true;
-    if (Pattern[0] == '!') {
-      IsPositiveMatch = false;
-      Pattern = Pattern.drop_front();
-    }
-    Expected<GlobPattern> GlobOrErr = GlobPattern::create(Pattern);
-
-    // If we couldn't create it as a glob, report the error, but try again with
-    // a literal if the error reporting is non-fatal.
-    if (!GlobOrErr) {
-      if (Error E = ErrorCallback(GlobOrErr.takeError()))
-        return std::move(E);
-      return create(Pattern, MatchStyle::Literal, ErrorCallback);
-    }
-
-    return NameOrPattern(std::make_shared<GlobPattern>(*GlobOrErr),
-                         IsPositiveMatch);
-  }
-  case MatchStyle::Regex: {
-    SmallVector<char, 32> Data;
-    return NameOrPattern(std::make_shared<Regex>(
-        ("^" + Pattern.ltrim('^').rtrim('$') + "$").toStringRef(Data)));
-  }
-  }
-  llvm_unreachable("Unhandled llvm.objcopy.MatchStyle enum");
 }
 
 static Error addSymbolsToRenameFromFile(StringMap<StringRef> &SymbolsToRename,
@@ -1183,10 +1150,12 @@ objcopy::parseInstallNameToolOptions(ArrayRef<const char *> ArgsArr) {
 }
 
 Expected<DriverConfig>
-objcopy::parseBitcodeStripOptions(ArrayRef<const char *> ArgsArr) {
+objcopy::parseBitcodeStripOptions(ArrayRef<const char *> ArgsArr,
+                                  function_ref<Error(Error)> ErrorCallback) {
   DriverConfig DC;
   ConfigManager ConfigMgr;
   CommonConfig &Config = ConfigMgr.Common;
+  MachOConfig &MachOConfig = ConfigMgr.MachO;
   BitcodeStripOptTable T;
   unsigned MissingArgumentIndex, MissingArgumentCount;
   opt::InputArgList InputArgs =
@@ -1221,7 +1190,21 @@ objcopy::parseBitcodeStripOptions(ArrayRef<const char *> ArgsArr) {
                              "llvm-bitcode-strip expects a single input file");
   assert(!Positional.empty());
   Config.InputFilename = Positional[0];
-  Config.OutputFilename = Positional[0];
+
+  if (!InputArgs.hasArg(BITCODE_STRIP_output)) {
+    return createStringError(errc::invalid_argument,
+                             "-o is a required argument");
+  }
+  Config.OutputFilename = InputArgs.getLastArgValue(BITCODE_STRIP_output);
+
+  if (!InputArgs.hasArg(BITCODE_STRIP_remove))
+    return createStringError(errc::invalid_argument, "no action specified");
+
+  // We only support -r for now, which removes all bitcode sections and
+  // the __LLVM segment if it's now empty.
+  cantFail(Config.ToRemove.addMatcher(NameOrPattern::create(
+      "__LLVM,__bundle", MatchStyle::Literal, ErrorCallback)));
+  MachOConfig.EmptySegmentsToRemove.insert("__LLVM");
 
   DC.CopyConfigs.push_back(std::move(ConfigMgr));
   return std::move(DC);

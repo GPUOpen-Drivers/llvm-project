@@ -465,6 +465,7 @@ constexpr const char *knownZFlags[] = {
     "noexecstack",
     "nognustack",
     "nokeep-text-section-prefix",
+    "nopack-relative-relocs",
     "norelro",
     "noseparate-code",
     "nostart-stop-gc",
@@ -472,6 +473,7 @@ constexpr const char *knownZFlags[] = {
     "now",
     "origin",
     "pac-plt",
+    "pack-relative-relocs",
     "rel",
     "rela",
     "relro",
@@ -1352,8 +1354,13 @@ static void readConfigs(opt::InputArgList &args) {
 
   std::tie(config->buildId, config->buildIdVector) = getBuildId(args);
 
-  std::tie(config->androidPackDynRelocs, config->relrPackDynRelocs) =
-      getPackDynRelocs(args);
+  if (getZFlag(args, "pack-relative-relocs", "nopack-relative-relocs", false)) {
+    config->relrGlibc = true;
+    config->relrPackDynRelocs = true;
+  } else {
+    std::tie(config->androidPackDynRelocs, config->relrPackDynRelocs) =
+        getPackDynRelocs(args);
+  }
 
   if (auto *arg = args.getLastArg(OPT_symbol_ordering_file)){
     if (args.hasArg(OPT_call_graph_ordering_file))
@@ -2471,6 +2478,9 @@ void LinkerDriver::link(opt::InputArgList &args) {
     for (auto *s : lto::LTO::getRuntimeLibcallSymbols())
       handleLibcall(s);
 
+  // Archive members defining __wrap symbols may be extracted.
+  std::vector<WrappedSymbol> wrapped = addWrappedSymbols(args);
+
   // No more lazy bitcode can be extracted at this point. Do post parse work
   // like checking duplicate symbols.
   parallelForEach(objectFiles, initializeLocalSymbols);
@@ -2497,8 +2507,6 @@ void LinkerDriver::link(opt::InputArgList &args) {
   // Create elfHeader early. We need a dummy section in
   // addReservedSymbols to mark the created symbols as not absolute.
   Out::elfHeader = make<OutputSection>("", 0, SHF_ALLOC);
-
-  std::vector<WrappedSymbol> wrapped = addWrappedSymbols(args);
 
   // We need to create some reserved symbols such as _end. Create them.
   if (!config->relocatable)
@@ -2689,8 +2697,8 @@ void LinkerDriver::link(opt::InputArgList &args) {
     // point onwards InputSectionDescription::sections should be used instead of
     // sectionBases.
     for (SectionCommand *cmd : script->sectionCommands)
-      if (auto *sec = dyn_cast<OutputSection>(cmd))
-        sec->finalizeInputSections();
+      if (auto *osd = dyn_cast<OutputDesc>(cmd))
+        osd->osec.finalizeInputSections();
     llvm::erase_if(inputSections, [](InputSectionBase *s) {
       return isa<MergeInputSection>(s);
     });

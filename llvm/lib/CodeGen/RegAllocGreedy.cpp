@@ -75,9 +75,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <memory>
-#include <queue>
-#include <tuple>
 #include <utility>
 
 using namespace llvm;
@@ -132,6 +129,12 @@ static cl::opt<bool> ConsiderLocalIntervalCost(
     cl::desc("Consider the cost of local intervals created by a split "
              "candidate when choosing the best split candidate."),
     cl::init(false));
+
+static cl::opt<long> GrowRegionComplexityBudget(
+    "grow-region-complexity-budget",
+    cl::desc("growRegion() does not scale with the number of BB edges, so "
+             "limit its budget and bail out once we reach the limit."),
+    cl::init(10000), cl::Hidden);
 
 static RegisterRegAlloc greedyRegAlloc("greedy", "greedy register allocator",
                                        createGreedyRegisterAllocator);
@@ -784,6 +787,7 @@ bool RAGreedy::growRegion(GlobalSplitCandidate &Cand) {
   unsigned Visited = 0;
 #endif
 
+  long Budget = GrowRegionComplexityBudget;
   while (true) {
     ArrayRef<unsigned> NewBundles = SpillPlacer->getRecentPositive();
     // Find new through blocks in the periphery of PrefRegBundles.
@@ -791,6 +795,9 @@ bool RAGreedy::growRegion(GlobalSplitCandidate &Cand) {
       // Look at all blocks connected to Bundle in the full graph.
       ArrayRef<unsigned> Blocks = Bundles->getBlocks(Bundle);
       for (unsigned Block : Blocks) {
+        // Limit compilation time by bailing out after we use all our budget.
+        if (Budget-- == 0)
+          return false;
         if (!Todo.test(Block))
           continue;
         Todo.reset(Block);

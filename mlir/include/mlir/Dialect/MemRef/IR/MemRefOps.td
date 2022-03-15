@@ -273,7 +273,6 @@ def MemRef_AllocaScopeOp : MemRef_Op<"alloca_scope",
   let results = (outs Variadic<AnyType>:$results);
   let regions = (region SizedRegion<1>:$bodyRegion);
   let hasCustomAssemblyFormat = 1;
-  let hasVerifier = 1;
   let hasCanonicalizer = 1;
 }
 
@@ -1091,6 +1090,8 @@ def MemRef_ReinterpretCastOp
     /// and `strides` operands.
     static unsigned getOffsetSizeAndStrideStartOperandIndex() { return 1; }
   }];
+
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//

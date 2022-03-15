@@ -424,9 +424,7 @@ public:
 
   /// Return a register number that is guaranteed to not match with
   /// any real register on the underlying architecture.
-  virtual MCPhysReg getNoRegister() const {
-    llvm_unreachable("not implemented");
-  }
+  MCPhysReg getNoRegister() const { return MCRegister::NoRegister; }
 
   /// Return a register corresponding to a function integer argument \p ArgNo
   /// if the argument is passed in a register. Or return the result of
@@ -1290,6 +1288,16 @@ public:
   /// Replace instruction with a shorter version that could be relaxed later
   /// if needed.
   virtual bool shortenInstruction(MCInst &Inst) const {
+    llvm_unreachable("not implemented");
+    return false;
+  }
+
+  /// Convert a move instruction into a conditional move instruction, given a
+  /// condition code.
+  virtual bool
+  convertMoveToConditionalMove(MCInst &Inst, unsigned CC,
+                               bool AllowStackMemOp = false,
+                               bool AllowBasePtrStackMemOp = false) const {
     llvm_unreachable("not implemented");
     return false;
   }

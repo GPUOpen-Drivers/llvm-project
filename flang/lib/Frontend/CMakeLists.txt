@@ -15,7 +15,8 @@ add_flang_library(flangFrontend
   FIRBuilder
   FIRDialect
   FIRSupport
-  MLIRBuiltinAttributeInterfacesIncGen
+  FIROptTransformsPassIncGen
+  MLIRIR
   ${dialect_libs}
 
   LINK_LIBS
@@ -37,8 +38,10 @@ add_flang_library(flangFrontend
   ${dialect_libs}
 
   LINK_COMPONENTS
+  Analysis
   Option
   Support
+  Target
   FrontendOpenACC
   FrontendOpenMP
 )

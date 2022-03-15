@@ -532,7 +532,11 @@ def HasV8_0rOps : SubtargetFeature<
   FeaturePAuth, FeatureRCPC,
   //v8.4
   FeatureDotProd, FeatureTRACEV8_4, FeatureTLB_RMI,
-  FeatureFlagM, FeatureDIT, FeatureSEL2, FeatureRCPC_IMMO]>;
+  FeatureFlagM, FeatureDIT, FeatureSEL2, FeatureRCPC_IMMO,
+  // Not mandatory in v8.0-R, but included here on the grounds that it
+  // only enables names of system registers
+  FeatureSpecRestrict
+  ]>;
 
 //===----------------------------------------------------------------------===//
 // Register File Description
@@ -816,8 +820,9 @@ def TuneExynosM3 : SubtargetFeature<"exynosm3", "ARMProcFamily", "ExynosM3",
                                      FeaturePostRAScheduler,
                                      FeaturePredictableSelectIsExpensive]>;
 
-def TuneExynosM4 : SubtargetFeature<"exynosm3", "ARMProcFamily", "ExynosM3",
-                                    "Samsung Exynos-M3 processors",
+// Re-uses some scheduling and tunings from the ExynosM3 proc family.
+def TuneExynosM4 : SubtargetFeature<"exynosm4", "ARMProcFamily", "ExynosM3",
+                                    "Samsung Exynos-M4 processors",
                                     [FeatureArithmeticBccFusion,
                                      FeatureArithmeticCbzFusion,
                                      FeatureExynosCheapAsMoveHandling,
@@ -967,7 +972,7 @@ def ProcessorFeatures {
                                  FeatureSVE2BitPerm, FeatureBF16, FeatureMatMulInt8];
   list<SubtargetFeature> R82  = [HasV8_0rOps, FeaturePerfMon, FeatureFullFP16,
                                  FeatureFP16FML, FeatureSSBS, FeaturePredRes,
-                                 FeatureSB, FeatureSpecRestrict];
+                                 FeatureSB];
   list<SubtargetFeature> X1   = [HasV8_2aOps, FeatureCrypto, FeatureFPARMv8,
                                  FeatureNEON, FeatureRCPC, FeaturePerfMon,
                                  FeatureSPE, FeatureFullFP16, FeatureDotProd];

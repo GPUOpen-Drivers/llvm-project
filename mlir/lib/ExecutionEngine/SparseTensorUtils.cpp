@@ -264,7 +264,7 @@ public:
         indices[r].reserve(sz);
         sz = 1;
         allDense = false;
-        // Prepare the pointer structure.  We cannot use `addPointer`
+        // Prepare the pointer structure.  We cannot use `appendPointer`
         // here, because `isCompressedDim` won't work until after this
         // preparation has been done.
         pointers[r].push_back(0);
@@ -412,7 +412,7 @@ private:
   /// Appends the next free position of `indices[d]` to `pointers[d]`.
   /// Thus, when called after inserting the last element of a segment,
   /// it will append the position where the next segment begins.
-  inline void addPointer(uint64_t d) {
+  inline void appendPointer(uint64_t d) {
     assert(isCompressedDim(d)); // Entails `d < getRank()`.
     uint64_t p = indices[d].size();
     assert(p <= std::numeric_limits<P>::max() &&
@@ -421,7 +421,7 @@ private:
   }
 
   /// Appends the given index to `indices[d]`.
-  inline void addIndex(uint64_t d, uint64_t i) {
+  inline void appendIndex(uint64_t d, uint64_t i) {
     assert(isCompressedDim(d)); // Entails `d < getRank()`.
     assert(i <= std::numeric_limits<I>::max() &&
            "Index value is too large for the I-type");
@@ -455,7 +455,7 @@ private:
         seg++;
       // Handle segment in interval for sparse or dense dimension.
       if (isCompressedDim(d)) {
-        addIndex(d, i);
+        appendIndex(d, i);
       } else {
         // For dense storage we must fill in all the zero values between
         // the previous element (when last we ran this for-loop) and the
@@ -470,7 +470,7 @@ private:
     }
     // Finalize the sparse pointer structure at this dimension.
     if (isCompressedDim(d)) {
-      addPointer(d);
+      appendPointer(d);
     } else {
       // For dense storage we must fill in all the zero values after
       // the last element.
@@ -508,7 +508,7 @@ private:
     if (d == getRank()) {
       values.push_back(0);
     } else if (isCompressedDim(d)) {
-      addPointer(d);
+      appendPointer(d);
     } else {
       for (uint64_t full = 0, sz = sizes[d]; full < sz; full++)
         endDim(d + 1);
@@ -522,7 +522,7 @@ private:
     for (uint64_t i = 0; i < rank - diff; i++) {
       uint64_t d = rank - i - 1;
       if (isCompressedDim(d)) {
-        addPointer(d);
+        appendPointer(d);
       } else {
         for (uint64_t full = idx[d] + 1, sz = sizes[d]; full < sz; full++)
           endDim(d + 1);
@@ -537,7 +537,7 @@ private:
     for (uint64_t d = diff; d < rank; d++) {
       uint64_t i = cursor[d];
       if (isCompressedDim(d)) {
-        addIndex(d, i);
+        appendIndex(d, i);
       } else {
         for (uint64_t full = top; full < i; full++)
           endDim(d + 1);
@@ -663,7 +663,8 @@ static SparseTensorCOO<V> *openSparseTensorCOO(char *filename, uint64_t rank,
   // Open the file.
   FILE *file = fopen(filename, "r");
   if (!file) {
-    fprintf(stderr, "Cannot find %s\n", filename);
+    assert(filename && "Received nullptr for filename");
+    fprintf(stderr, "Cannot find file %s\n", filename);
     exit(1);
   }
   // Perform some file format dependent set up.
@@ -758,7 +759,7 @@ toMLIRSparseTensor(uint64_t rank, uint64_t nse, uint64_t *shape, V *values,
   std::sort(order.begin(), order.end());
   for (uint64_t i = 0; i < rank; ++i) {
     if (i != order[i]) {
-      fprintf(stderr, "Permutation is not a permutation of 0..%lu\n", rank);
+      fprintf(stderr, "Not a permutation of 0..%" PRIu64 "\n", rank);
       exit(1);
     }
   }
@@ -1180,6 +1181,10 @@ char *getTensorFilename(index_type id) {
   char var[80];
   sprintf(var, "TENSOR%" PRIu64, id);
   char *env = getenv(var);
+  if (!env) {
+    fprintf(stderr, "Environment variable %s is not set\n", var);
+    exit(1);
+  }
   return env;
 }
 

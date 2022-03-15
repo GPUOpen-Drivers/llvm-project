@@ -14,8 +14,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Analysis/Presburger/PresburgerSet.h"
 #include "./Utils.h"
+#include "mlir/Analysis/Presburger/PresburgerRelation.h"
 #include "mlir/IR/MLIRContext.h"
 
 #include <gmock/gmock.h>
@@ -30,9 +30,9 @@ using namespace presburger;
 /// number of dimensions as is specified by the numDims argument.
 static PresburgerSet
 parsePresburgerSetFromPolyStrings(unsigned numDims, ArrayRef<StringRef> strs) {
-  PresburgerSet set = PresburgerSet::getEmptySet(numDims);
+  PresburgerSet set = PresburgerSet::getEmpty(numDims);
   for (StringRef str : strs)
-    set.unionPolyInPlace(parsePoly(str));
+    set.unionInPlace(parsePoly(str));
   return set;
 }
 
@@ -101,9 +101,9 @@ static void testComplementAtPoints(const PresburgerSet &s,
 /// local ids.
 static PresburgerSet makeSetFromPoly(unsigned numDims,
                                      ArrayRef<IntegerPolyhedron> polys) {
-  PresburgerSet set = PresburgerSet::getEmptySet(numDims);
+  PresburgerSet set = PresburgerSet::getEmpty(numDims);
   for (const IntegerPolyhedron &poly : polys)
-    set.unionPolyInPlace(poly);
+    set.unionInPlace(poly);
   return set;
 }
 
@@ -147,20 +147,20 @@ TEST(SetTest, Union) {
                     {{1}, {2}, {8}, {9}, {10}, {20}, {21}});
 
   // empty set union set.
-  testUnionAtPoints(PresburgerSet::getEmptySet(1), set,
+  testUnionAtPoints(PresburgerSet::getEmpty(1), set,
                     {{1}, {2}, {8}, {9}, {10}, {20}, {21}});
 
   // empty set union Universe.
-  testUnionAtPoints(PresburgerSet::getEmptySet(1),
-                    PresburgerSet::getUniverse(1), {{1}, {2}, {0}, {-1}});
+  testUnionAtPoints(PresburgerSet::getEmpty(1), PresburgerSet::getUniverse(1),
+                    {{1}, {2}, {0}, {-1}});
 
   // Universe union empty set.
-  testUnionAtPoints(PresburgerSet::getUniverse(1),
-                    PresburgerSet::getEmptySet(1), {{1}, {2}, {0}, {-1}});
+  testUnionAtPoints(PresburgerSet::getUniverse(1), PresburgerSet::getEmpty(1),
+                    {{1}, {2}, {0}, {-1}});
 
   // empty set union empty set.
-  testUnionAtPoints(PresburgerSet::getEmptySet(1),
-                    PresburgerSet::getEmptySet(1), {{1}, {2}, {0}, {-1}});
+  testUnionAtPoints(PresburgerSet::getEmpty(1), PresburgerSet::getEmpty(1),
+                    {{1}, {2}, {0}, {-1}});
 }
 
 TEST(SetTest, Intersect) {
@@ -173,16 +173,16 @@ TEST(SetTest, Intersect) {
                         {{1}, {2}, {8}, {9}, {10}, {20}, {21}});
 
   // empty set intersection set.
-  testIntersectAtPoints(PresburgerSet::getEmptySet(1), set,
+  testIntersectAtPoints(PresburgerSet::getEmpty(1), set,
                         {{1}, {2}, {8}, {9}, {10}, {20}, {21}});
 
   // empty set intersection Universe.
-  testIntersectAtPoints(PresburgerSet::getEmptySet(1),
+  testIntersectAtPoints(PresburgerSet::getEmpty(1),
                         PresburgerSet::getUniverse(1), {{1}, {2}, {0}, {-1}});
 
   // Universe intersection empty set.
   testIntersectAtPoints(PresburgerSet::getUniverse(1),
-                        PresburgerSet::getEmptySet(1), {{1}, {2}, {0}, {-1}});
+                        PresburgerSet::getEmpty(1), {{1}, {2}, {0}, {-1}});
 
   // Universe intersection Universe.
   testIntersectAtPoints(PresburgerSet::getUniverse(1),
@@ -346,7 +346,7 @@ TEST(SetTest, Complement) {
 
   // Complement of empty set.
   testComplementAtPoints(
-      PresburgerSet::getEmptySet(1),
+      PresburgerSet::getEmpty(1),
       {{-1}, {-2}, {-8}, {1}, {2}, {8}, {9}, {10}, {20}, {21}});
 
   testComplementAtPoints(
@@ -369,7 +369,7 @@ TEST(SetTest, Complement) {
 TEST(SetTest, isEqual) {
   // set = [2, 8] U [10, 20].
   PresburgerSet universe = PresburgerSet::getUniverse(1);
-  PresburgerSet emptySet = PresburgerSet::getEmptySet(1);
+  PresburgerSet emptySet = PresburgerSet::getEmpty(1);
   PresburgerSet set = parsePresburgerSetFromPolyStrings(
       1,
       {"(x) : (x - 2 >= 0, -x + 8 >= 0)", "(x) : (x - 10 >= 0, -x + 20 >= 0)"});
@@ -460,7 +460,7 @@ TEST(SetTest, divisions) {
 void expectCoalesce(size_t expectedNumPoly, const PresburgerSet &set) {
   PresburgerSet newSet = set.coalesce();
   EXPECT_TRUE(set.isEqual(newSet));
-  EXPECT_TRUE(expectedNumPoly == newSet.getNumPolys());
+  EXPECT_TRUE(expectedNumPoly == newSet.getNumDisjuncts());
 }
 
 TEST(SetTest, coalesceNoPoly) {
@@ -528,12 +528,18 @@ TEST(SetTest, coalesceCutOneDim) {
              "(x) : ( x >= 0, -x + 3 >= 0)",
              "(x) : ( x - 2 >= 0, -x + 4 >= 0)",
          });
-  expectCoalesce(2, set);
+  expectCoalesce(1, set);
 }
 
 TEST(SetTest, coalesceSeparateOneDim) {
   PresburgerSet set = parsePresburgerSetFromPolyStrings(
       1, {"(x) : ( x >= 0, -x + 2 >= 0)", "(x) : ( x - 3 >= 0, -x + 4 >= 0)"});
+  expectCoalesce(2, set);
+}
+
+TEST(SetTest, coalesceAdjEq) {
+  PresburgerSet set = parsePresburgerSetFromPolyStrings(
+      1, {"(x) : ( x == 0)", "(x) : ( x - 1 == 0)"});
   expectCoalesce(2, set);
 }
 
@@ -551,6 +557,15 @@ TEST(SetTest, coalesceCutTwoDim) {
       2, {
              "(x,y) : (x >= 0, -x + 3 >= 0, y >= 0, -y + 2 >= 0)",
              "(x,y) : (x >= 0, -x + 3 >= 0, y - 1 >= 0, -y + 3 >= 0)",
+         });
+  expectCoalesce(1, set);
+}
+
+TEST(SetTest, coalesceEqStickingOut) {
+  PresburgerSet set = parsePresburgerSetFromPolyStrings(
+      2, {
+             "(x,y) : (x >= 0, -x + 2 >= 0, y >= 0, -y + 2 >= 0)",
+             "(x,y) : (y - 1 == 0, x >= 0, -x + 3 >= 0)",
          });
   expectCoalesce(2, set);
 }
@@ -576,10 +591,10 @@ TEST(SetTest, coalesceContainedEq) {
 TEST(SetTest, coalesceCuttingEq) {
   PresburgerSet set = parsePresburgerSetFromPolyStrings(
       2, {
-             "(x,y) : (x - 1 >= 0, -x + 3 >= 0, x - y == 0)",
+             "(x,y) : (x + 1 >= 0, -x + 1 >= 0, x - y == 0)",
              "(x,y) : (x >= 0, -x + 2 >= 0, x - y == 0)",
          });
-  expectCoalesce(2, set);
+  expectCoalesce(1, set);
 }
 
 TEST(SetTest, coalesceSeparateEq) {
@@ -628,6 +643,36 @@ TEST(SetTest, coalesceDoubleIncrement) {
              "(x) : (x - 2 >= 0, -x + 3 >= 0)",
          });
   expectCoalesce(3, set);
+}
+
+TEST(SetTest, coalesceLastCoalesced) {
+  PresburgerSet set = parsePresburgerSetFromPolyStrings(
+      1, {
+             "(x) : (x == 0)",
+             "(x) : (x - 1 >= 0, -x + 3 >= 0)",
+             "(x) : (x + 2 == 0)",
+             "(x) : (x - 2 >= 0, -x + 4 >= 0)",
+         });
+  expectCoalesce(3, set);
+}
+
+TEST(SetTest, coalesceDiv) {
+  PresburgerSet set =
+      parsePresburgerSetFromPolyStrings(1, {
+                                               "(x) : (x floordiv 2 == 0)",
+                                               "(x) : (x floordiv 2 - 1 == 0)",
+                                           });
+  expectCoalesce(2, set);
+}
+
+TEST(SetTest, coalesceDivOtherContained) {
+  PresburgerSet set =
+      parsePresburgerSetFromPolyStrings(1, {
+                                               "(x) : (x floordiv 2 == 0)",
+                                               "(x) : (x == 0)",
+                                               "(x) : (x >= 0, -x + 1 >= 0)",
+                                           });
+  expectCoalesce(2, set);
 }
 
 static void

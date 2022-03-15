@@ -100,7 +100,6 @@
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -3875,6 +3874,10 @@ void Verifier::visitAllocaInst(AllocaInst &AI) {
   }
 
   if (AI.isSwiftError()) {
+    Assert(AI.getAllocatedType()->isPointerTy(),
+           "swifterror alloca must have pointer type", &AI);
+    Assert(!AI.isArrayAllocation(),
+           "swifterror alloca must not be array allocation", &AI);
     verifySwiftErrorValue(&AI);
   }
 

@@ -244,10 +244,6 @@ ParseResult AllocaScopeOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-LogicalResult AllocaScopeOp::verify() {
-  return RegionBranchOpInterface::verifyTypes(*this);
-}
-
 void AllocaScopeOp::getSuccessorRegions(
     Optional<unsigned> index, ArrayRef<Attribute> operands,
     SmallVectorImpl<RegionSuccessor> &regions) {
@@ -261,7 +257,7 @@ void AllocaScopeOp::getSuccessorRegions(
 
 /// Given an operation, return whether this op is guaranteed to
 /// allocate an AutomaticAllocationScopeResource
-static bool isGuaranteedAutomaticAllocationScope(Operation *op) {
+static bool isGuaranteedAutomaticAllocation(Operation *op) {
   MemoryEffectOpInterface interface = dyn_cast<MemoryEffectOpInterface>(op);
   if (!interface)
     return false;
@@ -276,9 +272,15 @@ static bool isGuaranteedAutomaticAllocationScope(Operation *op) {
   return false;
 }
 
-/// Given an operation, return whether this op could to
-/// allocate an AutomaticAllocationScopeResource
-static bool isPotentialAutomaticAllocationScope(Operation *op) {
+/// Given an operation, return whether this op itself could
+/// allocate an AutomaticAllocationScopeResource. Note that
+/// this will not check whether an operation contained within
+/// the op can allocate.
+static bool isOpItselfPotentialAutomaticAllocation(Operation *op) {
+  // This op itself doesn't create a stack allocation,
+  // the inner allocation should be handled separately.
+  if (op->hasTrait<OpTrait::HasRecursiveSideEffects>())
+    return false;
   MemoryEffectOpInterface interface = dyn_cast<MemoryEffectOpInterface>(op);
   if (!interface)
     return true;
@@ -312,9 +314,11 @@ struct AllocaScopeInliner : public OpRewritePattern<AllocaScopeOp> {
     if (!op->getParentOp()->hasTrait<OpTrait::AutomaticAllocationScope>()) {
       bool hasPotentialAlloca =
           op->walk([&](Operation *alloc) {
-              if (isPotentialAutomaticAllocationScope(alloc))
+              if (alloc == op)
+                return WalkResult::advance();
+              if (isOpItselfPotentialAutomaticAllocation(alloc))
                 return WalkResult::interrupt();
-              return WalkResult::skip();
+              return WalkResult::advance();
             }).wasInterrupted();
       if (hasPotentialAlloca)
         return failure();
@@ -383,7 +387,7 @@ struct AllocaScopeHoister : public OpRewritePattern<AllocaScopeOp> {
 
     SmallVector<Operation *> toHoist;
     op->walk([&](Operation *alloc) {
-      if (!isGuaranteedAutomaticAllocationScope(alloc))
+      if (!isGuaranteedAutomaticAllocation(alloc))
         return WalkResult::skip();
 
       // If any operand is not defined before the location of
@@ -396,11 +400,11 @@ struct AllocaScopeHoister : public OpRewritePattern<AllocaScopeOp> {
       return WalkResult::advance();
     });
 
-    if (!toHoist.size())
+    if (toHoist.empty())
       return failure();
     rewriter.setInsertionPoint(lastParentWithoutScope);
-    for (auto op : toHoist) {
-      auto cloned = rewriter.clone(*op);
+    for (auto *op : toHoist) {
+      auto *cloned = rewriter.clone(*op);
       rewriter.replaceOp(op, cloned->getResults());
     }
     return success();
@@ -1502,6 +1506,36 @@ LogicalResult ReinterpretCastOp::verify() {
   }
 
   return success();
+}
+
+OpFoldResult ReinterpretCastOp::fold(ArrayRef<Attribute> /*operands*/) {
+  Value src = source();
+  auto getPrevSrc = [&]() -> Value {
+    // reinterpret_cast(reinterpret_cast(x)) -> reinterpret_cast(x).
+    if (auto prev = src.getDefiningOp<ReinterpretCastOp>())
+      return prev.source();
+
+    // reinterpret_cast(cast(x)) -> reinterpret_cast(x).
+    if (auto prev = src.getDefiningOp<CastOp>())
+      return prev.source();
+
+    // reinterpret_cast(subview(x)) -> reinterpret_cast(x) if subview offsets
+    // are 0.
+    if (auto prev = src.getDefiningOp<SubViewOp>())
+      if (llvm::all_of(prev.getMixedOffsets(), [](OpFoldResult val) {
+            return isConstantIntValue(val, 0);
+          }))
+        return prev.source();
+
+    return nullptr;
+  };
+
+  if (auto prevSrc = getPrevSrc()) {
+    sourceMutable().assign(prevSrc);
+    return getResult();
+  }
+
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//

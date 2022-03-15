@@ -8701,7 +8701,7 @@ public:
 
   bool DeduceFunctionTypeFromReturnExpr(FunctionDecl *FD,
                                         SourceLocation ReturnLoc,
-                                        Expr *&RetExpr, AutoType *AT);
+                                        Expr *&RetExpr, const AutoType *AT);
 
   FunctionTemplateDecl *getMoreSpecializedTemplate(
       FunctionTemplateDecl *FT1, FunctionTemplateDecl *FT2, SourceLocation Loc,
@@ -11939,6 +11939,10 @@ public:
                                       BinaryOperatorKind Opc);
   QualType CheckVectorLogicalOperands(ExprResult &LHS, ExprResult &RHS,
                                       SourceLocation Loc);
+
+  // type checking for sizeless vector binary operators.
+  QualType CheckSizelessVectorOperands(ExprResult &LHS, ExprResult &RHS,
+                                       SourceLocation Loc);
 
   /// Type checking for matrix binary operators.
   QualType CheckMatrixElementwiseOperands(ExprResult &LHS, ExprResult &RHS,

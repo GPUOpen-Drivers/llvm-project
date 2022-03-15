@@ -22,8 +22,8 @@ add_header_library(
   DEPENDS
     .ctype_utils
     libc.include.errno
-    libc.src.errno.__errno_location
-    libc.src.__support.CPP.standalone_cpp
+    libc.src.errno.errno
+    libc.src.__support.CPP.limits
 )
 
 add_header_library(
@@ -43,8 +43,8 @@ add_header_library(
     .ctype_utils
     .high_precision_decimal
     libc.include.errno
-    libc.src.errno.__errno_location
-    libc.src.__support.CPP.standalone_cpp
+    libc.src.errno.errno
+    libc.src.__support.CPP.limits
     libc.src.__support.FPUtil.fputil
 )
 
@@ -57,3 +57,4 @@ add_header_library(
 add_subdirectory(File)
 add_subdirectory(FPUtil)
 add_subdirectory(OSUtil)
+add_subdirectory(threads)

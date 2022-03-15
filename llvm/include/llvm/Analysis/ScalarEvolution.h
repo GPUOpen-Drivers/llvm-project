@@ -67,6 +67,8 @@ class Type;
 class Value;
 enum SCEVTypes : unsigned short;
 
+extern bool VerifySCEV;
+
 /// This class represents an analyzed expression in the program.  These are
 /// opaque objects that the client is not allowed to do much with directly.
 ///
@@ -1567,19 +1569,6 @@ private:
   /// *add* recurrences with loop invariant steps aren't represented by
   /// SCEVUnknowns and thus don't use this mechanism.
   ConstantRange getRangeForUnknownRecurrence(const SCEVUnknown *U);
-
-  /// Return true and fill \p SCC with elements of PNINode-composed strongly
-  /// connected component that contains \p Phi. Here SCC is a maximum by
-  /// inclusion subgraph composed of Phis that transitively use one another as
-  /// inputs. Otherwise, return false and conservatively put \p Phi into \p SCC
-  /// as the only element of its strongly connected component.
-  bool collectSCC(const PHINode *Phi,
-                  SmallVectorImpl<const PHINode *> &SCC) const;
-
-  /// Sharpen range of entire SCEVUnknown Phi strongly connected component that
-  /// includes \p Phi. On output, \p ConservativeResult is the sharpened range.
-  void sharpenPhiSCCRange(const PHINode *Phi, ConstantRange &ConservativeResult,
-                          ScalarEvolution::RangeSignHint SignHint);
 
   /// We know that there is no SCEV for the specified value.  Analyze the
   /// expression.
