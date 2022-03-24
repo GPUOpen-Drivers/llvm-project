@@ -57,12 +57,6 @@ bool isHsaAbiVersion3AndAbove(const MCSubtargetInfo *STI);
 /// \returns The offset of the hostcall pointer argument from implicitarg_ptr
 unsigned getHostcallImplicitArgPosition();
 
-/// \returns The offset of the heap ptr argument from implicitarg_ptr
-unsigned getHeapPtrImplicitArgPosition();
-
-/// \returns The offset of the queue ptr argument from implicitarg_ptr
-unsigned getQueuePtrImplicitArgPosition();
-
 /// \returns Code object version.
 unsigned getAmdhsaCodeObjectVersion();
 
@@ -613,9 +607,6 @@ LLVM_READONLY
 int64_t getHwregId(const StringRef Name, const MCSubtargetInfo &STI);
 
 LLVM_READNONE
-bool isValidHwreg(int64_t Id, const MCSubtargetInfo &STI);
-
-LLVM_READNONE
 bool isValidHwreg(int64_t Id);
 
 LLVM_READNONE
@@ -682,19 +673,19 @@ unsigned getDefaultFormatEncoding(const MCSubtargetInfo &STI);
 namespace SendMsg {
 
 LLVM_READONLY
-int64_t getMsgId(const StringRef Name);
+int64_t getMsgId(const StringRef Name, const MCSubtargetInfo &STI);
 
 LLVM_READONLY
 int64_t getMsgOpId(int64_t MsgId, const StringRef Name);
 
 LLVM_READNONE
-StringRef getMsgName(int64_t MsgId);
+StringRef getMsgName(int64_t MsgId, const MCSubtargetInfo &STI);
 
 LLVM_READNONE
 StringRef getMsgOpName(int64_t MsgId, int64_t OpId);
 
 LLVM_READNONE
-bool isValidMsgId(int64_t MsgId, const MCSubtargetInfo &STI, bool Strict = true);
+bool isValidMsgId(int64_t MsgId);
 
 LLVM_READNONE
 bool isValidMsgOp(int64_t MsgId, int64_t OpId, const MCSubtargetInfo &STI,
@@ -775,9 +766,13 @@ bool isSI(const MCSubtargetInfo &STI);
 bool isCI(const MCSubtargetInfo &STI);
 bool isVI(const MCSubtargetInfo &STI);
 bool isGFX9(const MCSubtargetInfo &STI);
+bool isGFX9_GFX10(const MCSubtargetInfo &STI);
+bool isGFX8Plus(const MCSubtargetInfo &STI);
 bool isGFX9Plus(const MCSubtargetInfo &STI);
 bool isGFX10(const MCSubtargetInfo &STI);
 bool isGFX10Plus(const MCSubtargetInfo &STI);
+bool isNotGFX10Plus(const MCSubtargetInfo &STI);
+bool isGFX10Before1030(const MCSubtargetInfo &STI);
 bool isGCN3Encoding(const MCSubtargetInfo &STI);
 bool isGFX10_AEncoding(const MCSubtargetInfo &STI);
 bool isGFX10_BEncoding(const MCSubtargetInfo &STI);

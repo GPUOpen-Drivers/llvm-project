@@ -897,17 +897,24 @@ static bool isIIFE(const UnwrappedLine &Line,
 
 static bool ShouldBreakBeforeBrace(const FormatStyle &Style,
                                    const FormatToken &InitialToken) {
-  if (InitialToken.isOneOf(tok::kw_namespace, TT_NamespaceMacro))
+  tok::TokenKind Kind = InitialToken.Tok.getKind();
+  if (InitialToken.is(TT_NamespaceMacro))
+    Kind = tok::kw_namespace;
+
+  switch (Kind) {
+  case tok::kw_namespace:
     return Style.BraceWrapping.AfterNamespace;
-  if (InitialToken.is(tok::kw_class))
+  case tok::kw_class:
     return Style.BraceWrapping.AfterClass;
-  if (InitialToken.is(tok::kw_union))
+  case tok::kw_union:
     return Style.BraceWrapping.AfterUnion;
-  if (InitialToken.is(tok::kw_struct))
+  case tok::kw_struct:
     return Style.BraceWrapping.AfterStruct;
-  if (InitialToken.is(tok::kw_enum))
+  case tok::kw_enum:
     return Style.BraceWrapping.AfterEnum;
-  return false;
+  default:
+    return false;
+  }
 }
 
 void UnwrappedLineParser::parseChildBlock(
@@ -1822,9 +1829,11 @@ void UnwrappedLineParser::parseStructuralElement(IfStmtKind *IfKind,
       parseNew();
       break;
     case tok::kw_case:
-      if (Style.isJavaScript() && Line->MustBeDeclaration)
+      if (Style.isJavaScript() && Line->MustBeDeclaration) {
         // 'case: string' field declaration.
+        nextToken();
         break;
+      }
       parseCaseLabel();
       break;
     default:
@@ -1933,6 +1942,11 @@ bool UnwrappedLineParser::tryToParseLambda() {
   assert(FormatTok->is(tok::l_square));
   FormatToken &LSquare = *FormatTok;
   if (!tryToParseLambdaIntroducer())
+    return false;
+
+  // `[something] >` is not a lambda, but an array type in a template parameter
+  // list.
+  if (FormatTok->is(tok::greater))
     return false;
 
   bool SeenArrow = false;
@@ -3511,7 +3525,7 @@ void UnwrappedLineParser::parseRecord(bool ParseAsExpr) {
   // (this would still leave us with an ambiguity between template function
   // and class declarations).
   if (FormatTok->isOneOf(tok::colon, tok::less)) {
-    while (!eof()) {
+    do {
       if (FormatTok->is(tok::l_brace)) {
         calculateBraceTypes(/*ExpectClassBody=*/true);
         if (!tryToParseBracedList())
@@ -3524,7 +3538,10 @@ void UnwrappedLineParser::parseRecord(bool ParseAsExpr) {
           // Don't try parsing a lambda if we had a closing parenthesis before,
           // it was probably a pointer to an array: int (*)[].
           if (!tryToParseLambda())
-            break;
+            continue;
+        } else {
+          parseSquare();
+          continue;
         }
       }
       if (FormatTok->is(tok::semi))
@@ -3536,7 +3553,7 @@ void UnwrappedLineParser::parseRecord(bool ParseAsExpr) {
         break;
       }
       nextToken();
-    }
+    } while (!eof());
   }
 
   auto GetBraceType = [](const FormatToken &RecordTok) {

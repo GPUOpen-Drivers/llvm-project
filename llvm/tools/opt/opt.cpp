@@ -32,6 +32,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/LegacyPassNameParser.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/ModuleSummaryIndex.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/InitializePasses.h"
@@ -39,6 +40,7 @@
 #include "llvm/LinkAllPasses.h"
 #include "llvm/MC/SubtargetFeature.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Remarks/HotnessThresholdParser.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
@@ -300,6 +302,10 @@ static cl::opt<std::string> RemarksFormat(
     cl::desc("The format used for serializing remarks (default: YAML)"),
     cl::value_desc("format"), cl::init("yaml"));
 
+static cl::list<std::string>
+    PassPlugins("load-pass-plugin",
+                cl::desc("Load passes from plugin library"));
+
 namespace llvm {
 cl::opt<PGOKind>
     PGOKindFlag("pgo-kind", cl::init(NoPGO), cl::Hidden,
@@ -498,10 +504,10 @@ static bool shouldPinPassToLegacyPM(StringRef Pass) {
       "generic-to-nvvm",      "expandmemcmp",
       "loop-reduce",          "lower-amx-type",
       "pre-amx-config",       "lower-amx-intrinsics",
-      "polyhedral-info",      "replace-with-veclib",
-      "jmc-instrument",       "dot-regions",
-      "dot-regions-only",     "view-regions",
-      "view-regions-only"};
+      "polyhedral-info",      "print-polyhedral-info",
+      "replace-with-veclib",  "jmc-instrument",
+      "dot-regions",          "dot-regions-only",
+      "view-regions",         "view-regions-only"};
   for (const auto &P : PassNamePrefix)
     if (Pass.startswith(P))
       return true;
@@ -581,6 +587,17 @@ int main(int argc, char **argv) {
   initializeExampleIRTransforms(Registry);
 #endif
 
+  SmallVector<PassPlugin, 1> PluginList;
+  PassPlugins.setCallback([&](const std::string &PluginPath) {
+    auto Plugin = PassPlugin::Load(PluginPath);
+    if (!Plugin) {
+      errs() << "Failed to load passes from '" << PluginPath
+             << "'. Request ignored.\n";
+      return;
+    }
+    PluginList.emplace_back(Plugin.get());
+  });
+
   cl::ParseCommandLineOptions(argc, argv,
     "llvm .bc -> .bc modular optimizer and analysis printer\n");
 
@@ -588,6 +605,19 @@ int main(int argc, char **argv) {
 
   if (AnalyzeOnly && NoOutput) {
     errs() << argv[0] << ": analyze mode conflicts with no-output mode.\n";
+    return 1;
+  }
+
+  // If `-passes=` is specified, use NPM.
+  // If `-enable-new-pm` is specified and there are no codegen passes, use NPM.
+  // e.g. `-enable-new-pm -sroa` will use NPM.
+  // but `-enable-new-pm -codegenprepare` will still revert to legacy PM.
+  const bool UseNPM = (EnableNewPassManager && !shouldForceLegacyPM()) ||
+                      PassPipeline.getNumOccurrences() > 0;
+
+  if (!UseNPM && PluginList.size()) {
+    errs() << argv[0] << ": " << PassPlugins.ArgStr
+           << " specified with legacy PM.\n";
     return 1;
   }
 
@@ -752,12 +782,7 @@ int main(int argc, char **argv) {
       }
   }
 
-  // If `-passes=` is specified, use NPM.
-  // If `-enable-new-pm` is specified and there are no codegen passes, use NPM.
-  // e.g. `-enable-new-pm -sroa` will use NPM.
-  // but `-enable-new-pm -codegenprepare` will still revert to legacy PM.
-  if ((EnableNewPassManager && !shouldForceLegacyPM()) ||
-      PassPipeline.getNumOccurrences() > 0) {
+  if (UseNPM) {
     if (AnalyzeOnly) {
       errs() << "Cannot specify -analyze under new pass manager, either "
                 "specify '-enable-new-pm=0', or use the corresponding new pass "
@@ -821,7 +846,7 @@ int main(int argc, char **argv) {
     // layer.
     return runPassPipeline(argv[0], *M, TM.get(), &TLII, Out.get(),
                            ThinLinkOut.get(), RemarksFile.get(), Pipeline,
-                           Passes, OK, VK, PreserveAssemblyUseListOrder,
+                           Passes, PluginList, OK, VK, PreserveAssemblyUseListOrder,
                            PreserveBitcodeUseListOrder, EmitSummaryIndex,
                            EmitModuleHash, EnableDebugify)
                ? 0
@@ -833,13 +858,13 @@ int main(int argc, char **argv) {
   // the (-check)-debugify passes.
   DebugifyCustomPassManager Passes;
   DebugifyStatsMap DIStatsMap;
-  DebugInfoPerPassMap DIPreservationMap;
+  DebugInfoPerPass DebugInfoBeforePass;
   if (DebugifyEach) {
     Passes.setDebugifyMode(DebugifyMode::SyntheticDebugInfo);
     Passes.setDIStatsMap(DIStatsMap);
   } else if (VerifyEachDebugInfoPreserve) {
     Passes.setDebugifyMode(DebugifyMode::OriginalDebugInfo);
-    Passes.setDIPreservationMap(DIPreservationMap);
+    Passes.setDebugInfoBeforePass(DebugInfoBeforePass);
     if (!VerifyDIPreserveExport.empty())
       Passes.setOrigDIVerifyBugsReportFilePath(VerifyDIPreserveExport);
   }
@@ -859,10 +884,10 @@ int main(int argc, char **argv) {
       Passes.setDIStatsMap(DIStatsMap);
       Passes.add(createDebugifyModulePass());
     } else if (VerifyDebugInfoPreserve) {
-      Passes.setDIPreservationMap(DIPreservationMap);
+      Passes.setDebugInfoBeforePass(DebugInfoBeforePass);
       Passes.add(createDebugifyModulePass(
           DebugifyMode::OriginalDebugInfo, "",
-          &(Passes.getDebugInfoPerPassMap())));
+          &(Passes.getDebugInfoPerPass())));
     }
   }
 
@@ -1001,7 +1026,7 @@ int main(int argc, char **argv) {
         Passes.setOrigDIVerifyBugsReportFilePath(VerifyDIPreserveExport);
       Passes.add(createCheckDebugifyModulePass(
           false, "", nullptr, DebugifyMode::OriginalDebugInfo,
-          &(Passes.getDebugInfoPerPassMap()), VerifyDIPreserveExport));
+          &(Passes.getDebugInfoPerPass()), VerifyDIPreserveExport));
     }
   }
 

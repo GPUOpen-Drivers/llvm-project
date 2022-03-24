@@ -1108,6 +1108,8 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
     setLoadExtAction(ISD::EXTLOAD,  MVT::v4i32, MVT::v4i8, Custom);
     setLoadExtAction(ISD::SEXTLOAD, MVT::v4i32, MVT::v4i8, Custom);
     setLoadExtAction(ISD::ZEXTLOAD, MVT::v4i32, MVT::v4i8, Custom);
+
+    setOperationAction(ISD::CONCAT_VECTORS, MVT::v4i8, Custom);
   }
 
   if (Subtarget->hasSVE()) {
@@ -1227,6 +1229,13 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
         setLoadExtAction(ISD::ZEXTLOAD, VT, InnerVT, Expand);
         setLoadExtAction(ISD::EXTLOAD, VT, InnerVT, Expand);
       }
+    }
+
+    // SVE supports unpklo/hi instructions to reduce the number of loads.
+    for (auto Op : {ISD::SEXTLOAD, ISD::ZEXTLOAD, ISD::EXTLOAD}) {
+      setLoadExtAction(Op, MVT::nxv16i64, MVT::nxv16i8, Expand);
+      setLoadExtAction(Op, MVT::nxv8i64, MVT::nxv8i16, Expand);
+      setLoadExtAction(Op, MVT::nxv4i64, MVT::nxv4i32, Expand);
     }
 
     // SVE supports truncating stores of 64 and 128-bit vectors
@@ -2265,6 +2274,7 @@ const char *AArch64TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(AArch64ISD::MOPS_MEMSET_TAGGING)
     MAKE_CASE(AArch64ISD::MOPS_MEMCOPY)
     MAKE_CASE(AArch64ISD::MOPS_MEMMOVE)
+    MAKE_CASE(AArch64ISD::CALL_BTI)
   }
 #undef MAKE_CASE
   return nullptr;
@@ -6169,6 +6179,12 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
   AArch64FunctionInfo *FuncInfo = MF.getInfo<AArch64FunctionInfo>();
   bool TailCallOpt = MF.getTarget().Options.GuaranteedTailCallOpt;
   bool IsSibCall = false;
+  bool GuardWithBTI = false;
+
+  if (CLI.CB && CLI.CB->getAttributes().hasFnAttr(Attribute::ReturnsTwice) &&
+      !Subtarget->noBTIAtReturnTwice()) {
+    GuardWithBTI = FuncInfo->branchTargetEnforcement();
+  }
 
   // Check callee args/returns for SVE registers and set calling convention
   // accordingly.
@@ -6603,7 +6619,8 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
     Function *ARCFn = *objcarc::getAttachedARCFunction(CLI.CB);
     auto GA = DAG.getTargetGlobalAddress(ARCFn, DL, PtrVT);
     Ops.insert(Ops.begin() + 1, GA);
-  }
+  } else if (GuardWithBTI)
+    CallOpc = AArch64ISD::CALL_BTI;
 
   // Returns a chain and a flag for retval copy to use.
   Chain = DAG.getNode(CallOpc, DL, NodeTys, Ops);
@@ -11014,6 +11031,40 @@ SDValue AArch64TargetLowering::LowerCONCAT_VECTORS(SDValue Op,
   if (useSVEForFixedLengthVectorVT(Op.getValueType()))
     return LowerFixedLengthConcatVectorsToSVE(Op, DAG);
 
+  if (Op.getOperand(0).getValueType() == MVT::v4i8) {
+    // If we have a concat of v4i8 loads, convert them to a buildvector of f32
+    // loads to prevent having to go through the v4i8 load legalization that
+    // needs to extend each element into a larger type.
+    if (Op.getNumOperands() % 2 == 0 && all_of(Op->op_values(), [](SDValue V) {
+          return V.getValueType() == MVT::v4i8 &&
+                 (V.getOpcode() == ISD::LOAD || V.isUndef());
+        })) {
+      EVT NVT =
+          EVT::getVectorVT(*DAG.getContext(), MVT::f32, Op.getNumOperands());
+      SmallVector<SDValue> Ops;
+      SDLoc DL(Op);
+
+      for (unsigned i = 0; i < Op.getNumOperands(); i++) {
+        SDValue V = Op.getOperand(i);
+        if (V.isUndef())
+          Ops.push_back(DAG.getUNDEF(MVT::f32));
+        else {
+          LoadSDNode *LD = cast<LoadSDNode>(V);
+          if (!LD->isSimple() || LD->isIndexed() ||
+              LD->getExtensionType() != ISD::NON_EXTLOAD)
+            return SDValue();
+          Ops.push_back(DAG.getLoad(MVT::f32, DL, LD->getChain(),
+                                    LD->getBasePtr(), LD->getMemOperand()));
+        }
+      }
+      return DAG.getBitcast(Op.getValueType(),
+                            DAG.getBuildVector(NVT, DL, Ops));
+    }
+
+    // Let the default expansion happen
+    return SDValue();
+  }
+
   assert(Op.getValueType().isScalableVector() &&
          isTypeLegal(Op.getValueType()) &&
          "Expected legal scalable vector type!");
@@ -11984,23 +12035,23 @@ bool AArch64TargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
   }
   case Intrinsic::aarch64_ldaxr:
   case Intrinsic::aarch64_ldxr: {
-    PointerType *PtrTy = cast<PointerType>(I.getArgOperand(0)->getType());
+    Type *ValTy = I.getParamElementType(0);
     Info.opc = ISD::INTRINSIC_W_CHAIN;
-    Info.memVT = MVT::getVT(PtrTy->getPointerElementType());
+    Info.memVT = MVT::getVT(ValTy);
     Info.ptrVal = I.getArgOperand(0);
     Info.offset = 0;
-    Info.align = DL.getABITypeAlign(PtrTy->getPointerElementType());
+    Info.align = DL.getABITypeAlign(ValTy);
     Info.flags = MachineMemOperand::MOLoad | MachineMemOperand::MOVolatile;
     return true;
   }
   case Intrinsic::aarch64_stlxr:
   case Intrinsic::aarch64_stxr: {
-    PointerType *PtrTy = cast<PointerType>(I.getArgOperand(1)->getType());
+    Type *ValTy = I.getParamElementType(1);
     Info.opc = ISD::INTRINSIC_W_CHAIN;
-    Info.memVT = MVT::getVT(PtrTy->getPointerElementType());
+    Info.memVT = MVT::getVT(ValTy);
     Info.ptrVal = I.getArgOperand(1);
     Info.offset = 0;
-    Info.align = DL.getABITypeAlign(PtrTy->getPointerElementType());
+    Info.align = DL.getABITypeAlign(ValTy);
     Info.flags = MachineMemOperand::MOStore | MachineMemOperand::MOVolatile;
     return true;
   }
@@ -14410,11 +14461,56 @@ performFirstTrueTestVectorCombine(SDNode *N,
   return getPTest(DAG, N->getValueType(0), Pg, SetCC, AArch64CC::FIRST_ACTIVE);
 }
 
+// Materialize : Idx = (add (mul vscale, NumEls), -1)
+//               i1 = extract_vector_elt t37, Constant:i64<Idx>
+//     ... into: "ptrue p, all" + PTEST
+static SDValue
+performLastTrueTestVectorCombine(SDNode *N,
+                                 TargetLowering::DAGCombinerInfo &DCI,
+                                 const AArch64Subtarget *Subtarget) {
+  assert(N->getOpcode() == ISD::EXTRACT_VECTOR_ELT);
+  // Make sure PTEST is legal types.
+  if (!Subtarget->hasSVE() || DCI.isBeforeLegalize())
+    return SDValue();
+
+  SDValue SetCC = N->getOperand(0);
+  EVT OpVT = SetCC.getValueType();
+
+  if (!OpVT.isScalableVector() || OpVT.getVectorElementType() != MVT::i1)
+    return SDValue();
+
+  // Idx == (add (mul vscale, NumEls), -1)
+  SDValue Idx = N->getOperand(1);
+  if (Idx.getOpcode() != ISD::ADD)
+    return SDValue();
+
+  SDValue VS = Idx.getOperand(0);
+  if (VS.getOpcode() != ISD::VSCALE)
+    return SDValue();
+
+  unsigned NumEls = OpVT.getVectorElementCount().getKnownMinValue();
+  if (VS.getConstantOperandVal(0) != NumEls)
+    return SDValue();
+
+  // Restricted the DAG combine to only cases where we're extracting from a
+  // flag-setting operation
+  auto *CI = dyn_cast<ConstantSDNode>(Idx.getOperand(1));
+  if (!CI || !CI->isAllOnes() || SetCC.getOpcode() != ISD::SETCC)
+    return SDValue();
+
+  // Extracts of lane EC-1 for SVE can be expressed as PTEST(Op, LAST) ? 1 : 0
+  SelectionDAG &DAG = DCI.DAG;
+  SDValue Pg = getPTrue(DAG, SDLoc(N), OpVT, AArch64SVEPredPattern::all);
+  return getPTest(DAG, N->getValueType(0), Pg, SetCC, AArch64CC::LAST_ACTIVE);
+}
+
 static SDValue
 performExtractVectorEltCombine(SDNode *N, TargetLowering::DAGCombinerInfo &DCI,
                                const AArch64Subtarget *Subtarget) {
   assert(N->getOpcode() == ISD::EXTRACT_VECTOR_ELT);
   if (SDValue Res = performFirstTrueTestVectorCombine(N, DCI, Subtarget))
+    return Res;
+  if (SDValue Res = performLastTrueTestVectorCombine(N, DCI, Subtarget))
     return Res;
 
   SelectionDAG &DAG = DCI.DAG;
@@ -17282,14 +17378,14 @@ static SDValue performSETCCCombine(SDNode *N, SelectionDAG &DAG) {
   SDValue LHS = N->getOperand(0);
   SDValue RHS = N->getOperand(1);
   ISD::CondCode Cond = cast<CondCodeSDNode>(N->getOperand(2))->get();
+  SDLoc DL(N);
+  EVT VT = N->getValueType(0);
 
   // setcc (csel 0, 1, cond, X), 1, ne ==> csel 0, 1, !cond, X
   if (Cond == ISD::SETNE && isOneConstant(RHS) &&
       LHS->getOpcode() == AArch64ISD::CSEL &&
       isNullConstant(LHS->getOperand(0)) && isOneConstant(LHS->getOperand(1)) &&
       LHS->hasOneUse()) {
-    SDLoc DL(N);
-
     // Invert CSEL's condition.
     auto *OpCC = cast<ConstantSDNode>(LHS.getOperand(2));
     auto OldCond = static_cast<AArch64CC::CondCode>(OpCC->getZExtValue());
@@ -17300,8 +17396,47 @@ static SDValue performSETCCCombine(SDNode *N, SelectionDAG &DAG) {
         DAG.getNode(AArch64ISD::CSEL, DL, LHS.getValueType(), LHS.getOperand(0),
                     LHS.getOperand(1), DAG.getConstant(NewCond, DL, MVT::i32),
                     LHS.getOperand(3));
-    return DAG.getZExtOrTrunc(CSEL, DL, N->getValueType(0));
+    return DAG.getZExtOrTrunc(CSEL, DL, VT);
   }
+
+  // setcc (srl x, imm), 0, ne ==> setcc (and x, (-1 << imm)), 0, ne
+  if (Cond == ISD::SETNE && isNullConstant(RHS) &&
+      LHS->getOpcode() == ISD::SRL && isa<ConstantSDNode>(LHS->getOperand(1)) &&
+      LHS->hasOneUse()) {
+    EVT TstVT = LHS->getValueType(0);
+    if (TstVT.isScalarInteger() && TstVT.getFixedSizeInBits() <= 64) {
+      // this pattern will get better opt in emitComparison
+      uint64_t TstImm = -1ULL << LHS->getConstantOperandVal(1);
+      SDValue TST = DAG.getNode(ISD::AND, DL, TstVT, LHS->getOperand(0),
+                                DAG.getConstant(TstImm, DL, TstVT));
+      return DAG.getNode(ISD::SETCC, DL, VT, TST, RHS, N->getOperand(2));
+    }
+  }
+
+  return SDValue();
+}
+
+// Combines for S forms of generic opcodes (AArch64ISD::ANDS into ISD::AND for
+// example). NOTE: This could be used for ADDS and SUBS too, if we can find test
+// cases.
+static SDValue performANDSCombine(SDNode *N,
+                                  TargetLowering::DAGCombinerInfo &DCI) {
+  SDLoc DL(N);
+  SDValue LHS = N->getOperand(0);
+  SDValue RHS = N->getOperand(1);
+  EVT VT = N->getValueType(0);
+
+  // If the flag result isn't used, convert back to a generic opcode.
+  if (!N->hasAnyUseOfValue(1)) {
+    SDValue Res = DCI.DAG.getNode(ISD::AND, DL, VT, LHS, RHS);
+    return DCI.DAG.getMergeValues({Res, DCI.DAG.getConstant(0, DL, MVT::i32)},
+                                  DL);
+  }
+
+  // Combine identical generic nodes into this node, re-using the result.
+  if (SDNode *GenericAddSub =
+          DCI.DAG.getNodeIfExists(ISD::AND, DCI.DAG.getVTList(VT), {LHS, RHS}))
+    DCI.CombineTo(GenericAddSub, SDValue(N, 0));
 
   return SDValue();
 }
@@ -17517,10 +17652,12 @@ static SDValue trySwapVSelectOperands(SDNode *N, SelectionDAG &DAG) {
   if (SelectA != SelectB.getOperand(0))
     return SDValue();
 
-  ISD::CondCode CC = cast<CondCodeSDNode>(SetCC->getOperand(2))->get();
-  auto InverseSetCC = DAG.getSetCC(
-      SDLoc(SetCC), SetCC.getValueType(), SetCC.getOperand(0),
-      SetCC.getOperand(1), ISD::getSetCCInverse(CC, SetCC.getValueType()));
+  ISD::CondCode CC = cast<CondCodeSDNode>(SetCC.getOperand(2))->get();
+  ISD::CondCode InverseCC =
+      ISD::getSetCCInverse(CC, SetCC.getOperand(0).getValueType());
+  auto InverseSetCC =
+      DAG.getSetCC(SDLoc(SetCC), SetCC.getValueType(), SetCC.getOperand(0),
+                   SetCC.getOperand(1), InverseCC);
 
   return DAG.getNode(ISD::VSELECT, SDLoc(N), NTy,
                      {InverseSetCC, SelectB, SelectA});
@@ -18370,6 +18507,8 @@ SDValue AArch64TargetLowering::PerformDAGCombine(SDNode *N,
     return performTBZCombine(N, DCI, DAG);
   case AArch64ISD::CSEL:
     return performCSELCombine(N, DCI, DAG);
+  case AArch64ISD::ANDS:
+    return performANDSCombine(N, DCI);
   case AArch64ISD::DUP:
     return performPostLD1Combine(N, DCI, false);
   case AArch64ISD::NVCAST:
@@ -19044,8 +19183,10 @@ void AArch64TargetLowering::ReplaceNodeResults(
     ReplaceExtractSubVectorResults(N, Results, DAG);
     return;
   case ISD::INSERT_SUBVECTOR:
-    // Custom lowering has been requested for INSERT_SUBVECTOR -- but delegate
-    // to common code for result type legalisation
+  case ISD::CONCAT_VECTORS:
+    // Custom lowering has been requested for INSERT_SUBVECTOR and
+    // CONCAT_VECTORS -- but delegate to common code for result type
+    // legalisation
     return;
   case ISD::INTRINSIC_WO_CHAIN: {
     EVT VT = N->getValueType(0);
@@ -19265,7 +19406,10 @@ Value *AArch64TargetLowering::emitLoadLinked(IRBuilderBase &Builder,
 
   const DataLayout &DL = M->getDataLayout();
   IntegerType *IntEltTy = Builder.getIntNTy(DL.getTypeSizeInBits(ValueTy));
-  Value *Trunc = Builder.CreateTrunc(Builder.CreateCall(Ldxr, Addr), IntEltTy);
+  CallInst *CI = Builder.CreateCall(Ldxr, Addr);
+  CI->addParamAttr(
+      0, Attribute::get(Builder.getContext(), Attribute::ElementType, ValueTy));
+  Value *Trunc = Builder.CreateTrunc(CI, IntEltTy);
 
   return Builder.CreateBitCast(Trunc, ValueTy);
 }
@@ -19306,10 +19450,13 @@ Value *AArch64TargetLowering::emitStoreConditional(IRBuilderBase &Builder,
   IntegerType *IntValTy = Builder.getIntNTy(DL.getTypeSizeInBits(Val->getType()));
   Val = Builder.CreateBitCast(Val, IntValTy);
 
-  return Builder.CreateCall(Stxr,
-                            {Builder.CreateZExtOrBitCast(
-                                 Val, Stxr->getFunctionType()->getParamType(0)),
-                             Addr});
+  CallInst *CI = Builder.CreateCall(
+      Stxr, {Builder.CreateZExtOrBitCast(
+                 Val, Stxr->getFunctionType()->getParamType(0)),
+             Addr});
+  CI->addParamAttr(1, Attribute::get(Builder.getContext(),
+                                     Attribute::ElementType, Val->getType()));
+  return CI;
 }
 
 bool AArch64TargetLowering::functionArgumentNeedsConsecutiveRegisters(

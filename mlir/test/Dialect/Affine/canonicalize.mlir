@@ -1,4 +1,4 @@
-// RUN: mlir-opt -allow-unregistered-dialect %s -split-input-file -pass-pipeline='builtin.func(canonicalize)' | FileCheck %s
+// RUN: mlir-opt -allow-unregistered-dialect %s -split-input-file -pass-pipeline='func.func(canonicalize)' | FileCheck %s
 
 // -----
 
@@ -728,7 +728,7 @@ func @affine_max(%arg0 : index, %arg1 : index, %arg2 : index) {
 
 // -----
 
-// CHECK: #[[$MAP:.*]] = affine_map<(d0, d1) -> (d0, d1 - 2)>
+// CHECK: #[[$MAP:.*]] = affine_map<(d0, d1) -> (d1 - 2, d0)>
 
 func @affine_min(%arg0: index) {
   affine.for %i = 0 to %arg0 {
@@ -845,8 +845,8 @@ func @deduplicate_affine_max_expressions(%i0: index, %i1: index) -> index {
 
 // -----
 
-// CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0, s1, s2] -> (s0 * 3, 16, -s1 + s2)>
-// CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2] -> (-s2 + 5, 16, -s0 + s1)>
+// CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0, s1, s2] -> (-s1 + s2, 16, s0 * 3)>
+// CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2] -> (-s0 + s1, -s2 + 5, 16)>
 
 // CHECK: func @merge_affine_min_ops
 // CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index, %[[I2:.+]]: index, %[[I3:.+]]: index)
@@ -863,7 +863,7 @@ func @merge_affine_min_ops(%i0: index, %i1: index, %i2: index, %i3: index) -> (i
 
 // -----
 
-// CHECK: #[[MAP:.+]] = affine_map<()[s0, s1, s2] -> (s0 + 7, s1 + 16, s1 * 8, s2 + 8, s2 * 4)>
+// CHECK: #[[MAP:.+]] = affine_map<()[s0, s1, s2] -> (s2 + 8, s2 * 4, s1 + 16, s1 * 8, s0 + 7)>
 
 // CHECK: func @merge_multiple_affine_min_ops
 // CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index, %[[I2:.+]]: index)
@@ -877,7 +877,7 @@ func @merge_multiple_affine_min_ops(%i0: index, %i1: index, %i2: index) -> index
 
 // -----
 
-// CHECK-DAG: #[[MAP:.+]] = affine_map<()[s0, s1] -> (s0 * 2, s1 + 16, s1 * 8)>
+// CHECK-DAG: #[[MAP:.+]] = affine_map<()[s0, s1] -> (s1 + 16, s1 * 8, s0 * 2)>
 
 // CHECK: func @merge_multiple_uses_of_affine_min_ops
 // CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index)
@@ -891,7 +891,7 @@ func @merge_multiple_uses_of_affine_min_ops(%i0: index, %i1: index) -> index {
 // -----
 
 // CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0] -> (s0 + 16, s0 * 8)>
-// CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2] -> (s0 + 1, s1 * 2, s2 + 16, s2 * 8)>
+// CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2] -> (s2 + 16, s2 * 8, s1 * 2, s0 + 1)>
 
 // CHECK: func @merge_mixed_uses_of_affine_min_ops
 // CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index)
@@ -927,8 +927,8 @@ func @dont_merge_affine_min_if_not_single_sym(%i0: index, %i1: index, %i2: index
 
 // -----
 
-// CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0, s1, s2] -> (s0 * 3, 16, -s1 + s2)>
-// CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2] -> (-s2 + 5, 16, -s0 + s1)>
+// CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0, s1, s2] -> (-s1 + s2, 16, s0 * 3)>
+// CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2] -> (-s0 + s1, -s2 + 5, 16)>
 
 // CHECK: func @merge_affine_max_ops
 // CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index, %[[I2:.+]]: index, %[[I3:.+]]: index)
@@ -945,7 +945,7 @@ func @merge_affine_max_ops(%i0: index, %i1: index, %i2: index, %i3: index) -> (i
 
 // -----
 
-// CHECK: #[[MAP:.+]] = affine_map<()[s0, s1, s2] -> (s0 + 7, s1 + 16, s1 * 8, s2 + 8, s2 * 4)>
+// CHECK: #[[MAP:.+]] = affine_map<()[s0, s1, s2] -> (s2 + 8, s2 * 4, s1 + 16, s1 * 8, s0 + 7)>
 
 // CHECK: func @merge_multiple_affine_max_ops
 // CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index, %[[I2:.+]]: index)
@@ -959,7 +959,7 @@ func @merge_multiple_affine_max_ops(%i0: index, %i1: index, %i2: index) -> index
 
 // -----
 
-// CHECK-DAG: #[[MAP:.+]] = affine_map<()[s0, s1] -> (s0 * 2, s1 + 16, s1 * 8)>
+// CHECK-DAG: #[[MAP:.+]] = affine_map<()[s0, s1] -> (s1 + 16, s1 * 8, s0 * 2)>
 
 // CHECK: func @merge_multiple_uses_of_affine_max_ops
 // CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index)
@@ -973,7 +973,7 @@ func @merge_multiple_uses_of_affine_max_ops(%i0: index, %i1: index) -> index {
 // -----
 
 // CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0] -> (s0 + 16, s0 * 8)>
-// CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2] -> (s0 + 1, s1 * 2, s2 + 16, s2 * 8)>
+// CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2] -> (s2 + 16, s2 * 8, s1 * 2, s0 + 1)>
 
 // CHECK: func @merge_mixed_uses_of_affine_max_ops
 // CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index)
@@ -1079,4 +1079,38 @@ func @canonicalize_single_min_max(%i0: index, %i1: index) -> (index, index) {
   %1 = affine.min affine_map<()[s0] -> (s0 * 4)> ()[%i1]
 
   return %0, %1: index, index
+}
+
+// -----
+
+// CHECK: #[[$MAP:.+]] = affine_map<()[s0, s1] -> (32, s1 + 16, s0 + s1)>
+
+// CHECK-LABEL: func @canonicalize_multi_min_max
+// CHECK-SAME: (%[[I0:.+]]: index, %[[I1:.+]]: index)
+func @canonicalize_multi_min_max(%i0: index, %i1: index) -> (index, index) {
+  // CHECK-NEXT: affine.min #[[$MAP]]()[%[[I0]], %[[I1]]]
+  %0 = affine.min affine_map<()[s0, s1] -> (s0 + s1, s1 + 16, 32)> ()[%i0, %i1]
+
+  // CHECK-NEXT: affine.max #[[$MAP]]()[%[[I0]], %[[I1]]]
+  %1 = affine.max affine_map<()[s0, s1] -> (s0 + s1, 32, s1 + 16)> ()[%i0, %i1]
+
+  return %0, %1: index, index
+}
+
+// -----
+
+module {
+  memref.global "private" constant @__constant_1x5x1xf32 : memref<1x5x1xf32> = dense<[[[6.250000e-02], [2.500000e-01], [3.750000e-01], [2.500000e-01], [6.250000e-02]]]>
+  // CHECK-LABEL: func @fold_const_init_global_memref
+  func @fold_const_init_global_memref() -> (f32, f32) {
+    %m = memref.get_global @__constant_1x5x1xf32 : memref<1x5x1xf32>
+    %v0 = affine.load %m[0, 0, 0] : memref<1x5x1xf32>
+    %v1 = affine.load %m[0, 1, 0] : memref<1x5x1xf32>
+    return %v0, %v1 : f32, f32
+    // CHECK-DAG: %[[C0:.*]] = arith.constant 6.250000e-02 : f32
+    // CHECK-DAG: %[[C1:.*]] = arith.constant 2.500000e-01 : f32
+    // CHECK-NEXT: return
+    // CHECK-SAME: %[[C0]]
+    // CHECK-SAME: %[[C1]]
+  }
 }

@@ -637,6 +637,25 @@ convertOmpSections(Operation &opInst, llvm::IRBuilderBase &builder,
   return bodyGenStatus;
 }
 
+/// Converts an OpenMP single construct into LLVM IR using OpenMPIRBuilder.
+static LogicalResult
+convertOmpSingle(omp::SingleOp &singleOp, llvm::IRBuilderBase &builder,
+                 LLVM::ModuleTranslation &moduleTranslation) {
+  using InsertPointTy = llvm::OpenMPIRBuilder::InsertPointTy;
+  llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
+  LogicalResult bodyGenStatus = success();
+  auto bodyCB = [&](InsertPointTy allocaIP, InsertPointTy codegenIP,
+                    llvm::BasicBlock &continuationBB) {
+    convertOmpOpRegions(singleOp.region(), "omp.single.region",
+                        *codegenIP.getBlock(), continuationBB, builder,
+                        moduleTranslation, bodyGenStatus);
+  };
+  auto finiCB = [&](InsertPointTy codeGenIP) {};
+  builder.restoreIP(moduleTranslation.getOpenMPBuilder()->createSingle(
+      ompLoc, bodyCB, finiCB, /*DidIt=*/nullptr));
+  return bodyGenStatus;
+}
+
 /// Converts an OpenMP workshare loop into LLVM IR using OpenMPIRBuilder.
 static LogicalResult
 convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
@@ -880,6 +899,82 @@ convertOmpWsLoop(Operation &opInst, llvm::IRBuilderBase &builder,
   return success();
 }
 
+/// Converts an OpenMP simd loop into LLVM IR using OpenMPIRBuilder.
+static LogicalResult
+convertOmpSimdLoop(Operation &opInst, llvm::IRBuilderBase &builder,
+                   LLVM::ModuleTranslation &moduleTranslation) {
+  auto loop = cast<omp::SimdLoopOp>(opInst);
+
+  llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
+
+  // Generator of the canonical loop body.
+  // TODO: support error propagation in OpenMPIRBuilder and use it instead of
+  // relying on captured variables.
+  SmallVector<llvm::CanonicalLoopInfo *> loopInfos;
+  SmallVector<llvm::OpenMPIRBuilder::InsertPointTy> bodyInsertPoints;
+  LogicalResult bodyGenStatus = success();
+  auto bodyGen = [&](llvm::OpenMPIRBuilder::InsertPointTy ip, llvm::Value *iv) {
+    // Make sure further conversions know about the induction variable.
+    moduleTranslation.mapValue(
+        loop.getRegion().front().getArgument(loopInfos.size()), iv);
+
+    // Capture the body insertion point for use in nested loops. BodyIP of the
+    // CanonicalLoopInfo always points to the beginning of the entry block of
+    // the body.
+    bodyInsertPoints.push_back(ip);
+
+    if (loopInfos.size() != loop.getNumLoops() - 1)
+      return;
+
+    // Convert the body of the loop.
+    llvm::BasicBlock *entryBlock = ip.getBlock();
+    llvm::BasicBlock *exitBlock =
+        entryBlock->splitBasicBlock(ip.getPoint(), "omp.simdloop.exit");
+    convertOmpOpRegions(loop.region(), "omp.simdloop.region", *entryBlock,
+                        *exitBlock, builder, moduleTranslation, bodyGenStatus);
+  };
+
+  // Delegate actual loop construction to the OpenMP IRBuilder.
+  // TODO: this currently assumes SimdLoop is semantically similar to SCF loop,
+  // i.e. it has a positive step, uses signed integer semantics. Reconsider
+  // this code when SimdLoop clearly supports more cases.
+  llvm::OpenMPIRBuilder *ompBuilder = moduleTranslation.getOpenMPBuilder();
+  for (unsigned i = 0, e = loop.getNumLoops(); i < e; ++i) {
+    llvm::Value *lowerBound =
+        moduleTranslation.lookupValue(loop.lowerBound()[i]);
+    llvm::Value *upperBound =
+        moduleTranslation.lookupValue(loop.upperBound()[i]);
+    llvm::Value *step = moduleTranslation.lookupValue(loop.step()[i]);
+
+    // Make sure loop trip count are emitted in the preheader of the outermost
+    // loop at the latest so that they are all available for the new collapsed
+    // loop will be created below.
+    llvm::OpenMPIRBuilder::LocationDescription loc = ompLoc;
+    llvm::OpenMPIRBuilder::InsertPointTy computeIP = ompLoc.IP;
+    if (i != 0) {
+      loc = llvm::OpenMPIRBuilder::LocationDescription(bodyInsertPoints.back(),
+                                                       ompLoc.DL);
+      computeIP = loopInfos.front()->getPreheaderIP();
+    }
+    loopInfos.push_back(ompBuilder->createCanonicalLoop(
+        loc, bodyGen, lowerBound, upperBound, step,
+        /*IsSigned=*/true, /*Inclusive=*/true, computeIP));
+
+    if (failed(bodyGenStatus))
+      return failure();
+  }
+
+  // Collapse loops.
+  llvm::IRBuilderBase::InsertPoint afterIP = loopInfos.front()->getAfterIP();
+  llvm::CanonicalLoopInfo *loopInfo =
+      ompBuilder->collapseLoops(ompLoc.DL, loopInfos, {});
+
+  ompBuilder->applySimd(ompLoc.DL, loopInfo);
+
+  builder.restoreIP(afterIP);
+  return success();
+}
+
 /// Convert an Atomic Ordering attribute to llvm::AtomicOrdering.
 llvm::AtomicOrdering
 convertAtomicOrdering(Optional<omp::ClauseMemoryOrderKind> ao) {
@@ -1024,6 +1119,106 @@ convertOmpAtomicUpdate(omp::AtomicUpdateOp &opInst,
 
   // Handle ambiguous alloca, if any.
   auto allocaIP = findAllocaInsertPoint(builder, moduleTranslation);
+  if (allocaIP.getPoint() == ompLoc.IP.getPoint()) {
+    // Same point => split basic block and make them unambigous.
+    llvm::UnreachableInst *unreachableInst = builder.CreateUnreachable();
+    builder.SetInsertPoint(builder.GetInsertBlock()->splitBasicBlock(
+        unreachableInst, "alloca_split"));
+    ompLoc.IP = builder.saveIP();
+    unreachableInst->eraseFromParent();
+  }
+  builder.restoreIP(ompBuilder->createAtomicUpdate(
+      ompLoc, findAllocaInsertPoint(builder, moduleTranslation), llvmAtomicX,
+      llvmExpr, atomicOrdering, binop, updateFn, isXBinopExpr));
+  return updateGenStatus;
+}
+
+static LogicalResult
+convertOmpAtomicCapture(omp::AtomicCaptureOp atomicCaptureOp,
+                        llvm::IRBuilderBase &builder,
+                        LLVM::ModuleTranslation &moduleTranslation) {
+  llvm::OpenMPIRBuilder *ompBuilder = moduleTranslation.getOpenMPBuilder();
+  llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
+  mlir::Value mlirExpr;
+  bool isXBinopExpr = false, isPostfixUpdate = false;
+  llvm::AtomicRMWInst::BinOp binop = llvm::AtomicRMWInst::BinOp::BAD_BINOP;
+
+  omp::AtomicUpdateOp atomicUpdateOp = atomicCaptureOp.getAtomicUpdateOp();
+  omp::AtomicWriteOp atomicWriteOp = atomicCaptureOp.getAtomicWriteOp();
+
+  assert((atomicUpdateOp || atomicWriteOp) &&
+         "internal op must be an atomic.update or atomic.write op");
+
+  if (atomicWriteOp) {
+    isPostfixUpdate = true;
+    mlirExpr = atomicWriteOp.value();
+  } else {
+    isPostfixUpdate = atomicCaptureOp.getSecondOp() ==
+                      atomicCaptureOp.getAtomicUpdateOp().getOperation();
+    auto &innerOpList = atomicUpdateOp.region().front().getOperations();
+    if (innerOpList.size() != 2)
+      return atomicUpdateOp.emitError(
+          "exactly two operations are allowed inside an "
+          "atomic update region while lowering to LLVM IR");
+    Operation *innerUpdateOp = atomicUpdateOp.getFirstOp();
+    if (innerUpdateOp->getNumOperands() != 2 ||
+        !llvm::is_contained(innerUpdateOp->getOperands(),
+                            atomicUpdateOp.getRegion().getArgument(0)))
+      return atomicUpdateOp.emitError(
+          "the update operation inside the region must be a binary operation "
+          "and that update operation must have the region argument as an "
+          "operand");
+    binop = convertBinOpToAtomic(*innerUpdateOp);
+
+    isXBinopExpr = innerUpdateOp->getOperand(0) ==
+                   atomicUpdateOp.getRegion().getArgument(0);
+
+    mlirExpr = (isXBinopExpr ? innerUpdateOp->getOperand(1)
+                             : innerUpdateOp->getOperand(0));
+  }
+
+  llvm::Value *llvmExpr = moduleTranslation.lookupValue(mlirExpr);
+  llvm::Value *llvmX =
+      moduleTranslation.lookupValue(atomicCaptureOp.getAtomicReadOp().x());
+  llvm::Value *llvmV =
+      moduleTranslation.lookupValue(atomicCaptureOp.getAtomicReadOp().v());
+  auto mlirXType = atomicCaptureOp.getAtomicReadOp()
+                       .x()
+                       .getType()
+                       .cast<LLVM::LLVMPointerType>();
+  llvm::Type *llvmXElementType =
+      moduleTranslation.convertType(mlirXType.getElementType());
+  llvm::OpenMPIRBuilder::AtomicOpValue llvmAtomicX = {llvmX, llvmXElementType,
+                                                      /*isSigned=*/false,
+                                                      /*isVolatile=*/false};
+  llvm::OpenMPIRBuilder::AtomicOpValue llvmAtomicV = {llvmV, llvmXElementType,
+                                                      /*isSigned=*/false,
+                                                      /*isVolatile=*/false};
+
+  llvm::AtomicOrdering atomicOrdering =
+      convertAtomicOrdering(atomicCaptureOp.memory_order_val());
+
+  LogicalResult updateGenStatus = success();
+  auto updateFn = [&](llvm::Value *atomicx,
+                      llvm::IRBuilder<> &builder) -> llvm::Value * {
+    if (atomicWriteOp)
+      return moduleTranslation.lookupValue(atomicWriteOp.value());
+    Block &bb = *atomicUpdateOp.region().begin();
+    moduleTranslation.mapValue(*atomicUpdateOp.region().args_begin(), atomicx);
+    moduleTranslation.mapBlock(&bb, builder.GetInsertBlock());
+    if (failed(moduleTranslation.convertBlock(bb, true, builder))) {
+      updateGenStatus = (atomicUpdateOp.emitError()
+                         << "unable to convert update operation to llvm IR");
+      return nullptr;
+    }
+    omp::YieldOp yieldop = dyn_cast<omp::YieldOp>(bb.getTerminator());
+    assert(yieldop && yieldop.results().size() == 1 &&
+           "terminator must be omp.yield op and it must have exactly one "
+           "argument");
+    return moduleTranslation.lookupValue(yieldop.results()[0]);
+  };
+  // Handle ambiguous alloca, if any.
+  auto allocaIP = findAllocaInsertPoint(builder, moduleTranslation);
   llvm::UnreachableInst *unreachableInst;
   if (allocaIP.getPoint() == ompLoc.IP.getPoint()) {
     // Same point => split basic block and make them unambigous.
@@ -1033,9 +1228,10 @@ convertOmpAtomicUpdate(omp::AtomicUpdateOp &opInst,
     ompLoc.IP = builder.saveIP();
     unreachableInst->removeFromParent();
   }
-  builder.restoreIP(ompBuilder->createAtomicUpdate(
+  builder.restoreIP(ompBuilder->createAtomicCapture(
       ompLoc, findAllocaInsertPoint(builder, moduleTranslation), llvmAtomicX,
-      llvmExpr, atomicOrdering, binop, updateFn, isXBinopExpr));
+      llvmAtomicV, llvmExpr, atomicOrdering, binop, updateFn, atomicUpdateOp,
+      isPostfixUpdate, isXBinopExpr));
   return updateGenStatus;
 }
 
@@ -1160,6 +1356,9 @@ LogicalResult OpenMPDialectLLVMIRTranslationInterface::convertOperation(
       .Case([&](omp::WsLoopOp) {
         return convertOmpWsLoop(*op, builder, moduleTranslation);
       })
+      .Case([&](omp::SimdLoopOp) {
+        return convertOmpSimdLoop(*op, builder, moduleTranslation);
+      })
       .Case([&](omp::AtomicReadOp) {
         return convertOmpAtomicRead(*op, builder, moduleTranslation);
       })
@@ -1169,8 +1368,14 @@ LogicalResult OpenMPDialectLLVMIRTranslationInterface::convertOperation(
       .Case([&](omp::AtomicUpdateOp op) {
         return convertOmpAtomicUpdate(op, builder, moduleTranslation);
       })
+      .Case([&](omp::AtomicCaptureOp op) {
+        return convertOmpAtomicCapture(op, builder, moduleTranslation);
+      })
       .Case([&](omp::SectionsOp) {
         return convertOmpSections(*op, builder, moduleTranslation);
+      })
+      .Case([&](omp::SingleOp op) {
+        return convertOmpSingle(op, builder, moduleTranslation);
       })
       .Case<omp::YieldOp, omp::TerminatorOp, omp::ReductionDeclareOp,
             omp::CriticalDeclareOp>([](auto op) {
@@ -1192,8 +1397,9 @@ LogicalResult OpenMPDialectLLVMIRTranslationInterface::convertOperation(
 
 void mlir::registerOpenMPDialectTranslation(DialectRegistry &registry) {
   registry.insert<omp::OpenMPDialect>();
-  registry.addDialectInterface<omp::OpenMPDialect,
-                               OpenMPDialectLLVMIRTranslationInterface>();
+  registry.addExtension(+[](MLIRContext *ctx, omp::OpenMPDialect *dialect) {
+    dialect->addInterfaces<OpenMPDialectLLVMIRTranslationInterface>();
+  });
 }
 
 void mlir::registerOpenMPDialectTranslation(MLIRContext &context) {

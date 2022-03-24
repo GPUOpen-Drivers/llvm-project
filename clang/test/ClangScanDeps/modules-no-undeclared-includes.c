@@ -1,3 +1,7 @@
+// Unsupported on AIX because we don't support the requisite "__clangast"
+// section in XCOFF yet.
+// UNSUPPORTED: aix
+
 // RUN: rm -rf %t && mkdir %t
 // RUN: split-file %s %t
 
@@ -65,8 +69,8 @@ module User [no_undeclared_includes] { header "user.h" }
 // CHECK:        ]
 // CHECK-NEXT: }
 
-// RUN: %python %S/../../utils/module-deps-to-rsp.py %t/result.json --module-name=User > %t/User.cc1.rsp
-// RUN: %python %S/../../utils/module-deps-to-rsp.py %t/result.json --tu-index=0 > %t/tu.rsp
+// RUN: %deps-to-rsp %t/result.json --module-name=User > %t/User.cc1.rsp
+// RUN: %deps-to-rsp %t/result.json --tu-index=0 > %t/tu.rsp
 //
 // RUN: %clang @%t/User.cc1.rsp
 // RUN: %clang @%t/tu.rsp
