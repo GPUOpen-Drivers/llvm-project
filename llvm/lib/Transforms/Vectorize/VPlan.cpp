@@ -575,6 +575,7 @@ bool VPRecipeBase::mayHaveSideEffects() const {
   case VPBranchOnMaskSC:
     return false;
   case VPWidenIntOrFpInductionSC:
+  case VPWidenPointerInductionSC:
   case VPWidenCanonicalIVSC:
   case VPWidenPHISC:
   case VPBlendSC:
@@ -973,7 +974,7 @@ void VPlan::execute(VPTransformState *State) {
 
   // Fix the latch value of canonical, reduction and first-order recurrences
   // phis in the vector loop.
-  VPBasicBlock *Header = Entry->getEntryBasicBlock();
+  VPBasicBlock *Header = getVectorLoopRegion()->getEntryBasicBlock();
   if (Header->empty()) {
     assert(EnableVPlanNativePath);
     Header = cast<VPBasicBlock>(Header->getSingleSuccessor());
@@ -981,8 +982,21 @@ void VPlan::execute(VPTransformState *State) {
   for (VPRecipeBase &R : Header->phis()) {
     // Skip phi-like recipes that generate their backedege values themselves.
     // TODO: Model their backedge values explicitly.
-    if (isa<VPWidenIntOrFpInductionRecipe>(&R) || isa<VPWidenPHIRecipe>(&R))
+    if (isa<VPWidenPHIRecipe>(&R) || isa<VPWidenPointerInductionRecipe>(&R))
       continue;
+
+    // Set the correct incoming block for backedge values and move induction to
+    // latch.
+    if (auto *IndR = dyn_cast<VPWidenIntOrFpInductionRecipe>(&R)) {
+      auto *Phi = cast<PHINode>(State->get(IndR, 0));
+      Phi->setIncomingBlock(1, VectorLatchBB);
+
+      // Move the last step to the end of the latch block. This ensures
+      // consistent placement of all induction updates.
+      Instruction *Inc = cast<Instruction>(Phi->getIncomingValue(1));
+      Inc->moveBefore(VectorLatchBB->getTerminator()->getPrevNode());
+      continue;
+    }
 
     auto *PhiR = cast<VPHeaderPHIRecipe>(&R);
     // For  canonical IV, first-order recurrences and in-order reduction phis,
@@ -1272,6 +1286,16 @@ void VPWidenIntOrFpInductionRecipe::print(raw_ostream &O, const Twine &Indent,
   } else
     O << " " << VPlanIngredient(IV);
 }
+
+void VPWidenPointerInductionRecipe::print(raw_ostream &O, const Twine &Indent,
+                                          VPSlotTracker &SlotTracker) const {
+  O << Indent << "EMIT ";
+  printAsOperand(O, SlotTracker);
+  O << " = WIDEN-POINTER-INDUCTION ";
+  getStartValue()->printAsOperand(O, SlotTracker);
+  O << ", " << *IndDesc.getStep();
+}
+
 #endif
 
 bool VPWidenIntOrFpInductionRecipe::isCanonical() const {

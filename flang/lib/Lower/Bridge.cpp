@@ -1089,8 +1089,12 @@ private:
     TODO(toLocation(), "CompilerDirective lowering");
   }
 
-  void genFIR(const Fortran::parser::OpenACCConstruct &) {
-    TODO(toLocation(), "OpenACCConstruct lowering");
+  void genFIR(const Fortran::parser::OpenACCConstruct &acc) {
+    mlir::OpBuilder::InsertPoint insertPt = builder->saveInsertionPoint();
+    genOpenACCConstruct(*this, getEval(), acc);
+    for (Fortran::lower::pft::Evaluation &e : getEval().getNestedEvaluations())
+      genFIR(e);
+    builder->restoreInsertionPoint(insertPt);
   }
 
   void genFIR(const Fortran::parser::OpenACCDeclarativeConstruct &) {
@@ -1499,19 +1503,19 @@ private:
   //===--------------------------------------------------------------------===//
 
   void genFIR(const Fortran::parser::EventPostStmt &stmt) {
-    TODO(toLocation(), "EventPostStmt lowering");
+    genEventPostStatement(*this, stmt);
   }
 
   void genFIR(const Fortran::parser::EventWaitStmt &stmt) {
-    TODO(toLocation(), "EventWaitStmt lowering");
+    genEventWaitStatement(*this, stmt);
   }
 
   void genFIR(const Fortran::parser::FormTeamStmt &stmt) {
-    TODO(toLocation(), "FormTeamStmt lowering");
+    genFormTeamStatement(*this, getEval(), stmt);
   }
 
   void genFIR(const Fortran::parser::LockStmt &stmt) {
-    TODO(toLocation(), "LockStmt lowering");
+    genLockStatement(*this, stmt);
   }
 
   fir::ExtendedValue
@@ -1879,23 +1883,23 @@ private:
   }
 
   void genFIR(const Fortran::parser::SyncAllStmt &stmt) {
-    TODO(toLocation(), "SyncAllStmt lowering");
+    genSyncAllStatement(*this, stmt);
   }
 
   void genFIR(const Fortran::parser::SyncImagesStmt &stmt) {
-    TODO(toLocation(), "SyncImagesStmt lowering");
+    genSyncImagesStatement(*this, stmt);
   }
 
   void genFIR(const Fortran::parser::SyncMemoryStmt &stmt) {
-    TODO(toLocation(), "SyncMemoryStmt lowering");
+    genSyncMemoryStatement(*this, stmt);
   }
 
   void genFIR(const Fortran::parser::SyncTeamStmt &stmt) {
-    TODO(toLocation(), "SyncTeamStmt lowering");
+    genSyncTeamStatement(*this, stmt);
   }
 
   void genFIR(const Fortran::parser::UnlockStmt &stmt) {
-    TODO(toLocation(), "UnlockStmt lowering");
+    genUnlockStatement(*this, stmt);
   }
 
   void genFIR(const Fortran::parser::AssignStmt &stmt) {

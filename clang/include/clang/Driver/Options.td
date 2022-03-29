@@ -1873,6 +1873,8 @@ defm rewrite_includes : BoolFOption<"rewrite-includes",
   PreprocessorOutputOpts<"RewriteIncludes">, DefaultFalse,
   PosFlag<SetTrue, [CC1Option]>, NegFlag<SetFalse>>;
 
+defm directives_only : OptInCC1FFlag<"directives-only", "">;
+
 defm delete_null_pointer_checks : BoolFOption<"delete-null-pointer-checks",
   CodeGenOpts<"NullPointerIsValid">, DefaultFalse,
   NegFlag<SetTrue, [CC1Option], "Do not treat usage of null pointers as undefined behavior">,
@@ -2827,7 +2829,7 @@ def fvisibility_dllexport_EQ : Joined<["-"], "fvisibility-dllexport=">, Group<f_
   MarshallingInfoVisibility<LangOpts<"DLLExportVisibility">, "DefaultVisibility">,
   ShouldParseIf<fvisibility_from_dllstorageclass.KeyPath>;
 def fvisibility_nodllstorageclass_EQ : Joined<["-"], "fvisibility-nodllstorageclass=">, Group<f_Group>, Flags<[CC1Option]>,
-  HelpText<"The visibility for defintiions without an explicit DLL export class [-fvisibility-from-dllstorageclass]">,
+  HelpText<"The visibility for definitions without an explicit DLL export class [-fvisibility-from-dllstorageclass]">,
   MarshallingInfoVisibility<LangOpts<"NoDLLStorageClassVisibility">, "HiddenVisibility">,
   ShouldParseIf<fvisibility_from_dllstorageclass.KeyPath>;
 def fvisibility_externs_dllimport_EQ : Joined<["-"], "fvisibility-externs-dllimport=">, Group<f_Group>, Flags<[CC1Option]>,
@@ -3444,6 +3446,7 @@ def msign_return_address_EQ : Joined<["-"], "msign-return-address=">,
   Flags<[CC1Option]>, Group<m_Group>, Values<"none,all,non-leaf">,
   HelpText<"Select return address signing scope">;
 def mbranch_protection_EQ : Joined<["-"], "mbranch-protection=">,
+  Group<m_Group>,
   HelpText<"Enforce targets of indirect branches and function returns">;
 
 def mharden_sls_EQ : Joined<["-"], "mharden-sls=">,
@@ -4180,6 +4183,8 @@ def _output_class_directory_EQ : Joined<["--"], "output-class-directory=">, Alia
 def _output_class_directory : Separate<["--"], "output-class-directory">, Alias<foutput_class_dir_EQ>;
 def _output_EQ : Joined<["--"], "output=">, Alias<o>;
 def _output : Separate<["--"], "output">, Alias<o>;
+def _overlay_platform_toolchain_EQ : Joined<["--"], "overlay-platform-toolchain=">;
+def _overlay_platform_toolchain : Separate<["--"], "overlay-platform-toolchain">, Alias<_overlay_platform_toolchain_EQ>;
 def _param : Separate<["--"], "param">, Group<CompileOnly_Group>;
 def _param_EQ : Joined<["--"], "param=">, Alias<_param>;
 def _precompile : Flag<["--"], "precompile">, Flags<[NoXarchOption]>,
@@ -4200,7 +4205,7 @@ def _serialize_diags : Separate<["-", "--"], "serialize-diagnostics">, Flags<[No
   HelpText<"Serialize compiler diagnostics to a file">;
 // We give --version different semantics from -version.
 def _version : Flag<["--"], "version">,
-  Flags<[CoreOption, CC1Option, FC1Option, FlangOption]>,
+  Flags<[CoreOption, FlangOption]>,
   HelpText<"Print version information">;
 def _signed_char : Flag<["--"], "signed-char">, Alias<fsigned_char>;
 def _std : Separate<["--"], "std">, Alias<std_EQ>;
@@ -5637,6 +5642,8 @@ def emit_module_interface : Flag<["-"], "emit-module-interface">,
   HelpText<"Generate pre-compiled module file from a C++ module interface">;
 def emit_header_module : Flag<["-"], "emit-header-module">,
   HelpText<"Generate pre-compiled module file from a set of header files">;
+def emit_header_unit : Flag<["-"], "emit-header-unit">,
+  HelpText<"Generate C++20 header units from header files">;
 def emit_pch : Flag<["-"], "emit-pch">,
   HelpText<"Generate pre-compiled header file">;
 def emit_llvm_bc : Flag<["-"], "emit-llvm-bc">,
@@ -5742,11 +5749,16 @@ def aligned_alloc_unavailable : Flag<["-"], "faligned-alloc-unavailable">,
 // Language Options
 //===----------------------------------------------------------------------===//
 
-let Flags = [CC1Option, CC1AsOption, NoDriverOption] in {
+let Flags = [CC1Option, CC1AsOption, FC1Option, NoDriverOption] in {
 
 def version : Flag<["-"], "version">,
   HelpText<"Print the compiler version">,
   MarshallingInfoFlag<FrontendOpts<"ShowVersion">>;
+
+} // let Flags = [CC1Option, CC1AsOption, FC1Option, NoDriverOption]
+
+let Flags = [CC1Option, CC1AsOption, NoDriverOption] in {
+
 def main_file_name : Separate<["-"], "main-file-name">,
   HelpText<"Main file name to use for debug info and source if missing">,
   MarshallingInfoString<CodeGenOpts<"MainFileName">>;
@@ -6530,6 +6542,7 @@ def _SLASH_sdl_ : CLIgnoredFlag<"sdl-">;
 def _SLASH_utf8 : CLIgnoredFlag<"utf-8">,
   HelpText<"Set source and runtime encoding to UTF-8 (default)">;
 def _SLASH_w : CLIgnoredJoined<"w">;
+def _SLASH_Wv_ : CLIgnoredJoined<"Wv">;
 def _SLASH_Zc___cplusplus : CLIgnoredFlag<"Zc:__cplusplus">;
 def _SLASH_Zc_auto : CLIgnoredFlag<"Zc:auto">;
 def _SLASH_Zc_forScope : CLIgnoredFlag<"Zc:forScope">;

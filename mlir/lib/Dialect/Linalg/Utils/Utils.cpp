@@ -322,8 +322,6 @@ tensor::ExtractSliceOp makeComposedExtractSliceOp(
 
 Value makeComposedPadHighOp(OpBuilder &b, Location loc, RankedTensorType type,
                             Value source, Value pad, bool nofold) {
-  assert(type.hasStaticShape() && "expect tensor type to have static shape");
-
   // Exit if `source` is not defined by an ExtractSliceOp.
   auto sliceOp = source.getDefiningOp<tensor::ExtractSliceOp>();
   if (!sliceOp)
@@ -821,9 +819,9 @@ Value makeTiledShape(OpBuilder &builder, Location loc, Value valueToTile,
       Value maxIndex = applyMapToValues(builder, loc, m, maxIndices).front();
       Value d = makeComposedAffineApply(builder, loc, plusOneMap, {maxIndex});
 
-      // Compute min(size, dim - offset) to avoid out-of-bounds accesses.
+      // Compute min(dim - offset, size) to avoid out-of-bounds accesses.
       AffineMap minMap = AffineMap::inferFromExprList(
-                             {ArrayRef<AffineExpr>{dim0, dim1 - dim2}})
+                             {ArrayRef<AffineExpr>{dim1 - dim2, dim0}})
                              .front();
       SmallVector<Value, 4> operands{size, d, offset};
       fullyComposeAffineMapAndOperands(&minMap, &operands);

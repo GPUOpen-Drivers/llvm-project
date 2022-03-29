@@ -1072,10 +1072,20 @@ public:
     }
   };
 
-  /// WeakUndeclaredIdentifiers - Identifiers contained in
-  /// \#pragma weak before declared. rare. may alias another
-  /// identifier, declared or undeclared
-  llvm::MapVector<IdentifierInfo *, WeakInfo> WeakUndeclaredIdentifiers;
+  /// WeakUndeclaredIdentifiers - Identifiers contained in \#pragma weak before
+  /// declared. Rare. May alias another identifier, declared or undeclared.
+  ///
+  /// For aliases, the target identifier is used as a key for eventual
+  /// processing when the target is declared. For the single-identifier form,
+  /// the sole identifier is used as the key. Each entry is a `SetVector`
+  /// (ordered by parse order) of aliases (identified by the alias name) in case
+  /// of multiple aliases to the same undeclared identifier.
+  llvm::MapVector<
+      IdentifierInfo *,
+      llvm::SetVector<
+          WeakInfo, llvm::SmallVector<WeakInfo, 1u>,
+          llvm::SmallDenseSet<WeakInfo, 2u, WeakInfo::DenseMapInfoByAliasOnly>>>
+      WeakUndeclaredIdentifiers;
 
   /// ExtnameUndeclaredIdentifiers - Identifiers contained in
   /// \#pragma redefine_extname before declared.  Used in Solaris system headers
@@ -1133,6 +1143,10 @@ public:
 
   /// The MSVC "_GUID" struct, which is defined in MSVC header files.
   RecordDecl *MSVCGuidDecl;
+
+  /// The C++ "std::source_location::__impl" struct, defined in
+  /// \<source_location>.
+  RecordDecl *StdSourceLocationImplDecl;
 
   /// Caches identifiers/selectors for NSFoundation APIs.
   std::unique_ptr<NSAPI> NSAPIObj;
@@ -2867,8 +2881,7 @@ public:
   void ActOnCXXForRangeDecl(Decl *D);
   StmtResult ActOnCXXForRangeIdentifier(Scope *S, SourceLocation IdentLoc,
                                         IdentifierInfo *Ident,
-                                        ParsedAttributes &Attrs,
-                                        SourceLocation AttrEnd);
+                                        ParsedAttributes &Attrs);
   void SetDeclDeleted(Decl *dcl, SourceLocation DelLoc);
   void SetDeclDefaulted(Decl *dcl, SourceLocation DefaultLoc);
   void CheckStaticLocalForDllExport(VarDecl *VD);
@@ -2968,6 +2981,12 @@ public:
     NotACXX20Module  ///< Not a C++20 TU, or an invalid state was found.
   };
 
+private:
+  /// The parser has begun a translation unit to be compiled as a C++20
+  /// Header Unit, helper for ActOnStartOfTranslationUnit() only.
+  void HandleStartOfHeaderUnit();
+
+public:
   /// The parser has processed a module-declaration that begins the definition
   /// of a module interface or implementation.
   DeclGroupPtrTy ActOnModuleDecl(SourceLocation StartLoc,
@@ -3239,8 +3258,7 @@ public:
   /// Perform ODR-like check for C/ObjC when merging tag types from modules.
   /// Differently from C++, actually parse the body and reject / error out
   /// in case of a structural mismatch.
-  bool ActOnDuplicateDefinition(DeclSpec &DS, Decl *Prev,
-                                SkipBodyInfo &SkipBody);
+  bool ActOnDuplicateDefinition(Decl *Prev, SkipBodyInfo &SkipBody);
 
   typedef void *SkippedDefinitionContext;
 
@@ -3319,12 +3337,14 @@ public:
   void ActOnReenterFunctionContext(Scope* S, Decl* D);
   void ActOnExitFunctionContext();
 
-  DeclContext *getFunctionLevelDeclContext();
+  /// If \p AllowLambda is true, treat lambda as function.
+  DeclContext *getFunctionLevelDeclContext(bool AllowLambda = false);
 
-  /// getCurFunctionDecl - If inside of a function body, this returns a pointer
-  /// to the function decl for the function being parsed.  If we're currently
-  /// in a 'block', this returns the containing context.
-  FunctionDecl *getCurFunctionDecl();
+  /// Returns a pointer to the innermost enclosing function, or nullptr if the
+  /// current context is not inside a function. If \p AllowLambda is true,
+  /// this can return the call operator of an enclosing lambda, otherwise
+  /// lambdas are skipped when looking for an enclosing function.
+  FunctionDecl *getCurFunctionDecl(bool AllowLambda = false);
 
   /// getCurMethodDecl - If inside of a method body, this returns a pointer to
   /// the method decl for the method being parsed.  If we're currently
@@ -4440,8 +4460,7 @@ public:
 
   /// Process the attributes before creating an attributed statement. Returns
   /// the semantic attributes that have been processed.
-  void ProcessStmtAttributes(Stmt *Stmt,
-                             const ParsedAttributesWithRange &InAttrs,
+  void ProcessStmtAttributes(Stmt *Stmt, const ParsedAttributes &InAttrs,
                              SmallVectorImpl<const Attr *> &OutAttrs);
 
   void WarnConflictingTypedMethods(ObjCMethodDecl *Method,
@@ -4783,7 +4802,7 @@ public:
 
   StmtResult BuildAttributedStmt(SourceLocation AttrsLoc,
                                  ArrayRef<const Attr *> Attrs, Stmt *SubStmt);
-  StmtResult ActOnAttributedStmt(const ParsedAttributesWithRange &AttrList,
+  StmtResult ActOnAttributedStmt(const ParsedAttributes &AttrList,
                                  Stmt *SubStmt);
 
   class ConditionResult;
@@ -5669,14 +5688,15 @@ public:
                             TypeSourceInfo *TInfo, SourceLocation RPLoc);
 
   // __builtin_LINE(), __builtin_FUNCTION(), __builtin_FILE(),
-  // __builtin_COLUMN()
+  // __builtin_COLUMN(), __builtin_source_location()
   ExprResult ActOnSourceLocExpr(SourceLocExpr::IdentKind Kind,
                                 SourceLocation BuiltinLoc,
                                 SourceLocation RPLoc);
 
   // Build a potentially resolved SourceLocExpr.
   ExprResult BuildSourceLocExpr(SourceLocExpr::IdentKind Kind,
-                                SourceLocation BuiltinLoc, SourceLocation RPLoc,
+                                QualType ResultTy, SourceLocation BuiltinLoc,
+                                SourceLocation RPLoc,
                                 DeclContext *ParentContext);
 
   // __null
@@ -6767,7 +6787,7 @@ public:
   /// Create a new lambda closure type.
   CXXRecordDecl *createLambdaClosureType(SourceRange IntroducerRange,
                                          TypeSourceInfo *Info,
-                                         bool KnownDependent,
+                                         unsigned LambdaDependencyKind,
                                          LambdaCaptureDefault CaptureDefault);
 
   /// Start the definition of a lambda expression.
@@ -7361,11 +7381,9 @@ public:
                                        TypeSourceInfo *TInfo,
                                        SourceLocation EllipsisLoc);
 
-  BaseResult ActOnBaseSpecifier(Decl *classdecl,
-                                SourceRange SpecifierRange,
-                                ParsedAttributes &Attrs,
-                                bool Virtual, AccessSpecifier Access,
-                                ParsedType basetype,
+  BaseResult ActOnBaseSpecifier(Decl *classdecl, SourceRange SpecifierRange,
+                                const ParsedAttributesView &Attrs, bool Virtual,
+                                AccessSpecifier Access, ParsedType basetype,
                                 SourceLocation BaseLoc,
                                 SourceLocation EllipsisLoc);
 
@@ -10177,7 +10195,7 @@ public:
 
   NamedDecl *DeclClonePragmaWeak(NamedDecl *ND, const IdentifierInfo *II,
                                  SourceLocation Loc);
-  void DeclApplyPragmaWeak(Scope *S, NamedDecl *ND, WeakInfo &W);
+  void DeclApplyPragmaWeak(Scope *S, NamedDecl *ND, const WeakInfo &W);
 
   /// ActOnPragmaWeakID - Called on well formed \#pragma weak ident.
   void ActOnPragmaWeakID(IdentifierInfo* WeakName,
@@ -10917,6 +10935,11 @@ public:
   /// Called on well-formed '\#pragma omp parallel loop' after parsing of the
   /// associated statement.
   StmtResult ActOnOpenMPParallelGenericLoopDirective(
+      ArrayRef<OMPClause *> Clauses, Stmt *AStmt, SourceLocation StartLoc,
+      SourceLocation EndLoc, VarsWithInheritedDSAType &VarsWithImplicitDSA);
+  /// Called on well-formed '\#pragma omp target parallel loop' after parsing
+  /// of the associated statement.
+  StmtResult ActOnOpenMPTargetParallelGenericLoopDirective(
       ArrayRef<OMPClause *> Clauses, Stmt *AStmt, SourceLocation StartLoc,
       SourceLocation EndLoc, VarsWithInheritedDSAType &VarsWithImplicitDSA);
   /// Called on well-formed '\#pragma omp cancellation point'.
@@ -12970,7 +12993,8 @@ private:
   /// attempts to add itself into the container
   void CheckObjCCircularContainer(ObjCMessageExpr *Message);
 
-  void CheckTCBEnforcement(const CallExpr *TheCall, const FunctionDecl *Callee);
+  void CheckTCBEnforcement(const SourceLocation CallExprLoc,
+                           const NamedDecl *Callee);
 
   void AnalyzeDeleteExprMismatch(const CXXDeleteExpr *DE);
   void AnalyzeDeleteExprMismatch(FieldDecl *Field, SourceLocation DeleteLoc,

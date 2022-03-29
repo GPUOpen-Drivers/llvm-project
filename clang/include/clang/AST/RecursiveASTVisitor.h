@@ -2039,6 +2039,7 @@ DEF_TRAVERSE_DECL(BindingDecl, {
 DEF_TRAVERSE_DECL(MSPropertyDecl, { TRY_TO(TraverseDeclaratorHelper(D)); })
 
 DEF_TRAVERSE_DECL(MSGuidDecl, {})
+DEF_TRAVERSE_DECL(UnnamedGlobalConstantDecl, {})
 
 DEF_TRAVERSE_DECL(TemplateParamObjectDecl, {})
 
@@ -3081,6 +3082,9 @@ DEF_TRAVERSE_STMT(OMPTargetTeamsGenericLoopDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 
 DEF_TRAVERSE_STMT(OMPParallelGenericLoopDirective,
+                  { TRY_TO(TraverseOMPExecutableDirective(S)); })
+
+DEF_TRAVERSE_STMT(OMPTargetParallelGenericLoopDirective,
                   { TRY_TO(TraverseOMPExecutableDirective(S)); })
 // OpenMP clauses.
 template <typename Derived>

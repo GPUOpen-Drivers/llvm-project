@@ -10734,6 +10734,8 @@ def err_omp_expected_int_param : Error<
   "expected a reference to an integer-typed parameter">;
 def err_omp_at_least_one_motion_clause_required : Error<
   "expected at least one 'to' clause or 'from' clause specified to '#pragma omp target update'">;
+def err_omp_cannot_update_with_internal_linkage : Error<
+  "the host cannot update a declare target variable that is not externally visible.">;
 def err_omp_usedeviceptr_not_a_pointer : Error<
   "expected pointer or reference to pointer in 'use_device_ptr' clause">;
 def err_omp_argument_type_isdeviceptr : Error <
@@ -11554,4 +11556,9 @@ def err_riscv_builtin_requires_extension : Error<
   "builtin requires at least one of the following extensions support to be enabled : %0">;
 def err_riscv_builtin_invalid_lmul : Error<
   "LMUL argument must be in the range [0,3] or [5,7]">;
+
+def err_std_source_location_impl_not_found : Error<
+  "'std::source_location::__impl' was not found; it must be defined before '__builtin_source_location' is called">;
+def err_std_source_location_impl_malformed : Error<
+  "'std::source_location::__impl' must be standard-layout and have only two 'const char *' fields '_M_file_name' and '_M_function_name', and two integral fields '_M_line' and '_M_column'">;
 } // end of sema component.

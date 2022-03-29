@@ -668,6 +668,17 @@ void tools::addOpenMPRuntimeSpecificRPath(const ToolChain &TC,
   }
 }
 
+void tools::addOpenMPRuntimeLibraryPath(const ToolChain &TC,
+                                        const ArgList &Args,
+                                        ArgStringList &CmdArgs) {
+  // Default to clang lib / lib64 folder, i.e. the same location as device
+  // runtime.
+  SmallString<256> DefaultLibPath =
+      llvm::sys::path::parent_path(TC.getDriver().Dir);
+  llvm::sys::path::append(DefaultLibPath, Twine("lib") + CLANG_LIBDIR_SUFFIX);
+  CmdArgs.push_back(Args.MakeArgString("-L" + DefaultLibPath));
+}
+
 void tools::addArchSpecificRPath(const ToolChain &TC, const ArgList &Args,
                                  ArgStringList &CmdArgs) {
   // Enable -frtlib-add-rpath by default for the case of VE.
@@ -727,6 +738,7 @@ bool tools::addOpenMPRuntime(ArgStringList &CmdArgs, const ToolChain &TC,
 
   if (RTKind == Driver::OMPRT_OMP)
     addOpenMPRuntimeSpecificRPath(TC, Args, CmdArgs);
+  addOpenMPRuntimeLibraryPath(TC, Args, CmdArgs);
 
   return true;
 }
@@ -848,6 +860,10 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
   // The stats_client library is also statically linked into DSOs.
   if (SanArgs.needsStatsRt() && SanArgs.linkRuntimes())
     StaticRuntimes.push_back("stats_client");
+
+  // Always link the static runtime regardless of DSO or executable.
+  if (SanArgs.needsAsanRt())
+    HelperStaticRuntimes.push_back("asan_static");
 
   // Collect static runtimes.
   if (Args.hasArg(options::OPT_shared)) {

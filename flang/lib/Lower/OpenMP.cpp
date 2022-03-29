@@ -97,6 +97,38 @@ static void genOMP(Fortran::lower::AbstractConverter &converter,
 }
 
 static void
+genAllocateClause(Fortran::lower::AbstractConverter &converter,
+                  const Fortran::parser::OmpAllocateClause &ompAllocateClause,
+                  SmallVector<Value> &allocatorOperands,
+                  SmallVector<Value> &allocateOperands) {
+  auto &firOpBuilder = converter.getFirOpBuilder();
+  auto currentLocation = converter.getCurrentLocation();
+  Fortran::lower::StatementContext stmtCtx;
+
+  mlir::Value allocatorOperand;
+  const Fortran::parser::OmpObjectList &ompObjectList =
+      std::get<Fortran::parser::OmpObjectList>(ompAllocateClause.t);
+  const auto &allocatorValue =
+      std::get<std::optional<Fortran::parser::OmpAllocateClause::Allocator>>(
+          ompAllocateClause.t);
+  // Check if allocate clause has allocator specified. If so, add it
+  // to list of allocators, otherwise, add default allocator to
+  // list of allocators.
+  if (allocatorValue) {
+    allocatorOperand = fir::getBase(converter.genExprValue(
+        *Fortran::semantics::GetExpr(allocatorValue->v), stmtCtx));
+    allocatorOperands.insert(allocatorOperands.end(), ompObjectList.v.size(),
+                             allocatorOperand);
+  } else {
+    allocatorOperand = firOpBuilder.createIntegerConstant(
+        currentLocation, firOpBuilder.getI32Type(), 1);
+    allocatorOperands.insert(allocatorOperands.end(), ompObjectList.v.size(),
+                             allocatorOperand);
+  }
+  genObjectList(ompObjectList, converter, allocateOperands);
+}
+
+static void
 genOMP(Fortran::lower::AbstractConverter &converter,
        Fortran::lower::pft::Evaluation &eval,
        const Fortran::parser::OpenMPStandaloneConstruct &standaloneConstruct) {
@@ -140,6 +172,8 @@ genOMP(Fortran::lower::AbstractConverter &converter,
       std::get<Fortran::parser::OmpBeginBlockDirective>(blockConstruct.t);
   const auto &blockDirective =
       std::get<Fortran::parser::OmpBlockDirective>(beginBlockDirective.t);
+  const auto &endBlockDirective =
+      std::get<Fortran::parser::OmpEndBlockDirective>(blockConstruct.t);
 
   auto &firOpBuilder = converter.getFirOpBuilder();
   auto currentLocation = converter.getCurrentLocation();
@@ -171,7 +205,8 @@ genOMP(Fortran::lower::AbstractConverter &converter,
     // Create and insert the operation.
     auto parallelOp = firOpBuilder.create<mlir::omp::ParallelOp>(
         currentLocation, argTy, ifClauseOperand, numThreadsClauseOperand,
-        ValueRange(), ValueRange(),
+        /*allocate_vars=*/ValueRange(), /*allocators_vars=*/ValueRange(),
+        /*reduction_vars=*/ValueRange(), /*reductions=*/nullptr,
         procBindClauseOperand.dyn_cast_or_null<omp::ClauseProcBindKindAttr>());
     // Handle attribute based clauses.
     for (const auto &clause : parallelOpClauseList.v) {
@@ -200,6 +235,20 @@ genOMP(Fortran::lower::AbstractConverter &converter,
     auto masterOp =
         firOpBuilder.create<mlir::omp::MasterOp>(currentLocation, argTy);
     createBodyOfOp<omp::MasterOp>(masterOp, firOpBuilder, currentLocation);
+
+    // Single Construct
+  } else if (blockDirective.v == llvm::omp::OMPD_single) {
+    mlir::UnitAttr nowaitAttr;
+    for (const auto &clause :
+         std::get<Fortran::parser::OmpClauseList>(endBlockDirective.t).v) {
+      if (std::get_if<Fortran::parser::OmpClause::Nowait>(&clause.u))
+        nowaitAttr = firOpBuilder.getUnitAttr();
+      // TODO: Handle allocate clause (D122302)
+    }
+    auto singleOp = firOpBuilder.create<mlir::omp::SingleOp>(
+        currentLocation, /*allocate_vars=*/ValueRange(),
+        /*allocators_vars=*/ValueRange(), nowaitAttr);
+    createBodyOfOp(singleOp, firOpBuilder, currentLocation);
   }
 }
 
@@ -246,6 +295,84 @@ genOMP(Fortran::lower::AbstractConverter &converter,
   createBodyOfOp<omp::CriticalOp>(criticalOp, firOpBuilder, currentLocation);
 }
 
+static void
+genOMP(Fortran::lower::AbstractConverter &converter,
+       Fortran::lower::pft::Evaluation &eval,
+       const Fortran::parser::OpenMPSectionConstruct &sectionConstruct) {
+
+  auto &firOpBuilder = converter.getFirOpBuilder();
+  auto currentLocation = converter.getCurrentLocation();
+  mlir::omp::SectionOp sectionOp =
+      firOpBuilder.create<mlir::omp::SectionOp>(currentLocation);
+  createBodyOfOp<omp::SectionOp>(sectionOp, firOpBuilder, currentLocation);
+}
+
+// TODO: Add support for reduction
+static void
+genOMP(Fortran::lower::AbstractConverter &converter,
+       Fortran::lower::pft::Evaluation &eval,
+       const Fortran::parser::OpenMPSectionsConstruct &sectionsConstruct) {
+  auto &firOpBuilder = converter.getFirOpBuilder();
+  auto currentLocation = converter.getCurrentLocation();
+  SmallVector<Value> reductionVars, allocateOperands, allocatorOperands;
+  mlir::UnitAttr noWaitClauseOperand;
+  const auto &sectionsClauseList = std::get<Fortran::parser::OmpClauseList>(
+      std::get<Fortran::parser::OmpBeginSectionsDirective>(sectionsConstruct.t)
+          .t);
+  for (const Fortran::parser::OmpClause &clause : sectionsClauseList.v) {
+
+    // Reduction Clause
+    if (std::get_if<Fortran::parser::OmpClause::Reduction>(&clause.u)) {
+      TODO(currentLocation, "OMPC_Reduction");
+
+      // Allocate clause
+    } else if (const auto &allocateClause =
+                   std::get_if<Fortran::parser::OmpClause::Allocate>(
+                       &clause.u)) {
+      genAllocateClause(converter, allocateClause->v, allocatorOperands,
+                        allocateOperands);
+    }
+  }
+  const auto &endSectionsClauseList =
+      std::get<Fortran::parser::OmpEndSectionsDirective>(sectionsConstruct.t);
+  const auto &clauseList =
+      std::get<Fortran::parser::OmpClauseList>(endSectionsClauseList.t);
+  for (const auto &clause : clauseList.v) {
+    // Nowait clause
+    if (std::get_if<Fortran::parser::OmpClause::Nowait>(&clause.u)) {
+      noWaitClauseOperand = firOpBuilder.getUnitAttr();
+    }
+  }
+
+  llvm::omp::Directive dir =
+      std::get<Fortran::parser::OmpSectionsDirective>(
+          std::get<Fortran::parser::OmpBeginSectionsDirective>(
+              sectionsConstruct.t)
+              .t)
+          .v;
+
+  // Parallel Sections Construct
+  if (dir == llvm::omp::Directive::OMPD_parallel_sections) {
+    auto parallelOp = firOpBuilder.create<mlir::omp::ParallelOp>(
+        currentLocation, /*if_expr_var*/ nullptr, /*num_threads_var*/ nullptr,
+        allocateOperands, allocatorOperands, /*reduction_vars=*/ValueRange(),
+        /*reductions=*/nullptr, /*proc_bind_val*/ nullptr);
+    createBodyOfOp(parallelOp, firOpBuilder, currentLocation);
+    auto sectionsOp = firOpBuilder.create<mlir::omp::SectionsOp>(
+        currentLocation, /*reduction_vars*/ ValueRange(),
+        /*reductions=*/nullptr, /*allocate_vars*/ ValueRange(),
+        /*allocators_vars*/ ValueRange(), /*nowait=*/nullptr);
+    createBodyOfOp(sectionsOp, firOpBuilder, currentLocation);
+
+    // Sections Construct
+  } else if (dir == llvm::omp::Directive::OMPD_sections) {
+    auto sectionsOp = firOpBuilder.create<mlir::omp::SectionsOp>(
+        currentLocation, reductionVars, /*reductions = */ nullptr,
+        allocateOperands, allocatorOperands, noWaitClauseOperand);
+    createBodyOfOp<omp::SectionsOp>(sectionsOp, firOpBuilder, currentLocation);
+  }
+}
+
 void Fortran::lower::genOpenMPConstruct(
     Fortran::lower::AbstractConverter &converter,
     Fortran::lower::pft::Evaluation &eval,
@@ -259,10 +386,10 @@ void Fortran::lower::genOpenMPConstruct(
           },
           [&](const Fortran::parser::OpenMPSectionsConstruct
                   &sectionsConstruct) {
-            TODO(converter.getCurrentLocation(), "OpenMPSectionsConstruct");
+            genOMP(converter, eval, sectionsConstruct);
           },
           [&](const Fortran::parser::OpenMPSectionConstruct &sectionConstruct) {
-            TODO(converter.getCurrentLocation(), "OpenMPSectionConstruct");
+            genOMP(converter, eval, sectionConstruct);
           },
           [&](const Fortran::parser::OpenMPLoopConstruct &loopConstruct) {
             TODO(converter.getCurrentLocation(), "OpenMPLoopConstruct");
