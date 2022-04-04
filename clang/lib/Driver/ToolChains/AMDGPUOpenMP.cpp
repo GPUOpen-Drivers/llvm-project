@@ -289,15 +289,7 @@ void AMDGPUOpenMPToolChain::addClangTargetOptions(
   if (getDriver().isUsingLTO(/* IsOffload */ true))
     return;
 
-  std::string BitcodeSuffix;
-  if (DriverArgs.hasFlag(options::OPT_fopenmp_target_new_runtime,
-                         options::OPT_fno_openmp_target_new_runtime, true))
-    BitcodeSuffix = "new-amdgpu-" + GPUArch;
-  else
-    BitcodeSuffix = "amdgcn-" + GPUArch;
-
-  addOpenMPDeviceRTL(getDriver(), DriverArgs, CC1Args, BitcodeSuffix,
-                     getTriple());
+  addOpenMPDeviceRTL(getDriver(), DriverArgs, CC1Args, GPUArch, getTriple());
 }
 
 llvm::opt::DerivedArgList *AMDGPUOpenMPToolChain::TranslateArgs(

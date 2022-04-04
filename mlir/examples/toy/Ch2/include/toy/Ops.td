@@ -35,6 +35,10 @@ class Toy_Op<string mnemonic, list<Trait> traits = []> :
 // Toy Operations
 //===----------------------------------------------------------------------===//
 
+//===----------------------------------------------------------------------===//
+// ConstantOp
+//===----------------------------------------------------------------------===//
+
 // We define a toy operation by inheriting from our base 'Toy_Op' class above.
 // Here we provide the mnemonic and a list of traits for the operation. The
 // constant operation is marked as 'NoSideEffect' as it is a pure operation
@@ -59,9 +63,8 @@ def ConstantOp : Toy_Op<"constant", [NoSideEffect]> {
   // The constant operation returns a single value of TensorType.
   let results = (outs F64Tensor);
 
-  // Specify a parser and printer method.
-  let parser = [{ return ::parseConstantOp(parser, result); }];
-  let printer = [{ return ::print(p, *this); }];
+  // Indicate that the operation has a custom parser and printer method.
+  let hasCustomAssemblyFormat = 1;
 
   // Add custom build methods for the constant operation. These method populates
   // the `state` that MLIR uses to create operations, i.e. these are used when
@@ -80,6 +83,10 @@ def ConstantOp : Toy_Op<"constant", [NoSideEffect]> {
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// AddOp
+//===----------------------------------------------------------------------===//
+
 def AddOp : Toy_Op<"add"> {
   let summary = "element-wise addition operation";
   let description = [{
@@ -90,15 +97,18 @@ def AddOp : Toy_Op<"add"> {
   let arguments = (ins F64Tensor:$lhs, F64Tensor:$rhs);
   let results = (outs F64Tensor);
 
-  // Specify a parser and printer method.
-  let parser = [{ return ::parseBinaryOp(parser, result); }];
-  let printer = [{ return ::printBinaryOp(p, *this); }];
+  // Indicate that the operation has a custom parser and printer method.
+  let hasCustomAssemblyFormat = 1;
 
   // Allow building an AddOp with from the two input operands.
   let builders = [
     OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
   ];
 }
+
+//===----------------------------------------------------------------------===//
+// GenericCallOp
+//===----------------------------------------------------------------------===//
 
 def GenericCallOp : Toy_Op<"generic_call"> {
   let summary = "generic call operation";
@@ -135,6 +145,10 @@ def GenericCallOp : Toy_Op<"generic_call"> {
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// MulOp
+//===----------------------------------------------------------------------===//
+
 def MulOp : Toy_Op<"mul"> {
   let summary = "element-wise multiplication operation";
   let description = [{
@@ -145,15 +159,18 @@ def MulOp : Toy_Op<"mul"> {
   let arguments = (ins F64Tensor:$lhs, F64Tensor:$rhs);
   let results = (outs F64Tensor);
 
-  // Specify a parser and printer method.
-  let parser = [{ return ::parseBinaryOp(parser, result); }];
-  let printer = [{ return ::printBinaryOp(p, *this); }];
+  // Indicate that the operation has a custom parser and printer method.
+  let hasCustomAssemblyFormat = 1;
 
   // Allow building a MulOp with from the two input operands.
   let builders = [
     OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
   ];
 }
+
+//===----------------------------------------------------------------------===//
+// PrintOp
+//===----------------------------------------------------------------------===//
 
 def PrintOp : Toy_Op<"print"> {
   let summary = "print operation";
@@ -167,6 +184,10 @@ def PrintOp : Toy_Op<"print"> {
 
   let assemblyFormat = "$input attr-dict `:` type($input)";
 }
+
+//===----------------------------------------------------------------------===//
+// ReshapeOp
+//===----------------------------------------------------------------------===//
 
 def ReshapeOp : Toy_Op<"reshape"> {
   let summary = "tensor reshape operation";
@@ -188,6 +209,10 @@ def ReshapeOp : Toy_Op<"reshape"> {
     `(` $input `:` type($input) `)` attr-dict `to` type(results)
   }];
 }
+
+//===----------------------------------------------------------------------===//
+// ReturnOp
+//===----------------------------------------------------------------------===//
 
 def ReturnOp : Toy_Op<"return", [NoSideEffect, HasParent<"FuncOp">,
                                  Terminator]> {
@@ -226,6 +251,10 @@ def ReturnOp : Toy_Op<"return", [NoSideEffect, HasParent<"FuncOp">,
   // Invoke a static verify method to verify this return operation.
   let hasVerifier = 1;
 }
+
+//===----------------------------------------------------------------------===//
+// TransposeOp
+//===----------------------------------------------------------------------===//
 
 def TransposeOp : Toy_Op<"transpose"> {
   let summary = "transpose operation";

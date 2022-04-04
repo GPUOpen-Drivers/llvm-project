@@ -73,10 +73,8 @@ public:
   }
 
   bool VisitTemplateSpecializationType(TemplateSpecializationType *TST) {
-    if (isNew(TST)) {
-      add(TST->getTemplateName().getAsTemplateDecl()); // Primary template.
-      add(TST->getAsCXXRecordDecl());                  // Specialization
-    }
+    add(TST->getTemplateName().getAsTemplateDecl()); // Primary template.
+    add(TST->getAsCXXRecordDecl());                  // Specialization
     return true;
   }
 
@@ -161,7 +159,7 @@ private:
   ReferencedLocations &Result;
   llvm::DenseSet<const void *> Visited;
   const SourceManager &SM;
-  stdlib::Recognizer StdRecognizer;
+  tooling::stdlib::Recognizer StdRecognizer;
 };
 
 // Given a set of referenced FileIDs, determines all the potentially-referenced
@@ -241,7 +239,7 @@ static bool mayConsiderUnused(const Inclusion &Inc, ParsedAST &AST) {
   // System headers are likely to be standard library headers.
   // Until we have good support for umbrella headers, don't warn about them.
   if (Inc.Written.front() == '<') {
-    if (AnalyzeStdlib && stdlib::Header::named(Inc.Written))
+    if (AnalyzeStdlib && tooling::stdlib::Header::named(Inc.Written))
       return true;
     return false;
   }
@@ -288,11 +286,11 @@ FileID headerResponsible(FileID ID, const SourceManager &SM,
 
 } // namespace
 
-ReferencedLocations findReferencedLocations(const SourceManager &SM,
-                                            ASTContext &Ctx, Preprocessor &PP,
+ReferencedLocations findReferencedLocations(ASTContext &Ctx, Preprocessor &PP,
                                             const syntax::TokenBuffer *Tokens) {
   trace::Span Tracer("IncludeCleaner::findReferencedLocations");
   ReferencedLocations Result;
+  const auto &SM = Ctx.getSourceManager();
   ReferencedLocationCrawler Crawler(Result, SM);
   Crawler.TraverseAST(Ctx);
   if (Tokens)
@@ -301,8 +299,8 @@ ReferencedLocations findReferencedLocations(const SourceManager &SM,
 }
 
 ReferencedLocations findReferencedLocations(ParsedAST &AST) {
-  return findReferencedLocations(AST.getSourceManager(), AST.getASTContext(),
-                                 AST.getPreprocessor(), &AST.getTokens());
+  return findReferencedLocations(AST.getASTContext(), AST.getPreprocessor(),
+                                 &AST.getTokens());
 }
 
 ReferencedFiles
@@ -329,7 +327,7 @@ findReferencedFiles(const ReferencedLocations &Locs, const SourceManager &SM,
   for (FileID ID : Builder.Files)
     UserFiles.insert(HeaderResponsible(ID));
 
-  llvm::DenseSet<stdlib::Header> StdlibFiles;
+  llvm::DenseSet<tooling::stdlib::Header> StdlibFiles;
   for (const auto &Symbol : Locs.Stdlib)
     for (const auto &Header : Symbol.headers())
       StdlibFiles.insert(Header);
@@ -392,7 +390,7 @@ translateToHeaderIDs(const ReferencedFiles &Files,
     assert(File);
     TranslatedHeaderIDs.insert(*File);
   }
-  for (stdlib::Header StdlibUsed : Files.Stdlib)
+  for (tooling::stdlib::Header StdlibUsed : Files.Stdlib)
     for (auto HID : Includes.StdlibHeaders.lookup(StdlibUsed))
       TranslatedHeaderIDs.insert(HID);
   return TranslatedHeaderIDs;

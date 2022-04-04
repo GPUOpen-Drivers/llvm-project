@@ -16,7 +16,6 @@
 
 include "mlir/IR/OpBase.td"
 include "mlir/Dialect/Arithmetic/IR/ArithmeticOps.td"
-include "mlir/Dialect/StandardOps/IR/Ops.td"
 include "flang/Optimizer/Dialect/FIROps.td"
 
 def IdenticalTypePred : Constraint<CPred<"$0.getType() == $1.getType()">>;
@@ -49,7 +48,7 @@ def CombineConvertOptPattern
 def createConstantOp
     : NativeCodeCall<"$_builder.create<mlir::arith::ConstantOp>"
                      "($_loc, $_builder.getIndexType(), "
-                     "rewriter.getIndexAttr($1.dyn_cast<IntegerAttr>()"
+                     "rewriter.getIndexAttr($1.dyn_cast<mlir::IntegerAttr>()"
                      ".getInt()))">;
 
 def ForwardConstantConvertPattern

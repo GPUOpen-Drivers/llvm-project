@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -361,6 +363,7 @@ FUNCTION_PASS("verify<safepoint-ir>", SafepointIRVerifierPass())
 FUNCTION_PASS("verify<scalar-evolution>", ScalarEvolutionVerifierPass())
 FUNCTION_PASS("view-cfg", CFGViewerPass())
 FUNCTION_PASS("view-cfg-only", CFGOnlyViewerPass())
+FUNCTION_PASS("tlshoist", TLSVariableHoistPass())
 FUNCTION_PASS("transform-warning", WarnMissedTransformationsPass())
 FUNCTION_PASS("tsan", ThreadSanitizerPass())
 FUNCTION_PASS("memprof", MemProfilerPass())
@@ -402,13 +405,6 @@ FUNCTION_PASS_WITH_PARAMS("loop-unroll",
                           "no-profile-peeling;profile-peeling;"
                           "no-runtime;runtime;"
                           "no-upperbound;upperbound")
-FUNCTION_PASS_WITH_PARAMS("asan",
-                          "AddressSanitizerPass",
-                           [](AddressSanitizerOptions Opts) {
-                             return AddressSanitizerPass(Opts);
-                           },
-                          parseASanPassOptions,
-                          "kernel")
 FUNCTION_PASS_WITH_PARAMS("msan",
                           "MemorySanitizerPass",
                            [](MemorySanitizerOptions Opts) {

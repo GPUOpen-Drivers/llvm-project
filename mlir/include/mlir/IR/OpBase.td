@@ -363,7 +363,8 @@ class DialectType<Dialect d, Pred condition, string descr = "",
 
 // A variadic type constraint. It expands to zero or more of the base type. This
 // class is used for supporting variadic operands/results.
-class Variadic<Type type> : TypeConstraint<type.predicate, type.summary> {
+class Variadic<Type type> : TypeConstraint<type.predicate, type.summary,
+                                           type.cppClassName> {
   Type baseType = type;
 }
 
@@ -379,7 +380,8 @@ class VariadicOfVariadic<Type type, string variadicSegmentAttrName>
 
 // An optional type constraint. It expands to either zero or one of the base
 // type. This class is used for supporting optional operands/results.
-class Optional<Type type> : TypeConstraint<type.predicate, type.summary> {
+class Optional<Type type> : TypeConstraint<type.predicate, type.summary,
+                                           type.cppClassName> {
   Type baseType = type;
 }
 
@@ -874,9 +876,10 @@ class MixedContainerType<Type etype, Pred containerPred, code elementTypesCall,
         And<[
             containerPred,
             Concat<
-                "::llvm::all_of(" # elementTypesCall # ", [](Type t) { return ",
+                "::llvm::all_of(" # elementTypesCall # ", [](Type t) { "
+                "return t && (",
                 SubstLeaves<"$_self", "t", etype.predicate>,
-                "; })"
+                "); })"
             >
         ]>,
         descr # " with any combination of " # etype.summary # " values"> {
@@ -1262,6 +1265,11 @@ class TypeAttrBase<string retType, string summary> :
 }
 
 def TypeAttr : TypeAttrBase<"::mlir::Type", "any type attribute"> {
+  let constBuilderCall = "::mlir::TypeAttr::get($0)";
+}
+
+class TypeAttrOf<Type ty>
+   : TypeAttrBase<ty.cppClassName, "type attribute of " # ty.description> {
   let constBuilderCall = "::mlir::TypeAttr::get($0)";
 }
 
@@ -1655,6 +1663,7 @@ class ArrayAttrBase<Pred condition, string summary> : Attr<condition, summary> {
   let returnType = [{ ::mlir::ArrayAttr }];
   let valueType = NoneType;
   let convertFromStorage = "$_self";
+  let constBuilderCall = "$_builder.getArrayAttr($0)";
 }
 
 def ArrayAttr : ArrayAttrBase<CPred<"$_self.isa<::mlir::ArrayAttr>()">,
@@ -1668,11 +1677,10 @@ class TypedArrayAttrBase<Attr element, string summary>: ArrayAttrBase<
       CPred<"$_self.isa<::mlir::ArrayAttr>()">,
       // Guarantee all elements satisfy the constraints from `element`
       Concat<"::llvm::all_of($_self.cast<::mlir::ArrayAttr>(), "
-                            "[&](::mlir::Attribute attr) { return ",
+                            "[&](::mlir::Attribute attr) { return attr && (",
                                SubstLeaves<"$_self", "attr", element.predicate>,
-                            "; })">]>,
+                            "); })">]>,
     summary> {
-  let constBuilderCall = "$_builder.getArrayAttr($0)";
 
   Attr elementAttr = element;
 }
@@ -2023,6 +2031,10 @@ class PredAttrTrait<string descr, Pred pred> : PredTrait<descr, pred>;
 // OpTrait definitions
 //===----------------------------------------------------------------------===//
 
+// A trait that describes the structure of operation will be marked with
+// `StructuralOpTrait` and they will be verified first.
+class StructuralOpTrait;
+
 // These classes are used to define operation specific traits.
 class NativeOpTrait<string name, list<Trait> traits = []>
     : NativeTrait<name, "Op"> {
@@ -2053,16 +2065,19 @@ class PredOpTrait<string descr, Pred pred, list<Trait> traits = []>
 // Op defines an affine scope.
 def AffineScope : NativeOpTrait<"AffineScope">;
 // Op defines an automatic allocation scope.
-def AutomaticAllocationScope : NativeOpTrait<"AutomaticAllocationScope">;
+def AutomaticAllocationScope :
+  NativeOpTrait<"AutomaticAllocationScope">;
 // Op supports operand broadcast behavior.
 def ResultsBroadcastableShape :
   NativeOpTrait<"ResultsBroadcastableShape">;
 // X op Y == Y op X
 def Commutative  : NativeOpTrait<"IsCommutative">;
 // op op X == op X (unary) / X op X == X (binary)
-def Idempotent  : NativeOpTrait<"IsIdempotent">;
+// FIXME: Idempotent should depend on SameOperandsAndResultType
+def Idempotent : NativeOpTrait<"IsIdempotent">;
 // op op X == X
-def Involution  : NativeOpTrait<"IsInvolution">;
+// FIXME: Involution should depend on SameOperandsAndResultType
+def Involution : NativeOpTrait<"IsInvolution">;
 // Op behaves like a constant.
 def ConstantLike : NativeOpTrait<"ConstantLike">;
 // Op is isolated from above.
@@ -2074,9 +2089,11 @@ def SameTypeOperands : NativeOpTrait<"SameTypeOperands">;
 // Op has same shape for all operands.
 def SameOperandsShape : NativeOpTrait<"SameOperandsShape">;
 // Op has same operand and result shape.
-def SameOperandsAndResultShape : NativeOpTrait<"SameOperandsAndResultShape">;
+def SameOperandsAndResultShape :
+  NativeOpTrait<"SameOperandsAndResultShape">;
 // Op has the same element type (or type itself, if scalar) for all operands.
-def SameOperandsElementType : NativeOpTrait<"SameOperandsElementType">;
+def SameOperandsElementType :
+  NativeOpTrait<"SameOperandsElementType">;
 // Op has the same operand and result element type (or type itself, if scalar).
 def SameOperandsAndResultElementType :
   NativeOpTrait<"SameOperandsAndResultElementType">;
@@ -2088,11 +2105,11 @@ def MemRefsNormalizable : NativeOpTrait<"MemRefsNormalizable">;
 // Op is elementwise on tensor/vector operands and results.
 def Elementwise : NativeOpTrait<"Elementwise">;
 // Elementwise op can be applied to scalars instead tensor/vector operands.
-def Scalarizable : NativeOpTrait<"Scalarizable">;
+def Scalarizable : NativeOpTrait<"Scalarizable", [Elementwise]>;
 // Elementwise op can be applied to all-vector operands.
-def Vectorizable : NativeOpTrait<"Vectorizable">;
+def Vectorizable : NativeOpTrait<"Vectorizable", [Elementwise]>;
 // Elementwise op can be applied to all-tensor operands.
-def Tensorizable : NativeOpTrait<"Tensorizable">;
+def Tensorizable : NativeOpTrait<"Tensorizable", [Elementwise]>;
 
 // Group together `Elementwise`, `Scalarizable`, `Vectorizable`, and
 // `Tensorizable` for convenience.
@@ -2104,21 +2121,23 @@ def ElementwiseMappable : TraitList<[
 ]>;
 
 // Op's regions have a single block.
-def SingleBlock : NativeOpTrait<"SingleBlock">;
+def SingleBlock : NativeOpTrait<"SingleBlock">, StructuralOpTrait;
 
 // Op's regions have a single block with the specified terminator.
 class SingleBlockImplicitTerminator<string op>
-    : ParamNativeOpTrait<"SingleBlockImplicitTerminator", op>;
+    : ParamNativeOpTrait<"SingleBlockImplicitTerminator", op>,
+      StructuralOpTrait;
 
 // Op's regions don't have terminator.
-def NoTerminator : NativeOpTrait<"NoTerminator">;
+def NoTerminator : NativeOpTrait<"NoTerminator">, StructuralOpTrait;
 
 // Op's parent operation is the provided one.
 class HasParent<string op>
-    : ParamNativeOpTrait<"HasParent", op>;
+    : ParamNativeOpTrait<"HasParent", op>, StructuralOpTrait;
 
 class ParentOneOf<list<string> ops>
-    : ParamNativeOpTrait<"HasParent", !interleave(ops, ", ")>;
+    : ParamNativeOpTrait<"HasParent", !interleave(ops, ", ")>,
+      StructuralOpTrait;
 
 // Op result type is derived from the first attribute. If the attribute is an
 // subclass of `TypeAttrBase`, its value is used, otherwise, the type of the
@@ -2147,13 +2166,15 @@ def SameVariadicResultSize : GenInternalOpTrait<"SameVariadicResultSize">;
 // vector that has the same number of elements as the number of ODS declared
 // operands. That means even if some operands are non-variadic, the attribute
 // still need to have an element for its size, which is always 1.
-def AttrSizedOperandSegments : NativeOpTrait<"AttrSizedOperandSegments">;
+def AttrSizedOperandSegments :
+  NativeOpTrait<"AttrSizedOperandSegments">, StructuralOpTrait;
 // Similar to AttrSizedOperandSegments, but used for results. The attribute
 // should be named as `result_segment_sizes`.
-def AttrSizedResultSegments  : NativeOpTrait<"AttrSizedResultSegments">;
+def AttrSizedResultSegments  :
+  NativeOpTrait<"AttrSizedResultSegments">, StructuralOpTrait;
 
 // Op attached regions have no arguments
-def NoRegionArguments : NativeOpTrait<"NoRegionArguments">;
+def NoRegionArguments : NativeOpTrait<"NoRegionArguments">, StructuralOpTrait;
 
 //===----------------------------------------------------------------------===//
 // OpInterface definitions
@@ -2190,6 +2211,11 @@ class OpInterfaceTrait<string name, code verifyBody = [{}],
   // Specify the body of the verification function. `$_op` will be replaced with
   // the operation being verified.
   code verify = verifyBody;
+
+  // A bit indicating if the verifier needs to access the ops in the regions. If
+  // it set to `1`, the region ops will be verified before invoking this
+  // verifier.
+  bit verifyWithRegions = 0;
 
   // Specify the list of traits that need to be verified before the verification
   // of this OpInterfaceTrait.
@@ -2442,21 +2468,43 @@ class Op<Dialect dialect, string mnemonic, list<Trait> props = []> {
   // provided.
   bit skipDefaultBuilders = 0;
 
-  // Custom parser.
+  // Custom parser and printer.
+  // NOTE: These fields are deprecated in favor of `assemblyFormat` or
+  // `hasCustomAssemblyFormat`, and are slated for deletion.
   code parser = ?;
-
-  // Custom printer.
   code printer = ?;
 
   // Custom assembly format.
+  /// This field corresponds to a declarative description of the assembly format
+  /// for this operation. If populated, the `hasCustomAssemblyFormat` field is
+  /// ignored.
   string assemblyFormat = ?;
+  /// This field indicates that the operation has a custom assembly format
+  /// implemented in C++. When set to `1` a `parse` and `print` method are generated
+  /// on the operation class. The operation should implement these methods to
+  /// support the custom format of the operation. The methods have the form:
+  ///   * ParseResult parse(OpAsmParser &parser, OperationState &result)
+  ///   * void print(OpAsmPrinter &p)
+  bit hasCustomAssemblyFormat = 0;
 
   // A bit indicating if the operation has additional invariants that need to
   // verified (aside from those verified by other ODS constructs). If set to `1`,
   // an additional `LogicalResult verify()` declaration will be generated on the
   // operation class. The operation should implement this method and verify the
-  // additional necessary invariants.
+  // additional necessary invariants. This verifier shouldn't access any nested
+  // operations because those operations may ill-formed. Use the
+  // `hasRegionVerifier` below instead.
   bit hasVerifier = 0;
+
+  // A bit indicating if the operation has additional invariants that need to
+  // verified and which associate with regions (aside from those verified by the
+  // traits). If set to `1`, an additional `LogicalResult verifyRegions()`
+  // declaration will be generated on the operation class. The operation should
+  // implement this method and verify the additional necessary invariants
+  // associated with regions. Note that this method is invoked after all the
+  // region ops are verified.
+  bit hasRegionVerifier = 0;
+
   // A custom code block corresponding to the extra verification code of the
   // operation.
   // NOTE: This field is deprecated in favor of `hasVerifier` and is slated for
@@ -2485,34 +2533,6 @@ class Op<Dialect dialect, string mnemonic, list<Trait> props = []> {
   // generated code is placed inside the op's C++ namespace. `$cppClass` is
   // replaced by the op's C++ class name.
   code extraClassDefinition = ?;
-}
-
-// Base class for ops with static/dynamic offset, sizes and strides
-// attributes/arguments.
-class BaseOpWithOffsetSizesAndStrides<Dialect dialect, string mnemonic,
-                                      list<Trait> traits = []> :
-  Op<dialect, mnemonic, traits> {
-
-  // For every such op, there needs to be a:
-  //   * void print(OpAsmPrinter &p, ${C++ class of Op} op)
-  //   * ParseResult parse${C++ class of Op}(OpAsmParser &parser,
-  //                                         OperationState &result)
-  // functions.
-  let printer = [{ return ::print(p, *this); }];
-  let parser = [{ return ::parse$cppClass(parser, result); }];
-
-  code extraBaseClassDeclaration = [{
-    /// Returns the dynamic sizes for this subview operation if specified.
-    ::mlir::Operation::operand_range getDynamicSizes() { return sizes(); }
-
-    /// Return the list of Range (i.e. offset, size, stride). Each
-    /// Range entry contains either the dynamic value or a ConstantIndexOp
-    /// constructed with `b` at location `loc`.
-    ::mlir::SmallVector<::mlir::Range, 8> getOrCreateRanges(
-        ::mlir::OpBuilder &b, ::mlir::Location loc) {
-      return ::mlir::getOrCreateRanges(*this, b, loc);
-    }
-  }];
 }
 
 // The arguments of an op.
@@ -3135,7 +3155,8 @@ class TypeDef<Dialect dialect, string name, list<Trait> traits = [],
 class AttrOrTypeParameter<string type, string desc, string accessorType = ""> {
   // Custom memory allocation code for storage constructor.
   code allocator = ?;
-  // Custom comparator used to compare two instances for equality.
+  // Comparator used to compare two instances for equality. By default, it uses
+  // the C++ equality operator.
   code comparator = ?;
   // The C++ type of this parameter.
   string cppType = type;
@@ -3148,15 +3169,27 @@ class AttrOrTypeParameter<string type, string desc, string accessorType = ""> {
   string summary = desc;
   // The format string for the asm syntax (documentation only).
   string syntax = ?;
-  // The default parameter parser is `::mlir::parseField<T>($_parser)`, which
-  // returns `FailureOr<T>`. Overload `parseField` to support parsing for your
-  // type. Or you can provide a customer printer. For attributes, "$_type" will
-  // be replaced with the required attribute type.
+  // The default parameter parser is `::mlir::FieldParser<T>::parse($_parser)`,
+  // which returns `FailureOr<T>`. Specialize `FieldParser` to support parsing
+  // for your type. Or you can provide a customer printer. For attributes,
+  // "$_type" will be replaced with the required attribute type.
   string parser = ?;
   // The default parameter printer is `$_printer << $_self`. Overload the stream
   // operator of `AsmPrinter` as necessary to print your type. Or you can
   // provide a custom printer.
   string printer = ?;
+  // Mark a parameter as optional. The C++ type of parameters marked as optional
+  // must be default constructible and be contextually convertible to `bool`.
+  // Any `Optional<T>` and any attribute type satisfies these requirements.
+  bit isOptional = 0;
+  // Provide a default value for the parameter. Parameters with default values
+  // are considered optional. If a value was not parsed for the parameter, it
+  // will be set to the default value. Parameters equal to their default values
+  // are elided when printing. Equality is checked using the `comparator` field,
+  // which by default is the C++ equality operator. The current MLIR context is
+  // made available through `$_ctx`, e.g., for constructing default values for
+  // attributes and types.
+  string defaultValue = ?;
 }
 class AttrParameter<string type, string desc, string accessorType = "">
  : AttrOrTypeParameter<type, desc, accessorType>;
@@ -3199,6 +3232,19 @@ class ArrayRefOfSelfAllocationParameter<string arrayOf, string desc> :
       tmpFields.push_back($_self[i].allocateInto($_allocator));
     $_dst = $_allocator.copyInto(ArrayRef<}] # arrayOf # [{>(tmpFields));
   }];
+}
+
+// An optional parameter.
+class OptionalParameter<string type, string desc = ""> :
+    AttrOrTypeParameter<type, desc> {
+  let isOptional = 1;
+}
+
+// A parameter with a default value.
+class DefaultValuedParameter<string type, string value, string desc = ""> :
+    AttrOrTypeParameter<type, desc> {
+  let isOptional = 1;
+  let defaultValue = value;
 }
 
 // This is a special parameter used for AttrDefs that represents a `mlir::Type`

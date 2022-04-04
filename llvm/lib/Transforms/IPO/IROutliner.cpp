@@ -691,8 +691,6 @@ static void moveFunctionData(Function &Old, Function &New,
     for (Instruction *I : DebugInsts)
       I->eraseFromParent();
   }
-
-  assert(NewEnds.size() > 0 && "No return instruction for new function?");
 }
 
 /// Find the the constants that will need to be lifted into arguments
@@ -969,12 +967,11 @@ static bool outputHasNonPHI(Value *V, unsigned PHILoc, PHINode &PN,
   // We check to see if the value is used by the PHINode from some other
   // predecessor not included in the region.  If it is, we make sure
   // to keep it as an output.
-  SmallVector<unsigned, 2> IncomingNumbers(PN.getNumIncomingValues());
-  std::iota(IncomingNumbers.begin(), IncomingNumbers.end(), 0);
-  if (any_of(IncomingNumbers, [PHILoc, &PN, V, &BlocksInRegion](unsigned Idx) {
-        return (Idx != PHILoc && V == PN.getIncomingValue(Idx) &&
-                !BlocksInRegion.contains(PN.getIncomingBlock(Idx)));
-      }))
+  if (any_of(llvm::seq<unsigned>(0, PN.getNumIncomingValues()),
+             [PHILoc, &PN, V, &BlocksInRegion](unsigned Idx) {
+               return (Idx != PHILoc && V == PN.getIncomingValue(Idx) &&
+                       !BlocksInRegion.contains(PN.getIncomingBlock(Idx)));
+             }))
     return true;
 
   // Check if the value is used by any other instructions outside the region.
@@ -2680,7 +2677,7 @@ unsigned IROutliner::doOutline(Module &M) {
       OS->Candidate->getBasicBlocks(BlocksInRegion, BE);
       OS->CE = new (ExtractorAllocator.Allocate())
           CodeExtractor(BE, nullptr, false, nullptr, nullptr, nullptr, false,
-                        false, "outlined");
+                        false, nullptr, "outlined");
       findAddInputsOutputs(M, *OS, NotSame);
       if (!OS->IgnoreRegion)
         OutlinedRegions.push_back(OS);
@@ -2791,7 +2788,7 @@ unsigned IROutliner::doOutline(Module &M) {
       OS->Candidate->getBasicBlocks(BlocksInRegion, BE);
       OS->CE = new (ExtractorAllocator.Allocate())
           CodeExtractor(BE, nullptr, false, nullptr, nullptr, nullptr, false,
-                        false, "outlined");
+                        false, nullptr, "outlined");
       bool FunctionOutlined = extractSection(*OS);
       if (FunctionOutlined) {
         unsigned StartIdx = OS->Candidate->getStartIdx();

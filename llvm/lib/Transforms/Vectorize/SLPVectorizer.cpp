@@ -64,7 +64,6 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/NoFolder.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Type.h"
@@ -73,7 +72,6 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
@@ -728,19 +726,18 @@ static void inversePermutation(ArrayRef<unsigned> Indices,
 
 /// \returns inserting index of InsertElement or InsertValue instruction,
 /// using Offset as base offset for index.
-static Optional<int> getInsertIndex(Value *InsertInst, unsigned Offset) {
+static Optional<unsigned> getInsertIndex(Value *InsertInst,
+                                         unsigned Offset = 0) {
   int Index = Offset;
   if (auto *IE = dyn_cast<InsertElementInst>(InsertInst)) {
     if (auto *CI = dyn_cast<ConstantInt>(IE->getOperand(2))) {
       auto *VT = cast<FixedVectorType>(IE->getType());
       if (CI->getValue().uge(VT->getNumElements()))
-        return UndefMaskElem;
+        return None;
       Index *= VT->getNumElements();
       Index += CI->getZExtValue();
       return Index;
     }
-    if (isa<UndefValue>(IE->getOperand(2)))
-      return UndefMaskElem;
     return None;
   }
 
@@ -761,11 +758,7 @@ static Optional<int> getInsertIndex(Value *InsertInst, unsigned Offset) {
   return Index;
 }
 
-/// Reorders the list of scalars in accordance with the given \p Order and then
-/// the \p Mask. \p Order - is the original order of the scalars, need to
-/// reorder scalars into an unordered state at first according to the given
-/// order. Then the ordered scalars are shuffled once again in accordance with
-/// the provided mask.
+/// Reorders the list of scalars in accordance with the given \p Mask.
 static void reorderScalars(SmallVectorImpl<Value *> &Scalars,
                            ArrayRef<int> Mask) {
   assert(!Mask.empty() && "Expected non-empty mask.");
@@ -797,8 +790,8 @@ public:
           TargetLibraryInfo *TLi, AAResults *Aa, LoopInfo *Li,
           DominatorTree *Dt, AssumptionCache *AC, DemandedBits *DB,
           const DataLayout *DL, OptimizationRemarkEmitter *ORE)
-      : F(Func), SE(Se), TTI(Tti), TLI(TLi), AA(Aa), LI(Li), DT(Dt), AC(AC),
-        DB(DB), DL(DL), ORE(ORE), Builder(Se->getContext()) {
+      : BatchAA(*Aa), F(Func), SE(Se), TTI(Tti), TLI(TLi), LI(Li),
+        DT(Dt), AC(AC), DB(DB), DL(DL), ORE(ORE), Builder(Se->getContext()) {
     CodeMetrics::collectEphemeralValues(F, AC, EphValues);
     // Use the vector register size specified by the target unless overridden
     // by a command-line option.
@@ -1909,6 +1902,41 @@ public:
   ~BoUpSLP();
 
 private:
+  /// Check if the operands on the edges \p Edges of the \p UserTE allows
+  /// reordering (i.e. the operands can be reordered because they have only one
+  /// user and reordarable).
+  /// \param NonVectorized List of all gather nodes that require reordering
+  /// (e.g., gather of extractlements or partially vectorizable loads).
+  /// \param GatherOps List of gather operand nodes for \p UserTE that require
+  /// reordering, subset of \p NonVectorized.
+  bool
+  canReorderOperands(TreeEntry *UserTE,
+                     SmallVectorImpl<std::pair<unsigned, TreeEntry *>> &Edges,
+                     ArrayRef<TreeEntry *> ReorderableGathers,
+                     SmallVectorImpl<TreeEntry *> &GatherOps);
+
+  /// Returns vectorized operand \p OpIdx of the node \p UserTE from the graph,
+  /// if any. If it is not vectorized (gather node), returns nullptr.
+  TreeEntry *getVectorizedOperand(TreeEntry *UserTE, unsigned OpIdx) {
+    ArrayRef<Value *> VL = UserTE->getOperand(OpIdx);
+    TreeEntry *TE = nullptr;
+    const auto *It = find_if(VL, [this, &TE](Value *V) {
+      TE = getTreeEntry(V);
+      return TE;
+    });
+    if (It != VL.end() && TE->isSame(VL))
+      return TE;
+    return nullptr;
+  }
+
+  /// Returns vectorized operand \p OpIdx of the node \p UserTE from the graph,
+  /// if any. If it is not vectorized (gather node), returns nullptr.
+  const TreeEntry *getVectorizedOperand(const TreeEntry *UserTE,
+                                        unsigned OpIdx) const {
+    return const_cast<BoUpSLP *>(this)->getVectorizedOperand(
+        const_cast<TreeEntry *>(UserTE), OpIdx);
+  }
+
   /// Checks if all users of \p I are the part of the vectorization tree.
   bool areAllUsersVectorized(Instruction *I,
                              ArrayRef<Value *> VectorizedVals) const;
@@ -1935,12 +1963,17 @@ private:
   /// Vectorize a single entry in the tree, starting in \p VL.
   Value *vectorizeTree(ArrayRef<Value *> VL);
 
+  /// Create a new vector from a list of scalar values.  Produces a sequence
+  /// which exploits values reused across lanes, and arranges the inserts
+  /// for ease of later optimization.
+  Value *createBuildVector(ArrayRef<Value *> VL);
+
   /// \returns the scalarization cost for this type. Scalarization in this
   /// context means the creation of vectors from a group of scalars. If \p
   /// NeedToShuffle is true, need to add a cost of reshuffling some of the
   /// vector elements.
   InstructionCost getGatherCost(FixedVectorType *Ty,
-                                const DenseSet<unsigned> &ShuffledIndices,
+                                const APInt &ShuffledIndices,
                                 bool NeedToShuffle) const;
 
   /// Checks if the gathered \p VL can be represented as shuffle(s) of previous
@@ -2397,7 +2430,7 @@ private:
     }
     bool aliased = true;
     if (Loc1.Ptr && isSimple(Inst1))
-      aliased = isModOrRefSet(AA->getModRefInfo(Inst2, Loc1));
+      aliased = isModOrRefSet(BatchAA.getModRefInfo(Inst2, Loc1));
     // Store the result in the cache.
     result = aliased;
     return aliased;
@@ -2408,6 +2441,11 @@ private:
   /// Cache for alias results.
   /// TODO: consider moving this to the AliasAnalysis itself.
   DenseMap<AliasCacheKey, Optional<bool>> AliasCache;
+
+  // Cache for pointerMayBeCaptured calls inside AA.  This is preserved
+  // globally through SLP because we don't perform any action which
+  // invalidates capture results.
+  BatchAAResults BatchAA;
 
   /// Removes an instruction from its block and eventually deletes it.
   /// It's like Instruction::eraseFromParent() except that the actual deletion
@@ -2456,7 +2494,6 @@ private:
       NextLoadStore = nullptr;
       IsScheduled = false;
       SchedulingRegionID = BlockSchedulingRegionID;
-      UnscheduledDepsInBundle = UnscheduledDeps;
       clearDependencies();
       OpValue = OpVal;
       TE = nullptr;
@@ -2467,18 +2504,30 @@ private:
     void verify() {
       if (hasValidDependencies()) {
         assert(UnscheduledDeps <= Dependencies && "invariant");
-        assert(UnscheduledDeps <= FirstInBundle->UnscheduledDepsInBundle &&
-               "bundle must have at least as many dependencies as member");
+      } else {
+        assert(UnscheduledDeps == Dependencies && "invariant");
       }
 
       if (IsScheduled) {
-        assert(isSchedulingEntity() && hasValidDependencies() &&
-               UnscheduledDeps == 0 &&
-               "unexpected scheduled state");
+        assert(isSchedulingEntity() &&
+                "unexpected scheduled state");
+        for (const ScheduleData *BundleMember = this; BundleMember;
+             BundleMember = BundleMember->NextInBundle) {
+          assert(BundleMember->hasValidDependencies() &&
+                 BundleMember->UnscheduledDeps == 0 &&
+                 "unexpected scheduled state");
+          assert((BundleMember == this || !BundleMember->IsScheduled) &&
+                 "only bundle is marked scheduled");
+        }
       }
+
+      assert(Inst->getParent() == FirstInBundle->Inst->getParent() &&
+             "all bundle members must be in same basic block");
     }
 
     /// Returns true if the dependency information has been calculated.
+    /// Note that depenendency validity can vary between instructions within
+    /// a single bundle.
     bool hasValidDependencies() const { return Dependencies != InvalidDeps; }
 
     /// Returns true for single instructions and for bundle representatives
@@ -2496,20 +2545,23 @@ private:
     bool isReady() const {
       assert(isSchedulingEntity() &&
              "can't consider non-scheduling entity for ready list");
-      return UnscheduledDepsInBundle == 0 && !IsScheduled;
+      return unscheduledDepsInBundle() == 0 && !IsScheduled;
     }
 
-    /// Modifies the number of unscheduled dependencies, also updating it for
-    /// the whole bundle.
+    /// Modifies the number of unscheduled dependencies for this instruction,
+    /// and returns the number of remaining dependencies for the containing
+    /// bundle.
     int incrementUnscheduledDeps(int Incr) {
+      assert(hasValidDependencies() &&
+             "increment of unscheduled deps would be meaningless");
       UnscheduledDeps += Incr;
-      return FirstInBundle->UnscheduledDepsInBundle += Incr;
+      return FirstInBundle->unscheduledDepsInBundle();
     }
 
     /// Sets the number of unscheduled dependencies to the number of
     /// dependencies.
     void resetUnscheduledDeps() {
-      incrementUnscheduledDeps(Dependencies - UnscheduledDeps);
+      UnscheduledDeps = Dependencies;
     }
 
     /// Clears all dependency information.
@@ -2517,6 +2569,18 @@ private:
       Dependencies = InvalidDeps;
       resetUnscheduledDeps();
       MemoryDependencies.clear();
+    }
+
+    int unscheduledDepsInBundle() const {
+      assert(isSchedulingEntity() && "only meaningful on the bundle");
+      int Sum = 0;
+      for (const ScheduleData *BundleMember = this; BundleMember;
+           BundleMember = BundleMember->NextInBundle) {
+        if (BundleMember->UnscheduledDeps == InvalidDeps)
+          return InvalidDeps;
+        Sum += BundleMember->UnscheduledDeps;
+      }
+      return Sum;
     }
 
     void dump(raw_ostream &os) const {
@@ -2536,6 +2600,12 @@ private:
     }
 
     Instruction *Inst = nullptr;
+
+    /// Opcode of the current instruction in the schedule data.
+    Value *OpValue = nullptr;
+
+    /// The TreeEntry that this instruction corresponds to.
+    TreeEntry *TE = nullptr;
 
     /// Points to the head in an instruction bundle (and always to this for
     /// single instructions).
@@ -2572,22 +2642,12 @@ private:
     /// Note that this is negative as long as Dependencies is not calculated.
     int UnscheduledDeps = InvalidDeps;
 
-    /// The sum of UnscheduledDeps in a bundle. Equals to UnscheduledDeps for
-    /// single instructions.
-    int UnscheduledDepsInBundle = InvalidDeps;
+    /// The lane of this node in the TreeEntry.
+    int Lane = -1;
 
     /// True if this instruction is scheduled (or considered as scheduled in the
     /// dry-run).
     bool IsScheduled = false;
-
-    /// Opcode of the current instruction in the schedule data.
-    Value *OpValue = nullptr;
-
-    /// The TreeEntry that this instruction corresponds to.
-    TreeEntry *TE = nullptr;
-
-    /// The lane of this node in the TreeEntry.
-    int Lane = -1;
   };
 
 #ifndef NDEBUG
@@ -2625,10 +2685,19 @@ private:
       ++SchedulingRegionID;
     }
 
-    ScheduleData *getScheduleData(Value *V) {
-      ScheduleData *SD = ScheduleDataMap[V];
-      if (SD && SD->SchedulingRegionID == SchedulingRegionID)
+    ScheduleData *getScheduleData(Instruction *I) {
+      if (BB != I->getParent())
+        // Avoid lookup if can't possibly be in map.
+        return nullptr;
+      ScheduleData *SD = ScheduleDataMap[I];
+      if (SD && isInSchedulingRegion(SD))
         return SD;
+      return nullptr;
+    }
+
+    ScheduleData *getScheduleData(Value *V) {
+      if (auto *I = dyn_cast<Instruction>(V))
+        return getScheduleData(I);
       return nullptr;
     }
 
@@ -2638,7 +2707,7 @@ private:
       auto I = ExtraScheduleDataMap.find(V);
       if (I != ExtraScheduleDataMap.end()) {
         ScheduleData *SD = I->second[Key];
-        if (SD && SD->SchedulingRegionID == SchedulingRegionID)
+        if (SD && isInSchedulingRegion(SD))
           return SD;
       }
       return nullptr;
@@ -2741,12 +2810,16 @@ private:
         assert(SD && "primary scheduledata must exist in window");
         assert(isInSchedulingRegion(SD) &&
                "primary schedule data not in window?");
+        assert(isInSchedulingRegion(SD->FirstInBundle) &&
+               "entire bundle in window!");
+        (void)SD;
         doForAllOpcodes(I, [](ScheduleData *SD) { SD->verify(); });
       }
 
       for (auto *SD : ReadyInsts) {
         assert(SD->isSchedulingEntity() && SD->isReady() &&
                "item in ready list not ready?");
+        (void)SD;
       }
     }
 
@@ -2757,7 +2830,7 @@ private:
       auto I = ExtraScheduleDataMap.find(V);
       if (I != ExtraScheduleDataMap.end())
         for (auto &P : I->second)
-          if (P.second->SchedulingRegionID == SchedulingRegionID)
+          if (isInSchedulingRegion(P.second))
             Action(P.second);
     }
 
@@ -2827,7 +2900,7 @@ private:
     /// Attaches ScheduleData to Instruction.
     /// Note that the mapping survives during all vectorization iterations, i.e.
     /// ScheduleData structures are recycled.
-    DenseMap<Value *, ScheduleData *> ScheduleDataMap;
+    DenseMap<Instruction *, ScheduleData *> ScheduleDataMap;
 
     /// Attaches ScheduleData to Instruction with the leading key.
     DenseMap<Value *, SmallDenseMap<Value *, ScheduleData *>>
@@ -2858,8 +2931,8 @@ private:
 
     /// The ID of the scheduling region. For a new vectorization iteration this
     /// is incremented which "removes" all ScheduleData from the region.
-    // Make sure that the initial SchedulingRegionID is greater than the
-    // initial SchedulingRegionID in ScheduleData (which is 0).
+    /// Make sure that the initial SchedulingRegionID is greater than the
+    /// initial SchedulingRegionID in ScheduleData (which is 0).
     int SchedulingRegionID = 1;
   };
 
@@ -2902,7 +2975,6 @@ private:
   ScalarEvolution *SE;
   TargetTransformInfo *TTI;
   TargetLibraryInfo *TLI;
-  AAResults *AA;
   LoopInfo *LI;
   DominatorTree *DT;
   AssumptionCache *AC;
@@ -3353,6 +3425,44 @@ void BoUpSLP::reorderTopToBottom() {
   }
 }
 
+bool BoUpSLP::canReorderOperands(
+    TreeEntry *UserTE, SmallVectorImpl<std::pair<unsigned, TreeEntry *>> &Edges,
+    ArrayRef<TreeEntry *> ReorderableGathers,
+    SmallVectorImpl<TreeEntry *> &GatherOps) {
+  for (unsigned I = 0, E = UserTE->getNumOperands(); I < E; ++I) {
+    if (any_of(Edges, [I](const std::pair<unsigned, TreeEntry *> &OpData) {
+          return OpData.first == I &&
+                 OpData.second->State == TreeEntry::Vectorize;
+        }))
+      continue;
+    if (TreeEntry *TE = getVectorizedOperand(UserTE, I)) {
+      // Do not reorder if operand node is used by many user nodes.
+      if (any_of(TE->UserTreeIndices,
+                 [UserTE](const EdgeInfo &EI) { return EI.UserTE != UserTE; }))
+        return false;
+      // Add the node to the list of the ordered nodes with the identity
+      // order.
+      Edges.emplace_back(I, TE);
+      continue;
+    }
+    ArrayRef<Value *> VL = UserTE->getOperand(I);
+    TreeEntry *Gather = nullptr;
+    if (count_if(ReorderableGathers, [VL, &Gather](TreeEntry *TE) {
+          assert(TE->State != TreeEntry::Vectorize &&
+                 "Only non-vectorized nodes are expected.");
+          if (TE->isSame(VL)) {
+            Gather = TE;
+            return true;
+          }
+          return false;
+        }) > 1)
+      return false;
+    if (Gather)
+      GatherOps.push_back(Gather);
+  }
+  return true;
+}
+
 void BoUpSLP::reorderBottomToTop(bool IgnoreReorder) {
   SetVector<TreeEntry *> OrderedEntries;
   DenseMap<const TreeEntry *, OrdersType> GathersToOrders;
@@ -3373,42 +3483,6 @@ void BoUpSLP::reorderBottomToTop(bool IgnoreReorder) {
     }
   });
 
-  // Checks if the operands of the users are reordarable and have only single
-  // use.
-  auto &&CheckOperands =
-      [this, &NonVectorized](const auto &Data,
-                             SmallVectorImpl<TreeEntry *> &GatherOps) {
-        for (unsigned I = 0, E = Data.first->getNumOperands(); I < E; ++I) {
-          if (any_of(Data.second,
-                     [I](const std::pair<unsigned, TreeEntry *> &OpData) {
-                       return OpData.first == I &&
-                              OpData.second->State == TreeEntry::Vectorize;
-                     }))
-            continue;
-          ArrayRef<Value *> VL = Data.first->getOperand(I);
-          const TreeEntry *TE = nullptr;
-          const auto *It = find_if(VL, [this, &TE](Value *V) {
-            TE = getTreeEntry(V);
-            return TE;
-          });
-          if (It != VL.end() && TE->isSame(VL))
-            return false;
-          TreeEntry *Gather = nullptr;
-          if (count_if(NonVectorized, [VL, &Gather](TreeEntry *TE) {
-                assert(TE->State != TreeEntry::Vectorize &&
-                       "Only non-vectorized nodes are expected.");
-                if (TE->isSame(VL)) {
-                  Gather = TE;
-                  return true;
-                }
-                return false;
-              }) > 1)
-            return false;
-          if (Gather)
-            GatherOps.push_back(Gather);
-        }
-        return true;
-      };
   // 1. Propagate order to the graph nodes, which use only reordered nodes.
   // I.e., if the node has operands, that are reordered, try to make at least
   // one operand order in the natural order and reorder others + reorder the
@@ -3445,10 +3519,11 @@ void BoUpSLP::reorderBottomToTop(bool IgnoreReorder) {
     // Erase filtered entries.
     for_each(Filtered,
              [&OrderedEntries](TreeEntry *TE) { OrderedEntries.remove(TE); });
-    for (const auto &Data : Users) {
+    for (auto &Data : Users) {
       // Check that operands are used only in the User node.
       SmallVector<TreeEntry *> GatherOps;
-      if (!CheckOperands(Data, GatherOps)) {
+      if (!canReorderOperands(Data.first, Data.second, NonVectorized,
+                              GatherOps)) {
         for_each(Data.second,
                  [&OrderedEntries](const std::pair<unsigned, TreeEntry *> &Op) {
                    OrderedEntries.remove(Op.second);
@@ -3464,6 +3539,7 @@ void BoUpSLP::reorderBottomToTop(bool IgnoreReorder) {
       // the same node my be considered several times, though might be not
       // profitable.
       SmallPtrSet<const TreeEntry *, 4> VisitedOps;
+      SmallPtrSet<const TreeEntry *, 4> VisitedUsers;
       for (const auto &Op : Data.second) {
         TreeEntry *OpTE = Op.second;
         if (!VisitedOps.insert(OpTE).second)
@@ -3476,6 +3552,10 @@ void BoUpSLP::reorderBottomToTop(bool IgnoreReorder) {
             return GathersToOrders.find(OpTE)->second;
           return OpTE->ReorderIndices;
         }();
+        unsigned NumOps = count_if(
+            Data.second, [OpTE](const std::pair<unsigned, TreeEntry *> &P) {
+              return P.second == OpTE;
+            });
         // Stores actually store the mask, not the order, need to invert.
         if (OpTE->State == TreeEntry::Vectorize && !OpTE->isAltShuffle() &&
             OpTE->getOpcode() == Instruction::Store && !Order.empty()) {
@@ -3487,14 +3567,52 @@ void BoUpSLP::reorderBottomToTop(bool IgnoreReorder) {
             return Idx == UndefMaskElem ? E : static_cast<unsigned>(Idx);
           });
           fixupOrderingIndices(CurrentOrder);
-          ++OrdersUses.insert(std::make_pair(CurrentOrder, 0)).first->second;
+          OrdersUses.insert(std::make_pair(CurrentOrder, 0)).first->second +=
+              NumOps;
         } else {
-          ++OrdersUses.insert(std::make_pair(Order, 0)).first->second;
+          OrdersUses.insert(std::make_pair(Order, 0)).first->second += NumOps;
         }
-        OrdersUses.insert(std::make_pair(OrdersType(), 0)).first->second +=
-            OpTE->UserTreeIndices.size();
-        assert(OrdersUses[{}] > 0 && "Counter cannot be less than 0.");
-        --OrdersUses[{}];
+        auto Res = OrdersUses.insert(std::make_pair(OrdersType(), 0));
+        const auto &&AllowsReordering = [IgnoreReorder, &GathersToOrders](
+                                            const TreeEntry *TE) {
+          if (!TE->ReorderIndices.empty() || !TE->ReuseShuffleIndices.empty() ||
+              (TE->State == TreeEntry::Vectorize && TE->isAltShuffle()) ||
+              (IgnoreReorder && TE->Idx == 0))
+            return true;
+          if (TE->State == TreeEntry::NeedToGather) {
+            auto It = GathersToOrders.find(TE);
+            if (It != GathersToOrders.end())
+              return !It->second.empty();
+            return true;
+          }
+          return false;
+        };
+        for (const EdgeInfo &EI : OpTE->UserTreeIndices) {
+          TreeEntry *UserTE = EI.UserTE;
+          if (!VisitedUsers.insert(UserTE).second)
+            continue;
+          // May reorder user node if it requires reordering, has reused
+          // scalars, is an alternate op vectorize node or its op nodes require
+          // reordering.
+          if (AllowsReordering(UserTE))
+            continue;
+          // Check if users allow reordering.
+          // Currently look up just 1 level of operands to avoid increase of
+          // the compile time.
+          // Profitable to reorder if definitely more operands allow
+          // reordering rather than those with natural order.
+          ArrayRef<std::pair<unsigned, TreeEntry *>> Ops = Users[UserTE];
+          if (static_cast<unsigned>(count_if(
+                  Ops, [UserTE, &AllowsReordering](
+                           const std::pair<unsigned, TreeEntry *> &Op) {
+                    return AllowsReordering(Op.second) &&
+                           all_of(Op.second->UserTreeIndices,
+                                  [UserTE](const EdgeInfo &EI) {
+                                    return EI.UserTE == UserTE;
+                                  });
+                  })) <= Ops.size() / 2)
+            ++Res.first->second;
+        }
       }
       // If no orders - skip current nodes and jump to the next one, if any.
       if (OrdersUses.empty()) {
@@ -3535,7 +3653,7 @@ void BoUpSLP::reorderBottomToTop(bool IgnoreReorder) {
         OrderedEntries.remove(TE);
         if (!VisitedOps.insert(TE).second)
           continue;
-        if (!TE->ReuseShuffleIndices.empty() && TE->ReorderIndices.empty()) {
+        if (TE->ReuseShuffleIndices.size() == BestOrder.size()) {
           // Just reorder reuses indices.
           reorderReuses(TE->ReuseShuffleIndices, Mask);
           continue;
@@ -3795,6 +3913,16 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
     return;
   }
 
+  // Avoid attempting to schedule allocas; there are unmodeled dependencies
+  // for "static" alloca status and for reordering with stacksave calls.
+  for (Value *V : VL) {
+    if (isa<AllocaInst>(V)) {
+      LLVM_DEBUG(dbgs() << "SLP: Gathering due to alloca.\n");
+      newTreeEntry(VL, None /*not vectorized*/, S, UserTreeIdx);
+      return;
+    }
+  }
+
   if (StoreInst *SI = dyn_cast<StoreInst>(S.OpValue))
     if (SI->getValueOperand()->getType()->isVectorTy()) {
       LLVM_DEBUG(dbgs() << "SLP: Gathering due to store vector type.\n");
@@ -4005,13 +4133,9 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
       // Check that we have a buildvector and not a shuffle of 2 or more
       // different vectors.
       ValueSet SourceVectors;
-      int MinIdx = std::numeric_limits<int>::max();
       for (Value *V : VL) {
         SourceVectors.insert(cast<Instruction>(V)->getOperand(0));
-        Optional<int> Idx = *getInsertIndex(V, 0);
-        if (!Idx || *Idx == UndefMaskElem)
-          continue;
-        MinIdx = std::min(MinIdx, *Idx);
+        assert(getInsertIndex(V) != None && "Non-constant or undef index?");
       }
 
       if (count_if(VL, [&SourceVectors](Value *V) {
@@ -4033,10 +4157,8 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
                     decltype(OrdCompare)>
           Indices(OrdCompare);
       for (int I = 0, E = VL.size(); I < E; ++I) {
-        Optional<int> Idx = *getInsertIndex(VL[I], 0);
-        if (!Idx || *Idx == UndefMaskElem)
-          continue;
-        Indices.emplace(*Idx, I);
+        unsigned Idx = *getInsertIndex(VL[I]);
+        Indices.emplace(Idx, I);
       }
       OrdersType CurrentOrder(VL.size(), VL.size());
       bool IsIdentity = true;
@@ -4264,9 +4386,9 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
 
       // We can't combine several GEPs into one vector if they operate on
       // different types.
-      Type *Ty0 = VL0->getOperand(0)->getType();
+      Type *Ty0 = cast<GEPOperator>(VL0)->getSourceElementType();
       for (Value *V : VL) {
-        Type *CurTy = cast<Instruction>(V)->getOperand(0)->getType();
+        Type *CurTy = cast<GEPOperator>(V)->getSourceElementType();
         if (Ty0 != CurTy) {
           LLVM_DEBUG(dbgs()
                      << "SLP: not-vectorizable GEP (different types).\n");
@@ -4534,10 +4656,11 @@ void BoUpSLP::buildTree_rec(ArrayRef<Value *> VL, unsigned Depth,
             Value *RHS = Cmp->getOperand(1);
             CmpInst::Predicate CurrentPred = Cmp->getPredicate();
             if (P0 == AltP0Swapped) {
-              if ((P0 == CurrentPred &&
-                   !areCompatibleCmpOps(BaseOp0, BaseOp1, LHS, RHS)) ||
-                  (AltP0 == CurrentPred &&
-                   areCompatibleCmpOps(BaseOp0, BaseOp1, LHS, RHS)))
+              if (CI != Cmp && S.AltOp != Cmp &&
+                  ((P0 == CurrentPred &&
+                    !areCompatibleCmpOps(BaseOp0, BaseOp1, LHS, RHS)) ||
+                   (AltP0 == CurrentPred &&
+                    areCompatibleCmpOps(BaseOp0, BaseOp1, LHS, RHS))))
                 std::swap(LHS, RHS);
             } else if (P0 != CurrentPred && AltP0 != CurrentPred) {
               std::swap(LHS, RHS);
@@ -4790,12 +4913,12 @@ computeExtractCost(ArrayRef<Value *> VL, FixedVectorType *VecTy,
 /// Build shuffle mask for shuffle graph entries and lists of main and alternate
 /// operations operands.
 static void
-buildSuffleEntryMask(ArrayRef<Value *> VL, ArrayRef<unsigned> ReorderIndices,
-                     ArrayRef<int> ReusesIndices,
-                     const function_ref<bool(Instruction *)> IsAltOp,
-                     SmallVectorImpl<int> &Mask,
-                     SmallVectorImpl<Value *> *OpScalars = nullptr,
-                     SmallVectorImpl<Value *> *AltScalars = nullptr) {
+buildShuffleEntryMask(ArrayRef<Value *> VL, ArrayRef<unsigned> ReorderIndices,
+                      ArrayRef<int> ReusesIndices,
+                      const function_ref<bool(Instruction *)> IsAltOp,
+                      SmallVectorImpl<int> &Mask,
+                      SmallVectorImpl<Value *> *OpScalars = nullptr,
+                      SmallVectorImpl<Value *> *AltScalars = nullptr) {
   unsigned Sz = VL.size();
   Mask.assign(Sz, UndefMaskElem);
   SmallVector<int> OrderMask;
@@ -4823,6 +4946,29 @@ buildSuffleEntryMask(ArrayRef<Value *> VL, ArrayRef<unsigned> ReorderIndices,
     });
     Mask.swap(NewMask);
   }
+}
+
+/// Checks if the specified instruction \p I is an alternate operation for the
+/// given \p MainOp and \p AltOp instructions.
+static bool isAlternateInstruction(const Instruction *I,
+                                   const Instruction *MainOp,
+                                   const Instruction *AltOp) {
+  if (auto *CI0 = dyn_cast<CmpInst>(MainOp)) {
+    auto *AltCI0 = cast<CmpInst>(AltOp);
+    auto *CI = cast<CmpInst>(I);
+    CmpInst::Predicate P0 = CI0->getPredicate();
+    CmpInst::Predicate AltP0 = AltCI0->getPredicate();
+    assert(P0 != AltP0 && "Expected different main/alternate predicates.");
+    CmpInst::Predicate AltP0Swapped = CmpInst::getSwappedPredicate(AltP0);
+    CmpInst::Predicate CurrentPred = CI->getPredicate();
+    if (P0 == AltP0Swapped)
+      return I == AltCI0 ||
+             (I != MainOp &&
+              !areCompatibleCmpOps(CI0->getOperand(0), CI0->getOperand(1),
+                                   CI->getOperand(0), CI->getOperand(1)));
+    return AltP0 == CurrentPred || AltP0Swapped == CurrentPred;
+  }
+  return I->getOpcode() == AltOp->getOpcode();
 }
 
 InstructionCost BoUpSLP::getEntryCost(const TreeEntry *E,
@@ -5192,17 +5338,15 @@ InstructionCost BoUpSLP::getEntryCost(const TreeEntry *E,
         Mask.assign(NumElts, UndefMaskElem);
         std::iota(Mask.begin(), std::next(Mask.begin(), NumScalars), 0);
       }
-      unsigned Offset = *getInsertIndex(VL0, 0);
+      unsigned Offset = *getInsertIndex(VL0);
       bool IsIdentity = true;
       SmallVector<int> PrevMask(NumElts, UndefMaskElem);
       Mask.swap(PrevMask);
       for (unsigned I = 0; I < NumScalars; ++I) {
-        Optional<int> InsertIdx = getInsertIndex(VL[PrevMask[I]], 0);
-        if (!InsertIdx || *InsertIdx == UndefMaskElem)
-          continue;
-        DemandedElts.setBit(*InsertIdx);
-        IsIdentity &= *InsertIdx - Offset == I;
-        Mask[*InsertIdx - Offset] = I;
+        unsigned InsertIdx = *getInsertIndex(VL[PrevMask[I]]);
+        DemandedElts.setBit(InsertIdx);
+        IsIdentity &= InsertIdx - Offset == I;
+        Mask[InsertIdx - Offset] = I;
       }
       assert(Offset < NumElts && "Failed to find vector index offset");
 
@@ -5316,9 +5460,8 @@ InstructionCost BoUpSLP::getEntryCost(const TreeEntry *E,
         // If the selects are the only uses of the compares, they will be dead
         // and we can adjust the cost by removing their cost.
         if (IntrinsicAndUse.second)
-          IntrinsicCost -=
-              TTI->getCmpSelInstrCost(Instruction::ICmp, VecTy, MaskTy,
-                                      CmpInst::BAD_ICMP_PREDICATE, CostKind);
+          IntrinsicCost -= TTI->getCmpSelInstrCost(Instruction::ICmp, VecTy,
+                                                   MaskTy, VecPred, CostKind);
         VecCost = std::min(VecCost, IntrinsicCost);
       }
       LLVM_DEBUG(dumpTreeCosts(E, CommonCost, VecCost, ScalarCost));
@@ -5548,32 +5691,11 @@ InstructionCost BoUpSLP::getEntryCost(const TreeEntry *E,
       }
 
       SmallVector<int> Mask;
-      buildSuffleEntryMask(
+      buildShuffleEntryMask(
           E->Scalars, E->ReorderIndices, E->ReuseShuffleIndices,
           [E](Instruction *I) {
             assert(E->isOpcodeOrAlt(I) && "Unexpected main/alternate opcode");
-            if (auto *CI0 = dyn_cast<CmpInst>(E->getMainOp())) {
-              auto *AltCI0 = cast<CmpInst>(E->getAltOp());
-              auto *CI = cast<CmpInst>(I);
-              CmpInst::Predicate P0 = CI0->getPredicate();
-              CmpInst::Predicate AltP0 = AltCI0->getPredicate();
-              assert(P0 != AltP0 &&
-                     "Expected different main/alternate predicates.");
-              CmpInst::Predicate AltP0Swapped =
-                  CmpInst::getSwappedPredicate(AltP0);
-              CmpInst::Predicate CurrentPred = CI->getPredicate();
-              if (P0 == AltP0Swapped)
-                return (P0 == CurrentPred &&
-                        !areCompatibleCmpOps(
-                            CI0->getOperand(0), CI0->getOperand(1),
-                            CI->getOperand(0), CI->getOperand(1))) ||
-                       (AltP0 == CurrentPred &&
-                        !areCompatibleCmpOps(
-                            CI0->getOperand(0), CI0->getOperand(1),
-                            CI->getOperand(1), CI->getOperand(0)));
-              return AltP0 == CurrentPred || AltP0Swapped == CurrentPred;
-            }
-            return I->getOpcode() == E->getAltOpcode();
+            return isAlternateInstruction(I, E->getMainOp(), E->getAltOp());
           },
           Mask);
       CommonCost =
@@ -5906,42 +6028,41 @@ InstructionCost BoUpSLP::getTreeCost(ArrayRef<Value *> VectorizedVals) {
     // to detect it as a final shuffled/identity match.
     if (auto *VU = dyn_cast_or_null<InsertElementInst>(EU.User)) {
       if (auto *FTy = dyn_cast<FixedVectorType>(VU->getType())) {
-        Optional<int> InsertIdx = getInsertIndex(VU, 0);
-        if (!InsertIdx || *InsertIdx == UndefMaskElem)
-          continue;
-        auto *It = find_if(FirstUsers, [VU](Value *V) {
-          return areTwoInsertFromSameBuildVector(VU,
-                                                 cast<InsertElementInst>(V));
-        });
-        int VecId = -1;
-        if (It == FirstUsers.end()) {
-          VF.push_back(FTy->getNumElements());
-          ShuffleMask.emplace_back(VF.back(), UndefMaskElem);
-          // Find the insertvector, vectorized in tree, if any.
-          Value *Base = VU;
-          while (isa<InsertElementInst>(Base)) {
-            // Build the mask for the vectorized insertelement instructions.
-            if (const TreeEntry *E = getTreeEntry(Base)) {
-              VU = cast<InsertElementInst>(Base);
-              do {
-                int Idx = E->findLaneForValue(Base);
-                ShuffleMask.back()[Idx] = Idx;
-                Base = cast<InsertElementInst>(Base)->getOperand(0);
-              } while (E == getTreeEntry(Base));
-              break;
+        Optional<unsigned> InsertIdx = getInsertIndex(VU);
+        if (InsertIdx) {
+          auto *It = find_if(FirstUsers, [VU](Value *V) {
+            return areTwoInsertFromSameBuildVector(VU,
+                                                   cast<InsertElementInst>(V));
+          });
+          int VecId = -1;
+          if (It == FirstUsers.end()) {
+            VF.push_back(FTy->getNumElements());
+            ShuffleMask.emplace_back(VF.back(), UndefMaskElem);
+            // Find the insertvector, vectorized in tree, if any.
+            Value *Base = VU;
+            while (isa<InsertElementInst>(Base)) {
+              // Build the mask for the vectorized insertelement instructions.
+              if (const TreeEntry *E = getTreeEntry(Base)) {
+                VU = cast<InsertElementInst>(Base);
+                do {
+                  int Idx = E->findLaneForValue(Base);
+                  ShuffleMask.back()[Idx] = Idx;
+                  Base = cast<InsertElementInst>(Base)->getOperand(0);
+                } while (E == getTreeEntry(Base));
+                break;
+              }
+              Base = cast<InsertElementInst>(Base)->getOperand(0);
             }
-            Base = cast<InsertElementInst>(Base)->getOperand(0);
+            FirstUsers.push_back(VU);
+            DemandedElts.push_back(APInt::getZero(VF.back()));
+            VecId = FirstUsers.size() - 1;
+          } else {
+            VecId = std::distance(FirstUsers.begin(), It);
           }
-          FirstUsers.push_back(VU);
-          DemandedElts.push_back(APInt::getZero(VF.back()));
-          VecId = FirstUsers.size() - 1;
-        } else {
-          VecId = std::distance(FirstUsers.begin(), It);
+          ShuffleMask[VecId][*InsertIdx] = EU.Lane;
+          DemandedElts[VecId].setBit(*InsertIdx);
+          continue;
         }
-        int Idx = *InsertIdx;
-        ShuffleMask[VecId][Idx] = EU.Lane;
-        DemandedElts[VecId].setBit(Idx);
-        continue;
       }
     }
 
@@ -6196,17 +6317,11 @@ BoUpSLP::isGatherShuffledEntry(const TreeEntry *TE, SmallVectorImpl<int> &Mask,
   return None;
 }
 
-InstructionCost
-BoUpSLP::getGatherCost(FixedVectorType *Ty,
-                       const DenseSet<unsigned> &ShuffledIndices,
-                       bool NeedToShuffle) const {
-  unsigned NumElts = Ty->getNumElements();
-  APInt DemandedElts = APInt::getZero(NumElts);
-  for (unsigned I = 0; I < NumElts; ++I)
-    if (!ShuffledIndices.count(I))
-      DemandedElts.setBit(I);
+InstructionCost BoUpSLP::getGatherCost(FixedVectorType *Ty,
+                                       const APInt &ShuffledIndices,
+                                       bool NeedToShuffle) const {
   InstructionCost Cost =
-      TTI->getScalarizationOverhead(Ty, DemandedElts, /*Insert*/ true,
+      TTI->getScalarizationOverhead(Ty, ~ShuffledIndices, /*Insert*/ true,
                                     /*Extract*/ false);
   if (NeedToShuffle)
     Cost += TTI->getShuffleCost(TargetTransformInfo::SK_PermuteSingleSrc, Ty);
@@ -6223,19 +6338,19 @@ InstructionCost BoUpSLP::getGatherCost(ArrayRef<Value *> VL) const {
   // Find the cost of inserting/extracting values from the vector.
   // Check if the same elements are inserted several times and count them as
   // shuffle candidates.
-  DenseSet<unsigned> ShuffledElements;
+  APInt ShuffledElements = APInt::getZero(VL.size());
   DenseSet<Value *> UniqueElements;
   // Iterate in reverse order to consider insert elements with the high cost.
   for (unsigned I = VL.size(); I > 0; --I) {
     unsigned Idx = I - 1;
     // No need to shuffle duplicates for constants.
     if (isConstant(VL[Idx])) {
-      ShuffledElements.insert(Idx);
+      ShuffledElements.setBit(Idx);
       continue;
     }
     if (!UniqueElements.insert(VL[Idx]).second) {
       DuplicateNonConst = true;
-      ShuffledElements.insert(Idx);
+      ShuffledElements.setBit(Idx);
     }
   }
   return getGatherCost(VecTy, ShuffledElements, DuplicateNonConst);
@@ -6445,7 +6560,7 @@ public:
 } // namespace
 
 Value *BoUpSLP::vectorizeTree(ArrayRef<Value *> VL) {
-  unsigned VF = VL.size();
+  const unsigned VF = VL.size();
   InstructionsState S = getSameOpcode(VL);
   if (S.getOpcode()) {
     if (TreeEntry *E = getTreeEntry(S.OpValue))
@@ -6501,7 +6616,13 @@ Value *BoUpSLP::vectorizeTree(ArrayRef<Value *> VL) {
       }
   }
 
-  // Check that every instruction appears once in this bundle.
+  // Can't vectorize this, so simply build a new vector with each lane
+  // corresponding to the requested value.
+  return createBuildVector(VL);
+}
+Value *BoUpSLP::createBuildVector(ArrayRef<Value *> VL) {
+  unsigned VF = VL.size();
+  // Exploit possible reuse of values across lanes.
   SmallVector<int> ReuseShuffleIndicies;
   SmallVector<Value *> UniqueValues;
   if (VL.size() > 2) {
@@ -6615,6 +6736,11 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       Builder.SetCurrentDebugLocation(PH->getDebugLoc());
       PHINode *NewPhi = Builder.CreatePHI(VecTy, PH->getNumIncomingValues());
       Value *V = NewPhi;
+
+      // Adjust insertion point once all PHI's have been generated.
+      Builder.SetInsertPoint(&*PH->getParent()->getFirstInsertionPt());
+      Builder.SetCurrentDebugLocation(PH->getDebugLoc());
+
       ShuffleBuilder.addInversedMask(E->ReorderIndices);
       ShuffleBuilder.addMask(E->ReuseShuffleIndices);
       V = ShuffleBuilder.finalize(V);
@@ -6680,7 +6806,7 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
           cast<FixedVectorType>(FirstInsert->getType())->getNumElements();
       const unsigned NumScalars = E->Scalars.size();
 
-      unsigned Offset = *getInsertIndex(VL0, 0);
+      unsigned Offset = *getInsertIndex(VL0);
       assert(Offset < NumElts && "Failed to find vector index offset");
 
       // Create shuffle to resize vector
@@ -6698,11 +6824,9 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       Mask.swap(PrevMask);
       for (unsigned I = 0; I < NumScalars; ++I) {
         Value *Scalar = E->Scalars[PrevMask[I]];
-        Optional<int> InsertIdx = getInsertIndex(Scalar, 0);
-        if (!InsertIdx || *InsertIdx == UndefMaskElem)
-          continue;
-        IsIdentity &= *InsertIdx - Offset == I;
-        Mask[*InsertIdx - Offset] = I;
+        unsigned InsertIdx = *getInsertIndex(Scalar);
+        IsIdentity &= InsertIdx - Offset == I;
+        Mask[InsertIdx - Offset] = I;
       }
       if (!IsIdentity || NumElts != NumScalars) {
         V = Builder.CreateShuffleVector(V, Mask);
@@ -7084,10 +7208,6 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
         V0 = Builder.CreateCmp(CI0->getPredicate(), LHS, RHS);
         auto *AltCI = cast<CmpInst>(E->getAltOp());
         CmpInst::Predicate AltPred = AltCI->getPredicate();
-        unsigned AltIdx =
-            std::distance(E->Scalars.begin(), find(E->Scalars, AltCI));
-        if (AltCI->getOperand(0) != E->getOperand(0)[AltIdx])
-          AltPred = CmpInst::getSwappedPredicate(AltPred);
         V1 = Builder.CreateCmp(AltPred, LHS, RHS);
       } else {
         V0 = Builder.CreateCast(
@@ -7109,32 +7229,11 @@ Value *BoUpSLP::vectorizeTree(TreeEntry *E) {
       // each vector operation.
       ValueList OpScalars, AltScalars;
       SmallVector<int> Mask;
-      buildSuffleEntryMask(
+      buildShuffleEntryMask(
           E->Scalars, E->ReorderIndices, E->ReuseShuffleIndices,
           [E](Instruction *I) {
             assert(E->isOpcodeOrAlt(I) && "Unexpected main/alternate opcode");
-            if (auto *CI0 = dyn_cast<CmpInst>(E->getMainOp())) {
-              auto *AltCI0 = cast<CmpInst>(E->getAltOp());
-              auto *CI = cast<CmpInst>(I);
-              CmpInst::Predicate P0 = CI0->getPredicate();
-              CmpInst::Predicate AltP0 = AltCI0->getPredicate();
-              assert(P0 != AltP0 &&
-                     "Expected different main/alternate predicates.");
-              CmpInst::Predicate AltP0Swapped =
-                  CmpInst::getSwappedPredicate(AltP0);
-              CmpInst::Predicate CurrentPred = CI->getPredicate();
-              if (P0 == AltP0Swapped)
-                return (P0 == CurrentPred &&
-                        !areCompatibleCmpOps(
-                            CI0->getOperand(0), CI0->getOperand(1),
-                            CI->getOperand(0), CI->getOperand(1))) ||
-                       (AltP0 == CurrentPred &&
-                        !areCompatibleCmpOps(
-                            CI0->getOperand(0), CI0->getOperand(1),
-                            CI->getOperand(1), CI->getOperand(0)));
-              return AltP0 == CurrentPred || AltP0Swapped == CurrentPred;
-            }
-            return I->getOpcode() == E->getAltOpcode();
+            return isAlternateInstruction(I, E->getMainOp(), E->getAltOp());
           },
           Mask, &OpScalars, &AltScalars);
 
@@ -7503,8 +7602,6 @@ BoUpSLP::BlockScheduling::buildBundle(ArrayRef<Value *> VL) {
     } else {
       Bundle = BundleMember;
     }
-    BundleMember->UnscheduledDepsInBundle = 0;
-    Bundle->UnscheduledDepsInBundle += BundleMember->UnscheduledDeps;
 
     // Group the instructions to a bundle.
     BundleMember->FirstInBundle = Bundle;
@@ -7631,8 +7728,7 @@ void BoUpSLP::BlockScheduling::cancelScheduling(ArrayRef<Value *> VL,
     BundleMember->FirstInBundle = BundleMember;
     ScheduleData *Next = BundleMember->NextInBundle;
     BundleMember->NextInBundle = nullptr;
-    BundleMember->UnscheduledDepsInBundle = BundleMember->UnscheduledDeps;
-    if (BundleMember->UnscheduledDepsInBundle == 0) {
+    if (BundleMember->unscheduledDepsInBundle() == 0) {
       ReadyInsts.insert(BundleMember);
     }
     BundleMember = Next;
@@ -7657,7 +7753,7 @@ bool BoUpSLP::BlockScheduling::extendSchedulingRegion(Value *V,
   assert(!isa<PHINode>(I) && !isVectorLikeInstWithConstOps(I) &&
          "phi nodes/insertelements/extractelements/extractvalues don't need to "
          "be scheduled");
-  auto &&CheckSheduleForI = [this, &S](Instruction *I) -> bool {
+  auto &&CheckScheduleForI = [this, &S](Instruction *I) -> bool {
     ScheduleData *ISD = getScheduleData(I);
     if (!ISD)
       return false;
@@ -7669,7 +7765,7 @@ bool BoUpSLP::BlockScheduling::extendSchedulingRegion(Value *V,
     ExtraScheduleDataMap[I][S.OpValue] = SD;
     return true;
   };
-  if (CheckSheduleForI(I))
+  if (CheckScheduleForI(I))
     return true;
   if (!ScheduleStart) {
     // It's the first instruction in the new region.
@@ -7677,7 +7773,7 @@ bool BoUpSLP::BlockScheduling::extendSchedulingRegion(Value *V,
     ScheduleStart = I;
     ScheduleEnd = I->getNextNode();
     if (isOneOf(S, I) != I)
-      CheckSheduleForI(I);
+      CheckScheduleForI(I);
     assert(ScheduleEnd && "tried to vectorize a terminator?");
     LLVM_DEBUG(dbgs() << "SLP:  initialize schedule region to " << *I << "\n");
     return true;
@@ -7705,7 +7801,7 @@ bool BoUpSLP::BlockScheduling::extendSchedulingRegion(Value *V,
     initScheduleData(I, ScheduleStart, nullptr, FirstLoadStoreInRegion);
     ScheduleStart = I;
     if (isOneOf(S, I) != I)
-      CheckSheduleForI(I);
+      CheckScheduleForI(I);
     LLVM_DEBUG(dbgs() << "SLP:  extend schedule region start to " << *I
                       << "\n");
     return true;
@@ -7719,7 +7815,7 @@ bool BoUpSLP::BlockScheduling::extendSchedulingRegion(Value *V,
                    nullptr);
   ScheduleEnd = I->getNextNode();
   if (isOneOf(S, I) != I)
-    CheckSheduleForI(I);
+    CheckScheduleForI(I);
   assert(ScheduleEnd && "tried to vectorize a terminator?");
   LLVM_DEBUG(dbgs() << "SLP:  extend schedule region end to " << *I << "\n");
   return true;
@@ -7786,8 +7882,7 @@ void BoUpSLP::BlockScheduling::calculateDependencies(ScheduleData *SD,
 
       // Handle def-use chain dependencies.
       if (BundleMember->OpValue != BundleMember->Inst) {
-        ScheduleData *UseSD = getScheduleData(BundleMember->Inst);
-        if (UseSD && isInSchedulingRegion(UseSD->FirstInBundle)) {
+        if (ScheduleData *UseSD = getScheduleData(BundleMember->Inst)) {
           BundleMember->Dependencies++;
           ScheduleData *DestBundle = UseSD->FirstInBundle;
           if (!DestBundle->IsScheduled)
@@ -7797,10 +7892,7 @@ void BoUpSLP::BlockScheduling::calculateDependencies(ScheduleData *SD,
         }
       } else {
         for (User *U : BundleMember->Inst->users()) {
-          assert(isa<Instruction>(U) &&
-                 "user of instruction must be instruction");
-          ScheduleData *UseSD = getScheduleData(U);
-          if (UseSD && isInSchedulingRegion(UseSD->FirstInBundle)) {
+          if (ScheduleData *UseSD = getScheduleData(cast<Instruction>(U))) {
             BundleMember->Dependencies++;
             ScheduleData *DestBundle = UseSD->FirstInBundle;
             if (!DestBundle->IsScheduled)
@@ -7956,6 +8048,17 @@ void BoUpSLP::scheduleBlock(BlockScheduling *BS) {
   // Check that we didn't break any of our invariants.
 #ifdef EXPENSIVE_CHECKS
   BS->verify();
+#endif
+
+#if !defined(NDEBUG) || defined(EXPENSIVE_CHECKS)
+  // Check that all schedulable entities got scheduled
+  for (auto *I = BS->ScheduleStart; I != BS->ScheduleEnd; I = I->getNextNode()) {
+    BS->doForAllOpcodes(I, [&](ScheduleData *SD) {
+      if (SD->isSchedulingEntity() && SD->hasValidDependencies()) {
+        assert(SD->IsScheduled && "must be scheduled at this point");
+      }
+    });
+  }
 #endif
 
   // Avoid duplicate scheduling of the block.
@@ -8616,6 +8719,8 @@ void SLPVectorizerPass::collectSeedInstructions(BasicBlock *BB) {
 
 bool SLPVectorizerPass::tryToVectorizePair(Value *A, Value *B, BoUpSLP &R) {
   if (!A || !B)
+    return false;
+  if (isa<InsertElementInst>(A) || isa<InsertElementInst>(B))
     return false;
   Value *VL[] = {A, B};
   return tryToVectorizeList(VL, R);
@@ -9591,21 +9696,22 @@ static Optional<unsigned> getAggregateSize(Instruction *InsertInst) {
   } while (true);
 }
 
-static bool findBuildAggregate_rec(Instruction *LastInsertInst,
+static void findBuildAggregate_rec(Instruction *LastInsertInst,
                                    TargetTransformInfo *TTI,
                                    SmallVectorImpl<Value *> &BuildVectorOpds,
                                    SmallVectorImpl<Value *> &InsertElts,
                                    unsigned OperandOffset) {
   do {
     Value *InsertedOperand = LastInsertInst->getOperand(1);
-    Optional<int> OperandIndex = getInsertIndex(LastInsertInst, OperandOffset);
+    Optional<unsigned> OperandIndex =
+        getInsertIndex(LastInsertInst, OperandOffset);
     if (!OperandIndex)
-      return false;
+      return;
     if (isa<InsertElementInst>(InsertedOperand) ||
         isa<InsertValueInst>(InsertedOperand)) {
-      if (!findBuildAggregate_rec(cast<Instruction>(InsertedOperand), TTI,
-                                  BuildVectorOpds, InsertElts, *OperandIndex))
-        return false;
+      findBuildAggregate_rec(cast<Instruction>(InsertedOperand), TTI,
+                             BuildVectorOpds, InsertElts, *OperandIndex);
+
     } else {
       BuildVectorOpds[*OperandIndex] = InsertedOperand;
       InsertElts[*OperandIndex] = LastInsertInst;
@@ -9615,7 +9721,6 @@ static bool findBuildAggregate_rec(Instruction *LastInsertInst,
            (isa<InsertValueInst>(LastInsertInst) ||
             isa<InsertElementInst>(LastInsertInst)) &&
            LastInsertInst->hasOneUse());
-  return true;
 }
 
 /// Recognize construction of vectors like
@@ -9650,13 +9755,11 @@ static bool findBuildAggregate(Instruction *LastInsertInst,
   BuildVectorOpds.resize(*AggregateSize);
   InsertElts.resize(*AggregateSize);
 
-  if (findBuildAggregate_rec(LastInsertInst, TTI, BuildVectorOpds, InsertElts,
-                             0)) {
-    llvm::erase_value(BuildVectorOpds, nullptr);
-    llvm::erase_value(InsertElts, nullptr);
-    if (BuildVectorOpds.size() >= 2)
-      return true;
-  }
+  findBuildAggregate_rec(LastInsertInst, TTI, BuildVectorOpds, InsertElts, 0);
+  llvm::erase_value(BuildVectorOpds, nullptr);
+  llvm::erase_value(InsertElts, nullptr);
+  if (BuildVectorOpds.size() >= 2)
+    return true;
 
   return false;
 }

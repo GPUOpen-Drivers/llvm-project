@@ -2468,7 +2468,7 @@ void DAGTypeLegalizer::ExpandShiftByConstant(SDNode *N, const APInt &Amt,
   EVT ShTy = N->getOperand(1).getValueType();
 
   if (N->getOpcode() == ISD::SHL) {
-    if (Amt.ugt(VTBits)) {
+    if (Amt.uge(VTBits)) {
       Lo = Hi = DAG.getConstant(0, DL, NVT);
     } else if (Amt.ugt(NVTBits)) {
       Lo = DAG.getConstant(0, DL, NVT);
@@ -2489,7 +2489,7 @@ void DAGTypeLegalizer::ExpandShiftByConstant(SDNode *N, const APInt &Amt,
   }
 
   if (N->getOpcode() == ISD::SRL) {
-    if (Amt.ugt(VTBits)) {
+    if (Amt.uge(VTBits)) {
       Lo = Hi = DAG.getConstant(0, DL, NVT);
     } else if (Amt.ugt(NVTBits)) {
       Lo = DAG.getNode(ISD::SRL, DL,
@@ -2510,7 +2510,7 @@ void DAGTypeLegalizer::ExpandShiftByConstant(SDNode *N, const APInt &Amt,
   }
 
   assert(N->getOpcode() == ISD::SRA && "Unknown shift!");
-  if (Amt.ugt(VTBits)) {
+  if (Amt.uge(VTBits)) {
     Hi = Lo = DAG.getNode(ISD::SRA, DL, NVT, InH,
                           DAG.getConstant(NVTBits - 1, DL, ShTy));
   } else if (Amt.ugt(NVTBits)) {
@@ -3132,24 +3132,24 @@ void DAGTypeLegalizer::ExpandIntRes_ABS(SDNode *N, SDValue &Lo, SDValue &Hi) {
   GetExpandedInteger(N0, Lo, Hi);
   EVT NVT = Lo.getValueType();
 
-  // If we have ADDCARRY, use the expanded form of the sra+add+xor sequence we
-  // use in LegalizeDAG. The ADD part of the expansion is based on
-  // ExpandIntRes_ADDSUB which also uses ADDCARRY/UADDO after checking that
-  // ADDCARRY is LegalOrCustom. Each of the pieces here can be further expanded
+  // If we have SUBCARRY, use the expanded form of the sra+xor+sub sequence we
+  // use in LegalizeDAG. The SUB part of the expansion is based on
+  // ExpandIntRes_ADDSUB which also uses SUBCARRY/USUBO after checking that
+  // SUBCARRY is LegalOrCustom. Each of the pieces here can be further expanded
   // if needed. Shift expansion has a special case for filling with sign bits
   // so that we will only end up with one SRA.
-  bool HasAddCarry = TLI.isOperationLegalOrCustom(
-      ISD::ADDCARRY, TLI.getTypeToExpandTo(*DAG.getContext(), NVT));
-  if (HasAddCarry) {
+  bool HasSubCarry = TLI.isOperationLegalOrCustom(
+      ISD::SUBCARRY, TLI.getTypeToExpandTo(*DAG.getContext(), NVT));
+  if (HasSubCarry) {
     EVT ShiftAmtTy = TLI.getShiftAmountTy(NVT, DAG.getDataLayout());
     SDValue Sign =
         DAG.getNode(ISD::SRA, dl, NVT, Hi,
                     DAG.getConstant(NVT.getSizeInBits() - 1, dl, ShiftAmtTy));
     SDVTList VTList = DAG.getVTList(NVT, getSetCCResultType(NVT));
-    Lo = DAG.getNode(ISD::UADDO, dl, VTList, Lo, Sign);
-    Hi = DAG.getNode(ISD::ADDCARRY, dl, VTList, Hi, Sign, Lo.getValue(1));
     Lo = DAG.getNode(ISD::XOR, dl, NVT, Lo, Sign);
     Hi = DAG.getNode(ISD::XOR, dl, NVT, Hi, Sign);
+    Lo = DAG.getNode(ISD::USUBO, dl, VTList, Lo, Sign);
+    Hi = DAG.getNode(ISD::SUBCARRY, dl, VTList, Hi, Sign, Lo.getValue(1));
     return;
   }
 
@@ -3160,8 +3160,8 @@ void DAGTypeLegalizer::ExpandIntRes_ABS(SDNode *N, SDValue &Lo, SDValue &Hi) {
   SDValue NegLo, NegHi;
   SplitInteger(Neg, NegLo, NegHi);
 
-  SDValue HiIsNeg = DAG.getSetCC(dl, getSetCCResultType(NVT),
-                                 DAG.getConstant(0, dl, NVT), Hi, ISD::SETGT);
+  SDValue HiIsNeg = DAG.getSetCC(dl, getSetCCResultType(NVT), Hi,
+                                 DAG.getConstant(0, dl, NVT), ISD::SETLT);
   Lo = DAG.getSelect(dl, NVT, HiIsNeg, NegLo, Lo);
   Hi = DAG.getSelect(dl, NVT, HiIsNeg, NegHi, Hi);
 }

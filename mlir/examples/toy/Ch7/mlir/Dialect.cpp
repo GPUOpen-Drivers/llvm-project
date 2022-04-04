@@ -132,6 +132,7 @@ static void printBinaryOp(mlir::OpAsmPrinter &printer, mlir::Operation *op) {
 
 //===----------------------------------------------------------------------===//
 // ConstantOp
+//===----------------------------------------------------------------------===//
 
 /// Build a constant operation.
 /// The builder is passed as an argument, so is the state that this method is
@@ -150,8 +151,8 @@ void ConstantOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
 /// or `false` on success. This allows for easily chaining together a set of
 /// parser rules. These rules are used to populate an `mlir::OperationState`
 /// similarly to the `build` methods described above.
-static mlir::ParseResult parseConstantOp(mlir::OpAsmParser &parser,
-                                         mlir::OperationState &result) {
+mlir::ParseResult ConstantOp::parse(mlir::OpAsmParser &parser,
+                                    mlir::OperationState &result) {
   mlir::DenseElementsAttr value;
   if (parser.parseOptionalAttrDict(result.attributes) ||
       parser.parseAttribute(value, "value", result.attributes))
@@ -163,10 +164,10 @@ static mlir::ParseResult parseConstantOp(mlir::OpAsmParser &parser,
 
 /// The 'OpAsmPrinter' class is a stream that allows for formatting
 /// strings, attributes, operands, types, etc.
-static void print(mlir::OpAsmPrinter &printer, ConstantOp op) {
+void ConstantOp::print(mlir::OpAsmPrinter &printer) {
   printer << " ";
-  printer.printOptionalAttrDict(op->getAttrs(), /*elidedAttrs=*/{"value"});
-  printer << op.value();
+  printer.printOptionalAttrDict((*this)->getAttrs(), /*elidedAttrs=*/{"value"});
+  printer << value();
 }
 
 /// Verify that the given attribute value is valid for the given type.
@@ -241,6 +242,7 @@ void ConstantOp::inferShapes() { getResult().setType(value().getType()); }
 
 //===----------------------------------------------------------------------===//
 // AddOp
+//===----------------------------------------------------------------------===//
 
 void AddOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                   mlir::Value lhs, mlir::Value rhs) {
@@ -248,12 +250,20 @@ void AddOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
   state.addOperands({lhs, rhs});
 }
 
+mlir::ParseResult AddOp::parse(mlir::OpAsmParser &parser,
+                               mlir::OperationState &result) {
+  return parseBinaryOp(parser, result);
+}
+
+void AddOp::print(mlir::OpAsmPrinter &p) { printBinaryOp(p, *this); }
+
 /// Infer the output shape of the AddOp, this is required by the shape inference
 /// interface.
 void AddOp::inferShapes() { getResult().setType(getOperand(0).getType()); }
 
 //===----------------------------------------------------------------------===//
 // CastOp
+//===----------------------------------------------------------------------===//
 
 /// Infer the output shape of the CastOp, this is required by the shape
 /// inference interface.
@@ -276,6 +286,7 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 
 //===----------------------------------------------------------------------===//
 // GenericCallOp
+//===----------------------------------------------------------------------===//
 
 void GenericCallOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                           StringRef callee, ArrayRef<mlir::Value> arguments) {
@@ -298,6 +309,7 @@ Operation::operand_range GenericCallOp::getArgOperands() { return inputs(); }
 
 //===----------------------------------------------------------------------===//
 // MulOp
+//===----------------------------------------------------------------------===//
 
 void MulOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                   mlir::Value lhs, mlir::Value rhs) {
@@ -305,12 +317,20 @@ void MulOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
   state.addOperands({lhs, rhs});
 }
 
+mlir::ParseResult MulOp::parse(mlir::OpAsmParser &parser,
+                               mlir::OperationState &result) {
+  return parseBinaryOp(parser, result);
+}
+
+void MulOp::print(mlir::OpAsmPrinter &p) { printBinaryOp(p, *this); }
+
 /// Infer the output shape of the MulOp, this is required by the shape inference
 /// interface.
 void MulOp::inferShapes() { getResult().setType(getOperand(0).getType()); }
 
 //===----------------------------------------------------------------------===//
 // ReturnOp
+//===----------------------------------------------------------------------===//
 
 mlir::LogicalResult ReturnOp::verify() {
   // We know that the parent operation is a function, because of the 'HasParent'
@@ -347,6 +367,7 @@ mlir::LogicalResult ReturnOp::verify() {
 
 //===----------------------------------------------------------------------===//
 // StructAccessOp
+//===----------------------------------------------------------------------===//
 
 void StructAccessOp::build(mlir::OpBuilder &b, mlir::OperationState &state,
                            mlir::Value input, size_t index) {
@@ -374,6 +395,7 @@ mlir::LogicalResult StructAccessOp::verify() {
 
 //===----------------------------------------------------------------------===//
 // TransposeOp
+//===----------------------------------------------------------------------===//
 
 void TransposeOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                         mlir::Value value) {

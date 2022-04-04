@@ -1366,7 +1366,7 @@ public:
 
   // Make sure we initialize the value with the default constructor for the
   // type.
-  opt_storage() : Value(DataType()), Default(DataType()) {}
+  opt_storage() : Value(DataType()), Default() {}
 
   template <class T> void setValue(const T &V, bool initial = false) {
     Value = V;
@@ -1436,6 +1436,8 @@ class opt : public Option,
     const OptionValue<DataType> &V = this->getDefault();
     if (V.hasValue())
       this->setValue(V.getValue());
+    else
+      this->setValue(T());
   }
 
   template <class T,
@@ -1694,7 +1696,7 @@ template <class DataType, class StorageClass> class bits_storage {
   unsigned *Location = nullptr; // Where to store the bits...
 
   template <class T> static unsigned Bit(const T &V) {
-    unsigned BitPos = reinterpret_cast<unsigned>(V);
+    unsigned BitPos = static_cast<unsigned>(V);
     assert(BitPos < sizeof(unsigned) * CHAR_BIT &&
            "enum exceeds width of bit vector!");
     return 1 << BitPos;
@@ -1719,6 +1721,11 @@ public:
 
   unsigned getBits() { return *Location; }
 
+  void clear() {
+    if (Location)
+      *Location = 0;
+  }
+
   template <class T> bool isSet(const T &V) {
     return (*Location & Bit(V)) != 0;
   }
@@ -1728,10 +1735,10 @@ public:
 // This makes us exactly compatible with the bits in all cases that it is used.
 //
 template <class DataType> class bits_storage<DataType, bool> {
-  unsigned Bits; // Where to store the bits...
+  unsigned Bits{0}; // Where to store the bits...
 
   template <class T> static unsigned Bit(const T &V) {
-    unsigned BitPos = (unsigned)V;
+    unsigned BitPos = static_cast<unsigned>(V);
     assert(BitPos < sizeof(unsigned) * CHAR_BIT &&
            "enum exceeds width of bit vector!");
     return 1 << BitPos;
@@ -1741,6 +1748,8 @@ public:
   template <class T> void addValue(const T &V) { Bits |= Bit(V); }
 
   unsigned getBits() { return Bits; }
+
+  void clear() { Bits = 0; }
 
   template <class T> bool isSet(const T &V) { return (Bits & Bit(V)) != 0; }
 };
@@ -1788,7 +1797,7 @@ class bits : public Option, public bits_storage<DataType, Storage> {
   void printOptionValue(size_t /*GlobalWidth*/, bool /*Force*/) const override {
   }
 
-  void setDefault() override {}
+  void setDefault() override { bits_storage<DataType, Storage>::clear(); }
 
   void done() {
     addArgument();

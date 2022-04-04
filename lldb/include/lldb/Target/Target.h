@@ -158,8 +158,8 @@ public:
 
   bool GetEnableNotifyAboutFixIts() const;
 
-  bool GetEnableSaveObjects() const;
-
+  FileSpec GetSaveJITObjectsDir() const;
+  
   bool GetEnableSyntheticValue() const;
 
   uint32_t GetMaxZeroPaddingInFloatFormat() const;
@@ -248,6 +248,9 @@ private:
   void DisableASLRValueChangedCallback();
   void InheritTCCValueChangedCallback();
   void DisableSTDIOValueChangedCallback();
+  
+  // Settings checker for target.jit-save-objects-dir:
+  void CheckJITObjectsDir();
 
   Environment ComputeEnvironment() const;
 
@@ -445,7 +448,7 @@ private:
   // #line %u "%s" before the expression content to remap where the source
   // originates
   mutable std::string m_pound_line_file;
-  mutable uint32_t m_pound_line_line;
+  mutable uint32_t m_pound_line_line = 0;
 };
 
 // Target

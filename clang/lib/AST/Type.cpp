@@ -2105,6 +2105,11 @@ bool Type::hasUnsignedIntegerRepresentation() const {
     return VT->getElementType()->isUnsignedIntegerOrEnumerationType();
   if (const auto *VT = dyn_cast<MatrixType>(CanonicalType))
     return VT->getElementType()->isUnsignedIntegerOrEnumerationType();
+  if (CanonicalType->isVLSTBuiltinType()) {
+    const auto *VT = cast<BuiltinType>(CanonicalType);
+    return VT->getKind() >= BuiltinType::SveUint8 &&
+           VT->getKind() <= BuiltinType::SveUint64;
+  }
   return isUnsignedIntegerOrEnumerationType();
 }
 
@@ -2493,6 +2498,25 @@ bool QualType::isTriviallyCopyableType(const ASTContext &Context) const {
 
   // No other types can match.
   return false;
+}
+
+bool QualType::isTriviallyRelocatableType(const ASTContext &Context) const {
+  QualType BaseElementType = Context.getBaseElementType(*this);
+
+  if (BaseElementType->isIncompleteType()) {
+    return false;
+  } else if (const auto *RD = BaseElementType->getAsRecordDecl()) {
+    return RD->canPassInRegisters();
+  } else {
+    switch (isNonTrivialToPrimitiveDestructiveMove()) {
+    case PCK_Trivial:
+      return !isDestructedType();
+    case PCK_ARCStrong:
+      return true;
+    default:
+      return false;
+    }
+  }
 }
 
 bool QualType::isNonWeakInMRRWithObjCWeak(const ASTContext &Context) const {

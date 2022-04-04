@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "PassDetail.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -18,6 +19,7 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/SmallBitVector.h"
 
 using namespace mlir;
 
@@ -50,9 +52,9 @@ resolveSourceIndices(Location loc, PatternRewriter &rewriter,
   // Check if this is rank-reducing case. Then for every unit-dim size add a
   // zero to the indices.
   unsigned resultDim = 0;
-  llvm::SmallDenseSet<unsigned> unusedDims = subViewOp.getDroppedDims();
+  llvm::SmallBitVector unusedDims = subViewOp.getDroppedDims();
   for (auto dim : llvm::seq<unsigned>(0, subViewOp.getSourceType().getRank())) {
-    if (unusedDims.count(dim))
+    if (unusedDims.test(dim))
       useIndices.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
     else
       useIndices.push_back(indices[resultDim++]);
@@ -106,11 +108,11 @@ static Value getMemRefOperand(vector::TransferWriteOp op) {
 static AffineMapAttr getPermutationMapAttr(MLIRContext *context,
                                            memref::SubViewOp subViewOp,
                                            AffineMap currPermutationMap) {
-  llvm::SmallDenseSet<unsigned> unusedDims = subViewOp.getDroppedDims();
+  llvm::SmallBitVector unusedDims = subViewOp.getDroppedDims();
   SmallVector<AffineExpr> exprs;
   int64_t sourceRank = subViewOp.getSourceType().getRank();
   for (auto dim : llvm::seq<int64_t>(0, sourceRank)) {
-    if (unusedDims.count(dim))
+    if (unusedDims.test(dim))
       continue;
     exprs.push_back(getAffineDimExpr(dim, context));
   }
@@ -254,9 +256,6 @@ void memref::populateFoldSubViewOpPatterns(RewritePatternSet &patterns) {
 
 namespace {
 
-#define GEN_PASS_CLASSES
-#include "mlir/Dialect/MemRef/Transforms/Passes.h.inc"
-
 struct FoldSubViewOpsPass final
     : public FoldSubViewOpsBase<FoldSubViewOpsPass> {
   void runOnOperation() override;
@@ -267,8 +266,7 @@ struct FoldSubViewOpsPass final
 void FoldSubViewOpsPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   memref::populateFoldSubViewOpPatterns(patterns);
-  (void)applyPatternsAndFoldGreedily(getOperation()->getRegions(),
-                                     std::move(patterns));
+  (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
 }
 
 std::unique_ptr<Pass> memref::createFoldSubViewOpsPass() {

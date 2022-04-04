@@ -49,6 +49,8 @@ public:
   virtual uint64_t getOffset(uint64_t off) const = 0;
   // The offset from the beginning of the file.
   uint64_t getVA(uint64_t off) const;
+  // Return a user-friendly string for use in diagnostics.
+  std::string getLocation(uint64_t off) const;
   // Whether the data at \p off in this InputSection is live.
   virtual bool isLive(uint64_t off) const = 0;
   virtual void markLive(uint64_t off) = 0;
@@ -98,8 +100,6 @@ public:
   void markLive(uint64_t off) override { live = true; }
   bool isCoalescedWeak() const { return wasCoalesced && symbols.empty(); }
   bool shouldOmitFromOutput() const { return !live || isCoalescedWeak(); }
-  bool isHashableForICF() const;
-  void hashForICF();
   void writeTo(uint8_t *buf);
 
   void foldIdentical(ConcatInputSection *redundant);
@@ -117,7 +117,7 @@ public:
   // Points to the surviving section after this one is folded by ICF
   ConcatInputSection *replacement = nullptr;
   // Equivalence-class ID for ICF
-  uint64_t icfEqClass[2] = {0, 0};
+  uint32_t icfEqClass[2] = {0, 0};
 
   // With subsections_via_symbols, most symbols have their own InputSection,
   // and for weak symbols (e.g. from inline functions), only the
@@ -268,8 +268,8 @@ inline bool isWordLiteralSection(uint32_t flags) {
 }
 
 bool isCodeSection(const InputSection *);
-
 bool isCfStringSection(const InputSection *);
+bool isClassRefsSection(const InputSection *);
 
 extern std::vector<ConcatInputSection *> inputSections;
 
@@ -281,6 +281,7 @@ constexpr const char binding[] = "__binding";
 constexpr const char bitcodeBundle[] = "__bundle";
 constexpr const char cString[] = "__cstring";
 constexpr const char cfString[] = "__cfstring";
+constexpr const char cgProfile[] = "__cg_profile";
 constexpr const char codeSignature[] = "__code_signature";
 constexpr const char common[] = "__common";
 constexpr const char compactUnwind[] = "__compact_unwind";
@@ -305,6 +306,7 @@ constexpr const char moduleTermFunc[] = "__mod_term_func";
 constexpr const char nonLazySymbolPtr[] = "__nl_symbol_ptr";
 constexpr const char objcCatList[] = "__objc_catlist";
 constexpr const char objcClassList[] = "__objc_classlist";
+constexpr const char objcClassRefs[] = "__objc_classrefs";
 constexpr const char objcConst[] = "__objc_const";
 constexpr const char objcImageInfo[] = "__objc_imageinfo";
 constexpr const char objcNonLazyCatList[] = "__objc_nlcatlist";

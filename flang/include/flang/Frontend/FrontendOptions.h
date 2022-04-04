@@ -31,8 +31,17 @@ enum ActionKind {
   /// -fsyntax-only
   ParseSyntaxOnly,
 
+  /// Emit a .mlir file
+  EmitMLIR,
+
+  /// Emit an .ll file
+  EmitLLVM,
+
   /// Emit a .o file.
   EmitObj,
+
+  /// Emit a .s file.
+  EmitAssembly,
 
   /// Parse, unparse the parse-tree and output a Fortran source file
   DebugUnparse,
@@ -50,6 +59,9 @@ enum ActionKind {
 
   /// Parse, run semantics and then output the parse tree
   DebugDumpParseTree,
+
+  /// Parse, run semantics and then output the pre-fir parse tree
+  DebugDumpPFT,
 
   /// Parse, run semantics and then output the parse tree and symbols
   DebugDumpAll,
@@ -81,9 +93,6 @@ enum ActionKind {
 
   /// Run a plugin action
   PluginAction
-
-  /// TODO: RunPreprocessor, EmitLLVM, EmitLLVMOnly,
-  /// EmitCodeGenOnly, EmitAssembly, (...)
 };
 
 /// \param suffix The file extension

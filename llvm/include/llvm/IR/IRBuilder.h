@@ -25,7 +25,7 @@
 #include "llvm/IR/ConstantFolder.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/IR/DebugInfoMetadata.h"
+//#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/FPEnv.h"
@@ -125,21 +125,18 @@ protected:
   MDNode *DefaultFPMathTag;
   FastMathFlags FMF;
 
-  bool IsFPConstrained;
-  fp::ExceptionBehavior DefaultConstrainedExcept;
-  RoundingMode DefaultConstrainedRounding;
+  bool IsFPConstrained = false;
+  fp::ExceptionBehavior DefaultConstrainedExcept = fp::ebStrict;
+  RoundingMode DefaultConstrainedRounding = RoundingMode::Dynamic;
 
   ArrayRef<OperandBundleDef> DefaultOperandBundles;
 
 public:
   IRBuilderBase(LLVMContext &context, const IRBuilderFolder &Folder,
-                const IRBuilderDefaultInserter &Inserter,
-                MDNode *FPMathTag, ArrayRef<OperandBundleDef> OpBundles)
+                const IRBuilderDefaultInserter &Inserter, MDNode *FPMathTag,
+                ArrayRef<OperandBundleDef> OpBundles)
       : Context(context), Folder(Folder), Inserter(Inserter),
-        DefaultFPMathTag(FPMathTag), IsFPConstrained(false),
-        DefaultConstrainedExcept(fp::ebStrict),
-        DefaultConstrainedRounding(RoundingMode::Dynamic),
-        DefaultOperandBundles(OpBundles) {
+        DefaultFPMathTag(FPMathTag), DefaultOperandBundles(OpBundles) {
     ClearInsertionPoint();
   }
 
@@ -218,23 +215,11 @@ public:
   }
 
   /// Get location information used by debugging information.
-  DebugLoc getCurrentDebugLocation() const {
-    for (auto &KV : MetadataToCopy)
-      if (KV.first == LLVMContext::MD_dbg)
-        return {cast<DILocation>(KV.second)};
-
-    return {};
-  }
+  DebugLoc getCurrentDebugLocation() const;
 
   /// If this builder has a current debug location, set it on the
   /// specified instruction.
-  void SetInstDebugLocation(Instruction *I) const {
-    for (const auto &KV : MetadataToCopy)
-      if (KV.first == LLVMContext::MD_dbg) {
-        I->setDebugLoc(DebugLoc(KV.second));
-        return;
-      }
-  }
+  void SetInstDebugLocation(Instruction *I) const;
 
   /// Add all entries in MetadataToCopy to \p I.
   void AddMetadataToInst(Instruction *I) const {
