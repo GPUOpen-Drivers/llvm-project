@@ -17,16 +17,20 @@
 #ifndef LLVM_CODEGEN_GLOBALISEL_COMBINERHELPER_H
 #define LLVM_CODEGEN_GLOBALISEL_COMBINERHELPER_H
 
-#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
-#include "llvm/CodeGen/LowLevelType.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/Register.h"
-#include "llvm/Support/Alignment.h"
+#include "llvm/Support/LowLevelTypeImpl.h"
+#include <functional>
 
 namespace llvm {
 
 class GISelChangeObserver;
+class APFloat;
+class APInt;
+class GPtrAdd;
+class GStore;
+class GZExtLoad;
 class MachineIRBuilder;
 class MachineInstrBuilder;
 class MachineRegisterInfo;
@@ -539,6 +543,13 @@ public:
   /// Combine G_UREM x, (known power of 2) to an add and bitmasking.
   void applySimplifyURemByPow2(MachineInstr &MI);
 
+  /// Push a binary operator through a select on constants.
+  ///
+  /// binop (select cond, K0, K1), K2 ->
+  ///   select cond, (binop K0, K2), (binop K1, K2)
+  bool matchFoldBinOpIntoSelect(MachineInstr &MI, unsigned &SelectOpNo);
+  bool applyFoldBinOpIntoSelect(MachineInstr &MI, const unsigned &SelectOpNo);
+
   bool matchCombineInsertVecElts(MachineInstr &MI,
                                  SmallVectorImpl<Register> &MatchInfo);
 
@@ -719,6 +730,9 @@ public:
   ///           -> (fneg (fmad (fpext x), (fpext y), z))
   bool matchCombineFSubFpExtFNegFMulToFMadOrFMA(MachineInstr &MI,
                                                 BuildFnTy &MatchInfo);
+
+  /// Fold boolean selects to logical operations.
+  bool matchSelectToLogical(MachineInstr &MI, BuildFnTy &MatchInfo);
 
 private:
   /// Given a non-indexed load or store instruction \p MI, find an offset that

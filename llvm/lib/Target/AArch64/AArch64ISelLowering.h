@@ -79,7 +79,6 @@ enum NodeType : unsigned {
   // Predicated instructions where inactive lanes produce undefined results.
   ABDS_PRED,
   ABDU_PRED,
-  ADD_PRED,
   FADD_PRED,
   FDIV_PRED,
   FMA_PRED,
@@ -98,7 +97,6 @@ enum NodeType : unsigned {
   SMIN_PRED,
   SRA_PRED,
   SRL_PRED,
-  SUB_PRED,
   UDIV_PRED,
   UMAX_PRED,
   UMIN_PRED,
@@ -231,14 +229,6 @@ enum NodeType : unsigned {
   // Only the lower result lane is defined.
   SADDV,
   UADDV,
-
-  // Vector halving addition
-  SHADD,
-  UHADD,
-
-  // Vector rounding halving addition
-  SRHADD,
-  URHADD,
 
   // Add Long Pairwise
   SADDLP,
@@ -611,8 +601,8 @@ public:
   bool isLegalAddImmediate(int64_t) const override;
   bool isLegalICmpImmediate(int64_t) const override;
 
-  bool isMulAddWithConstProfitable(const SDValue &AddNode,
-                                   const SDValue &ConstNode) const override;
+  bool isMulAddWithConstProfitable(SDValue AddNode,
+                                   SDValue ConstNode) const override;
 
   bool shouldConsiderGEPOffsetSplit() const override;
 
@@ -899,11 +889,8 @@ private:
   SDValue LowerINTRINSIC_W_CHAIN(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
 
-  bool isEligibleForTailCallOptimization(
-      SDValue Callee, CallingConv::ID CalleeCC, bool isVarArg,
-      const SmallVectorImpl<ISD::OutputArg> &Outs,
-      const SmallVectorImpl<SDValue> &OutVals,
-      const SmallVectorImpl<ISD::InputArg> &Ins, SelectionDAG &DAG) const;
+  bool
+  isEligibleForTailCallOptimization(const CallLoweringInfo &CLI) const;
 
   /// Finds the incoming stack arguments which overlap the given fixed stack
   /// object and incorporates their load into the current chain. This prevents

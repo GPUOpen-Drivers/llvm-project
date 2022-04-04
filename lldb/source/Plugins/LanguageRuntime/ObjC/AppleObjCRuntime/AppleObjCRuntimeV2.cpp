@@ -2008,7 +2008,8 @@ AppleObjCRuntimeV2::SharedCacheClassInfoExtractor::UpdateISAToDescriptorMap() {
       shared_cache_base_addr == LLDB_INVALID_ADDRESS)
     return DescriptorMapUpdateResult::Fail();
 
-  const uint32_t num_classes = 128 * 1024;
+  // The number of entries to pre-allocate room for.
+  const uint32_t max_num_classes = 256 * 1024;
 
   UtilityFunction *get_class_info_code = GetClassInfoUtilityFunction(exe_ctx);
   if (!get_class_info_code) {
@@ -2030,7 +2031,7 @@ AppleObjCRuntimeV2::SharedCacheClassInfoExtractor::UpdateISAToDescriptorMap() {
   DiagnosticManager diagnostics;
 
   const uint32_t class_info_byte_size = addr_size + 4;
-  const uint32_t class_infos_byte_size = num_classes * class_info_byte_size;
+  const uint32_t class_infos_byte_size = max_num_classes * class_info_byte_size;
   lldb::addr_t class_infos_addr = process->AllocateMemory(
       class_infos_byte_size, ePermissionsReadable | ePermissionsWritable, err);
   const uint32_t relative_selector_offset_addr_size = 64;
@@ -2096,10 +2097,12 @@ AppleObjCRuntimeV2::SharedCacheClassInfoExtractor::UpdateISAToDescriptorMap() {
       num_class_infos = return_value.GetScalar().ULong();
       LLDB_LOG(log, "Discovered {0} Objective-C classes in the shared cache",
                num_class_infos);
-      assert(num_class_infos <= num_classes);
+      // Assert if there were more classes than we pre-allocated
+      // room for.
+      assert(num_class_infos <= max_num_classes);
       if (num_class_infos > 0) {
-        if (num_class_infos > num_classes) {
-          num_class_infos = num_classes;
+        if (num_class_infos > max_num_classes) {
+          num_class_infos = max_num_classes;
 
           success = false;
         } else {
@@ -3008,8 +3011,8 @@ bool AppleObjCRuntimeV2::GetCFBooleanValuesIfNeeded() {
   if (m_CFBoolean_values)
     return true;
 
-  static ConstString g___kCFBooleanFalse("__kCFBooleanFalse");
-  static ConstString g___kCFBooleanTrue("__kCFBooleanTrue");
+  static ConstString g_dunder_kCFBooleanFalse("__kCFBooleanFalse");
+  static ConstString g_dunder_kCFBooleanTrue("__kCFBooleanTrue");
   static ConstString g_kCFBooleanFalse("kCFBooleanFalse");
   static ConstString g_kCFBooleanTrue("kCFBooleanTrue");
 
@@ -3042,8 +3045,8 @@ bool AppleObjCRuntimeV2::GetCFBooleanValuesIfNeeded() {
     return addr;
   };
 
-  lldb::addr_t false_addr = get_symbol(g___kCFBooleanFalse, g_kCFBooleanFalse);
-  lldb::addr_t true_addr = get_symbol(g___kCFBooleanTrue, g_kCFBooleanTrue);
+  lldb::addr_t false_addr = get_symbol(g_dunder_kCFBooleanFalse, g_kCFBooleanFalse);
+  lldb::addr_t true_addr = get_symbol(g_dunder_kCFBooleanTrue, g_kCFBooleanTrue);
 
   return (m_CFBoolean_values = {false_addr, true_addr}).operator bool();
 }

@@ -18,7 +18,7 @@
 
 /* Indicate that this is LLVM compiled from the amd-gfx branch. */
 #define LLVM_HAVE_BRANCH_AMD_GFX
-#define LLVM_MAIN_REVISION 413685
+#define LLVM_MAIN_REVISION 417719
 
 /* Define if LLVM_ENABLE_DUMP is enabled */
 #cmakedefine LLVM_ENABLE_DUMP
@@ -94,6 +94,9 @@
 /* Define if we have curl and want to use it */
 #cmakedefine LLVM_ENABLE_CURL ${LLVM_ENABLE_CURL}
 
+/* Define if zlib compression is available */
+#cmakedefine01 LLVM_ENABLE_ZLIB
+
 /* Define if LLVM was built with a dependency to the libtensorflow dynamic library */
 #cmakedefine LLVM_HAVE_TF_API
 
@@ -111,5 +114,8 @@
 
 /* Define if building LLVM with BUILD_SHARED_LIBS */
 #cmakedefine LLVM_BUILD_SHARED_LIBS
+
+/* Define if building LLVM with LLVM_FORCE_USE_OLD_TOOLCHAIN_LIBS */
+#cmakedefine LLVM_FORCE_USE_OLD_TOOLCHAIN ${LLVM_FORCE_USE_OLD_TOOLCHAIN}
 
 #endif

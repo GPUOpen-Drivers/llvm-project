@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ;; Test that the -print-pipeline-passes option correctly prints some explicitly specified pipelines.
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(adce),function(simplifycfg<bonus-inst-threshold=123;no-forward-switch-cond;switch-to-lookup;keep-loops;no-hoist-common-insts;sink-common-insts>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-0
@@ -45,9 +47,6 @@
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='module(hwasan<>,hwasan<kernel;recover>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-14
 ; CHECK-14: hwasan<>,hwasan<kernel;recover>
-
-; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(asan<>,asan<kernel>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-15
-; CHECK-15: function(asan<>,asan<kernel>)
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='module(loop-extract<>,loop-extract<single>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-16
 ; CHECK-16: loop-extract<>,loop-extract<single>

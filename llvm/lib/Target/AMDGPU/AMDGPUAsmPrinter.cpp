@@ -27,6 +27,7 @@
 #include "SIMachineFunctionInfo.h"
 #include "TargetInfo/AMDGPUTargetInfo.h"
 #include "Utils/AMDGPUBaseInfo.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
@@ -34,6 +35,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/AMDHSAKernelDescriptor.h"
+#include "llvm/Support/TargetParser.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -111,6 +113,12 @@ AMDGPUTargetStreamer* AMDGPUAsmPrinter::getTargetStreamer() const {
 }
 
 void AMDGPUAsmPrinter::emitStartOfAsmFile(Module &M) {
+  IsTargetStreamerInitialized = false;
+}
+
+void AMDGPUAsmPrinter::initTargetStreamer(Module &M) {
+  IsTargetStreamerInitialized = true;
+
   // TODO: Which one is called first, emitStartOfAsmFile or
   // emitFunctionBodyStart?
   if (getTargetStreamer() && !getTargetStreamer()->getTargetID())
@@ -143,6 +151,10 @@ void AMDGPUAsmPrinter::emitStartOfAsmFile(Module &M) {
 }
 
 void AMDGPUAsmPrinter::emitEndOfAsmFile(Module &M) {
+  // Init target streamer if it has not yet happened
+  if (!IsTargetStreamerInitialized)
+    initTargetStreamer(M);
+
   // Following code requires TargetStreamer to be present.
   if (!getTargetStreamer())
     return;
@@ -381,7 +393,7 @@ uint16_t AMDGPUAsmPrinter::getAmdhsaKernelCodeProperties(
     KernelCodeProperties |=
         amdhsa::KERNEL_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_PTR;
   }
-  if (MFI.hasQueuePtr()) {
+  if (MFI.hasQueuePtr() && AMDGPU::getAmdhsaCodeObjectVersion() < 5) {
     KernelCodeProperties |=
         amdhsa::KERNEL_CODE_PROPERTY_ENABLE_SGPR_QUEUE_PTR;
   }
@@ -437,6 +449,11 @@ amdhsa::kernel_descriptor_t AMDGPUAsmPrinter::getAmdhsaKernelDescriptor(
 }
 
 bool AMDGPUAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+  // Init target streamer lazily on the first function so that previous passes
+  // can set metadata.
+  if (!IsTargetStreamerInitialized)
+    initTargetStreamer(*MF.getFunction().getParent());
+
   ResourceUsage = &getAnalysis<AMDGPUResourceUsageAnalysis>();
   CurrentProgramInfo = SIProgramInfo();
 
@@ -984,6 +1001,13 @@ void AMDGPUAsmPrinter::EmitPALMetadata(const MachineFunction &MF,
 
   MD->setEntryPoint(CC, MF.getFunction().getName());
   MD->setNumUsedVgprs(CC, CurrentProgramInfo.NumVGPRsForWavesPerEU);
+
+  // Only set AGPRs for supported devices
+  const GCNSubtarget &STM = MF.getSubtarget<GCNSubtarget>();
+  if (STM.hasMAIInsts()) {
+    MD->setNumUsedAgprs(CC, CurrentProgramInfo.NumAccVGPR);
+  }
+
   MD->setNumUsedSgprs(CC, CurrentProgramInfo.NumSGPRsForWavesPerEU);
   MD->setRsrc1(CC, CurrentProgramInfo.getPGMRSrc1(CC));
   if (AMDGPU::isCompute(CC)) {
@@ -1000,7 +1024,6 @@ void AMDGPUAsmPrinter::EmitPALMetadata(const MachineFunction &MF,
     MD->setSpiPsInputAddr(MFI->getPSInputAddr());
   }
 
-  const GCNSubtarget &STM = MF.getSubtarget<GCNSubtarget>();
   if (STM.isWave32())
     MD->setWave32(MF.getFunction().getCallingConv());
 }
@@ -1067,7 +1090,7 @@ void AMDGPUAsmPrinter::getAmdKernelCode(amd_kernel_code_t &Out,
   if (MFI->hasDispatchPtr())
     Out.code_properties |= AMD_CODE_PROPERTY_ENABLE_SGPR_DISPATCH_PTR;
 
-  if (MFI->hasQueuePtr())
+  if (MFI->hasQueuePtr() && AMDGPU::getAmdhsaCodeObjectVersion() < 5)
     Out.code_properties |= AMD_CODE_PROPERTY_ENABLE_SGPR_QUEUE_PTR;
 
   if (MFI->hasKernargSegmentPtr())

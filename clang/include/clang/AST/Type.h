@@ -829,6 +829,8 @@ public:
   /// Return true if this is a trivially copyable type (C++0x [basic.types]p9)
   bool isTriviallyCopyableType(const ASTContext &Context) const;
 
+  /// Return true if this is a trivially relocatable type.
+  bool isTriviallyRelocatableType(const ASTContext &Context) const;
 
   /// Returns true if it is a class and it might be dynamic.
   bool mayBeDynamicClass() const;
@@ -2554,6 +2556,8 @@ public:
   bool isFloatingPoint() const {
     return getKind() >= Half && getKind() <= Ibm128;
   }
+
+  bool isSVEBool() const { return getKind() == Kind::SveBool; }
 
   /// Determines whether the given kind corresponds to a placeholder type.
   static bool isPlaceholderTypeKind(Kind K) {

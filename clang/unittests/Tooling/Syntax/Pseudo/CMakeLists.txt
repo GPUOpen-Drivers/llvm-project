@@ -3,14 +3,17 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_clang_unittest(ClangPseudoTests
+  DirectiveMapTest.cpp
   GrammarTest.cpp
+  LRTableTest.cpp
+  TokenTest.cpp
 )
 
 clang_target_link_libraries(ClangPseudoTests
   PRIVATE
   clangBasic
   clangLex
-  clangSyntaxPseudo
+  clangToolingSyntaxPseudo
   clangTesting
   )
 

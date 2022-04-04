@@ -43,7 +43,7 @@ target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 ; CHECK: @[[_ZTI1Y:[a-zA-Z0-9_$"\\.-]+]] = external dso_local constant { i8*, i8*, i8* }, align 8
 ;.
 define i32 @sink_r0(i32 %r) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@sink_r0
 ; CHECK-SAME: (i32 returned [[R:%.*]]) #[[ATTR0:[0-9]+]] {
 ; CHECK-NEXT:  entry:
@@ -54,19 +54,12 @@ entry:
 }
 
 define i32 @scc_r1(i32 %a, i32 %r, i32 %b) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@scc_r1
-; IS__TUNIT____-SAME: (i32 [[A:%.*]], i32 returned [[R:%.*]], i32 [[B:%.*]]) #[[ATTR1:[0-9]+]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[A]], i32 [[R]]) #[[ATTR9:[0-9]+]]
-; IS__TUNIT____-NEXT:    ret i32 [[R]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable willreturn
-; IS__CGSCC____-LABEL: define {{[^@]+}}@scc_r1
-; IS__CGSCC____-SAME: (i32 [[A:%.*]], i32 returned [[R:%.*]], i32 [[B:%.*]]) #[[ATTR1:[0-9]+]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[A]], i32 [[R]]) #[[ATTR9:[0-9]+]]
-; IS__CGSCC____-NEXT:    ret i32 [[R]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@scc_r1
+; CHECK-SAME: (i32 [[A:%.*]], i32 returned [[R:%.*]], i32 [[B:%.*]]) #[[ATTR1:[0-9]+]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[A]], i32 [[R]]) #[[ATTR10:[0-9]+]]
+; CHECK-NEXT:    ret i32 [[R]]
 ;
 entry:
   %call = call i32 @sink_r0(i32 %r)
@@ -75,75 +68,40 @@ entry:
 }
 
 define i32 @scc_r2(i32 %a, i32 %b, i32 %r) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@scc_r2
-; IS__TUNIT____-SAME: (i32 [[A:%.*]], i32 [[B:%.*]], i32 returned [[R:%.*]]) #[[ATTR1]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[A]], [[B]]
-; IS__TUNIT____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__TUNIT____:       if.then:
-; IS__TUNIT____-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[A]], i32 [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[RETURN:%.*]]
-; IS__TUNIT____:       if.end:
-; IS__TUNIT____-NEXT:    [[CMP2:%.*]] = icmp slt i32 [[A]], [[B]]
-; IS__TUNIT____-NEXT:    br i1 [[CMP2]], label [[IF_THEN3:%.*]], label [[IF_END12:%.*]]
-; IS__TUNIT____:       if.then3:
-; IS__TUNIT____-NEXT:    [[CALL5:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL6:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[R]], i32 [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL7:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[R]], i32 undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL8:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL9:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[R]], i32 [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL11:%.*]] = call i32 @scc_r1(i32 [[B]], i32 [[R]], i32 undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[RETURN]]
-; IS__TUNIT____:       if.end12:
-; IS__TUNIT____-NEXT:    [[CMP13:%.*]] = icmp eq i32 [[A]], [[B]]
-; IS__TUNIT____-NEXT:    br i1 [[CMP13]], label [[COND_TRUE:%.*]], label [[COND_FALSE:%.*]]
-; IS__TUNIT____:       cond.true:
-; IS__TUNIT____-NEXT:    br label [[COND_END:%.*]]
-; IS__TUNIT____:       cond.false:
-; IS__TUNIT____-NEXT:    [[CALL14:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[COND_END]]
-; IS__TUNIT____:       cond.end:
-; IS__TUNIT____-NEXT:    [[COND:%.*]] = phi i32 [ [[R]], [[COND_TRUE]] ], [ [[R]], [[COND_FALSE]] ]
-; IS__TUNIT____-NEXT:    br label [[RETURN]]
-; IS__TUNIT____:       return:
-; IS__TUNIT____-NEXT:    [[RETVAL_0:%.*]] = phi i32 [ [[R]], [[IF_THEN]] ], [ [[R]], [[IF_THEN3]] ], [ [[COND]], [[COND_END]] ]
-; IS__TUNIT____-NEXT:    ret i32 [[R]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable willreturn
-; IS__CGSCC____-LABEL: define {{[^@]+}}@scc_r2
-; IS__CGSCC____-SAME: (i32 [[A:%.*]], i32 [[B:%.*]], i32 returned [[R:%.*]]) #[[ATTR1]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[A]], [[B]]
-; IS__CGSCC____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__CGSCC____:       if.then:
-; IS__CGSCC____-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[A]], i32 [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[RETURN:%.*]]
-; IS__CGSCC____:       if.end:
-; IS__CGSCC____-NEXT:    [[CMP2:%.*]] = icmp slt i32 [[A]], [[B]]
-; IS__CGSCC____-NEXT:    br i1 [[CMP2]], label [[IF_THEN3:%.*]], label [[IF_END12:%.*]]
-; IS__CGSCC____:       if.then3:
-; IS__CGSCC____-NEXT:    [[CALL5:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 undef) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL6:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[R]], i32 [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL7:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[R]], i32 undef) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL8:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL9:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[R]], i32 [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL11:%.*]] = call i32 @scc_r1(i32 [[B]], i32 [[R]], i32 undef) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[RETURN]]
-; IS__CGSCC____:       if.end12:
-; IS__CGSCC____-NEXT:    [[CMP13:%.*]] = icmp eq i32 [[A]], [[B]]
-; IS__CGSCC____-NEXT:    br i1 [[CMP13]], label [[COND_TRUE:%.*]], label [[COND_FALSE:%.*]]
-; IS__CGSCC____:       cond.true:
-; IS__CGSCC____-NEXT:    br label [[COND_END:%.*]]
-; IS__CGSCC____:       cond.false:
-; IS__CGSCC____-NEXT:    [[CALL14:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[COND_END]]
-; IS__CGSCC____:       cond.end:
-; IS__CGSCC____-NEXT:    [[COND:%.*]] = phi i32 [ [[R]], [[COND_TRUE]] ], [ [[R]], [[COND_FALSE]] ]
-; IS__CGSCC____-NEXT:    br label [[RETURN]]
-; IS__CGSCC____:       return:
-; IS__CGSCC____-NEXT:    [[RETVAL_0:%.*]] = phi i32 [ [[R]], [[IF_THEN]] ], [ [[R]], [[IF_THEN3]] ], [ [[COND]], [[COND_END]] ]
-; IS__CGSCC____-NEXT:    ret i32 [[R]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@scc_r2
+; CHECK-SAME: (i32 [[A:%.*]], i32 [[B:%.*]], i32 returned [[R:%.*]]) #[[ATTR1]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[A]], [[B]]
+; CHECK-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+; CHECK:       if.then:
+; CHECK-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[A]], i32 [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    br label [[RETURN:%.*]]
+; CHECK:       if.end:
+; CHECK-NEXT:    [[CMP2:%.*]] = icmp slt i32 [[A]], [[B]]
+; CHECK-NEXT:    br i1 [[CMP2]], label [[IF_THEN3:%.*]], label [[IF_END12:%.*]]
+; CHECK:       if.then3:
+; CHECK-NEXT:    [[CALL5:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 undef) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL6:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[R]], i32 [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL7:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[R]], i32 undef) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL8:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL9:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[R]], i32 [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL11:%.*]] = call i32 @scc_r1(i32 [[B]], i32 [[R]], i32 undef) #[[ATTR10]]
+; CHECK-NEXT:    br label [[RETURN]]
+; CHECK:       if.end12:
+; CHECK-NEXT:    [[CMP13:%.*]] = icmp eq i32 [[A]], [[B]]
+; CHECK-NEXT:    br i1 [[CMP13]], label [[COND_TRUE:%.*]], label [[COND_FALSE:%.*]]
+; CHECK:       cond.true:
+; CHECK-NEXT:    br label [[COND_END:%.*]]
+; CHECK:       cond.false:
+; CHECK-NEXT:    [[CALL14:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    br label [[COND_END]]
+; CHECK:       cond.end:
+; CHECK-NEXT:    [[COND:%.*]] = phi i32 [ [[R]], [[COND_TRUE]] ], [ [[R]], [[COND_FALSE]] ]
+; CHECK-NEXT:    br label [[RETURN]]
+; CHECK:       return:
+; CHECK-NEXT:    [[RETVAL_0:%.*]] = phi i32 [ [[R]], [[IF_THEN]] ], [ [[R]], [[IF_THEN3]] ], [ [[COND]], [[COND_END]] ]
+; CHECK-NEXT:    ret i32 [[R]]
 ;
 entry:
   %cmp = icmp sgt i32 %a, %b
@@ -197,18 +155,18 @@ define i32 @scc_rX(i32 %a, i32 %b, i32 %r) #0 {
 ; IS__TUNIT____-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[A]], [[B]]
 ; IS__TUNIT____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
 ; IS__TUNIT____:       if.then:
-; IS__TUNIT____-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[A]], i32 [[R]]) #[[ATTR9]]
+; IS__TUNIT____-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[A]], i32 [[R]]) #[[ATTR10]]
 ; IS__TUNIT____-NEXT:    br label [[RETURN:%.*]]
 ; IS__TUNIT____:       if.end:
 ; IS__TUNIT____-NEXT:    [[CMP2:%.*]] = icmp slt i32 [[A]], [[B]]
 ; IS__TUNIT____-NEXT:    br i1 [[CMP2]], label [[IF_THEN3:%.*]], label [[IF_END12:%.*]]
 ; IS__TUNIT____:       if.then3:
-; IS__TUNIT____-NEXT:    [[CALL5:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL6:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[R]], i32 [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL7:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[R]], i32 undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL8:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL9:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[R]], i32 [[B]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL11:%.*]] = call i32 @scc_r1(i32 [[B]], i32 [[B]], i32 undef) #[[ATTR9]]
+; IS__TUNIT____-NEXT:    [[CALL5:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 undef) #[[ATTR10]]
+; IS__TUNIT____-NEXT:    [[CALL6:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[R]], i32 [[R]]) #[[ATTR10]]
+; IS__TUNIT____-NEXT:    [[CALL7:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[R]], i32 undef) #[[ATTR10]]
+; IS__TUNIT____-NEXT:    [[CALL8:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 undef) #[[ATTR10]]
+; IS__TUNIT____-NEXT:    [[CALL9:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[R]], i32 [[B]]) #[[ATTR10]]
+; IS__TUNIT____-NEXT:    [[CALL11:%.*]] = call i32 @scc_r1(i32 [[B]], i32 [[B]], i32 undef) #[[ATTR10]]
 ; IS__TUNIT____-NEXT:    br label [[RETURN]]
 ; IS__TUNIT____:       if.end12:
 ; IS__TUNIT____-NEXT:    [[CMP13:%.*]] = icmp eq i32 [[A]], [[B]]
@@ -216,7 +174,7 @@ define i32 @scc_rX(i32 %a, i32 %b, i32 %r) #0 {
 ; IS__TUNIT____:       cond.true:
 ; IS__TUNIT____-NEXT:    br label [[COND_END:%.*]]
 ; IS__TUNIT____:       cond.false:
-; IS__TUNIT____-NEXT:    [[CALL14:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR9]]
+; IS__TUNIT____-NEXT:    [[CALL14:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR10]]
 ; IS__TUNIT____-NEXT:    br label [[COND_END]]
 ; IS__TUNIT____:       cond.end:
 ; IS__TUNIT____-NEXT:    [[COND:%.*]] = phi i32 [ [[R]], [[COND_TRUE]] ], [ [[R]], [[COND_FALSE]] ]
@@ -225,18 +183,26 @@ define i32 @scc_rX(i32 %a, i32 %b, i32 %r) #0 {
 ; IS__TUNIT____-NEXT:    [[RETVAL_0:%.*]] = phi i32 [ [[R]], [[IF_THEN]] ], [ [[B]], [[IF_THEN3]] ], [ [[COND]], [[COND_END]] ]
 ; IS__TUNIT____-NEXT:    ret i32 [[RETVAL_0]]
 ;
-; IS__CGSCC____: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; IS__CGSCC____: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable
 ; IS__CGSCC____-LABEL: define {{[^@]+}}@scc_rX
-; IS__CGSCC____-SAME: (i32 [[A:%.*]], i32 [[B:%.*]], i32 [[R:%.*]]) #[[ATTR0]] {
+; IS__CGSCC____-SAME: (i32 [[A:%.*]], i32 [[B:%.*]], i32 [[R:%.*]]) #[[ATTR2:[0-9]+]] {
 ; IS__CGSCC____-NEXT:  entry:
 ; IS__CGSCC____-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[A]], [[B]]
 ; IS__CGSCC____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
 ; IS__CGSCC____:       if.then:
+; IS__CGSCC____-NEXT:    [[CALL1:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[A]], i32 [[R]]) #[[ATTR11:[0-9]+]]
 ; IS__CGSCC____-NEXT:    br label [[RETURN:%.*]]
 ; IS__CGSCC____:       if.end:
 ; IS__CGSCC____-NEXT:    [[CMP2:%.*]] = icmp slt i32 [[A]], [[B]]
 ; IS__CGSCC____-NEXT:    br i1 [[CMP2]], label [[IF_THEN3:%.*]], label [[IF_END12:%.*]]
 ; IS__CGSCC____:       if.then3:
+; IS__CGSCC____-NEXT:    [[CALL5:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR11]]
+; IS__CGSCC____-NEXT:    [[CALL6:%.*]] = call i32 @scc_r2(i32 [[R]], i32 [[R]], i32 [[R]]) #[[ATTR11]]
+; IS__CGSCC____-NEXT:    [[CALL7:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[R]], i32 [[R]]) #[[ATTR11]]
+; IS__CGSCC____-NEXT:    [[CALL8:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR11]]
+; IS__CGSCC____-NEXT:    [[CALL9:%.*]] = call i32 @scc_r2(i32 [[B]], i32 [[R]], i32 [[B]]) #[[ATTR11]]
+; IS__CGSCC____-NEXT:    [[CALL10:%.*]] = call i32 @scc_r1(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR11]]
+; IS__CGSCC____-NEXT:    [[CALL11:%.*]] = call i32 @scc_r1(i32 [[B]], i32 [[B]], i32 [[B]]) #[[ATTR11]]
 ; IS__CGSCC____-NEXT:    br label [[RETURN]]
 ; IS__CGSCC____:       if.end12:
 ; IS__CGSCC____-NEXT:    [[CMP13:%.*]] = icmp eq i32 [[A]], [[B]]
@@ -244,6 +210,7 @@ define i32 @scc_rX(i32 %a, i32 %b, i32 %r) #0 {
 ; IS__CGSCC____:       cond.true:
 ; IS__CGSCC____-NEXT:    br label [[COND_END:%.*]]
 ; IS__CGSCC____:       cond.false:
+; IS__CGSCC____-NEXT:    [[CALL14:%.*]] = call i32 @scc_r2(i32 [[A]], i32 [[B]], i32 [[R]]) #[[ATTR11]]
 ; IS__CGSCC____-NEXT:    br label [[COND_END]]
 ; IS__CGSCC____:       cond.end:
 ; IS__CGSCC____-NEXT:    [[COND:%.*]] = phi i32 [ [[R]], [[COND_TRUE]] ], [ [[R]], [[COND_FALSE]] ]
@@ -318,7 +285,7 @@ return:                                           ; preds = %cond.end, %if.then3
 ;   return a == b ? r : ptr_scc_r2(a, b, r);
 ; }
 define double* @ptr_sink_r0(double* %r) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@ptr_sink_r0
 ; CHECK-SAME: (double* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -329,19 +296,12 @@ entry:
 }
 
 define double* @ptr_scc_r1(double* %a, double* %r, double* %b) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@ptr_scc_r1
-; IS__TUNIT____-SAME: (double* nocapture nofree readnone [[A:%.*]], double* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]], double* nocapture nofree readnone [[B:%.*]]) #[[ATTR1]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[CALL1:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[R]], double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    ret double* [[R]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__CGSCC____-LABEL: define {{[^@]+}}@ptr_scc_r1
-; IS__CGSCC____-SAME: (double* nocapture nofree readnone [[A:%.*]], double* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]], double* nocapture nofree readnone [[B:%.*]]) #[[ATTR2:[0-9]+]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[CALL1:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[R]], double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    ret double* [[R]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@ptr_scc_r1
+; CHECK-SAME: (double* nocapture nofree readnone [[A:%.*]], double* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]], double* nocapture nofree readnone [[B:%.*]]) #[[ATTR1]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[CALL1:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[R]], double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    ret double* [[R]]
 ;
 entry:
   %call = call double* @ptr_sink_r0(double* %r)
@@ -350,75 +310,40 @@ entry:
 }
 
 define double* @ptr_scc_r2(double* %a, double* %b, double* %r) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@ptr_scc_r2
-; IS__TUNIT____-SAME: (double* nocapture nofree readnone [[A:%.*]], double* nocapture nofree readnone [[B:%.*]], double* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]]) #[[ATTR1]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[CMP:%.*]] = icmp ugt double* [[A]], [[B]]
-; IS__TUNIT____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__TUNIT____:       if.then:
-; IS__TUNIT____-NEXT:    [[CALL1:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[B]], double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[RETURN:%.*]]
-; IS__TUNIT____:       if.end:
-; IS__TUNIT____-NEXT:    [[CMP2:%.*]] = icmp ult double* [[A]], [[B]]
-; IS__TUNIT____-NEXT:    br i1 [[CMP2]], label [[IF_THEN3:%.*]], label [[IF_END12:%.*]]
-; IS__TUNIT____:       if.then3:
-; IS__TUNIT____-NEXT:    [[CALL5:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[B]], double* noalias nocapture nofree readnone undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL6:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[R]], double* noalias nocapture nofree readnone [[R]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL7:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]], double* noalias nocapture nofree readnone undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL8:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[A]], double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL9:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[B]], double* noalias nocapture nofree readnone [[R]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    [[CALL11:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]], double* noalias nocapture nofree readnone undef) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[RETURN]]
-; IS__TUNIT____:       if.end12:
-; IS__TUNIT____-NEXT:    [[CMP13:%.*]] = icmp eq double* [[A]], [[B]]
-; IS__TUNIT____-NEXT:    br i1 [[CMP13]], label [[COND_TRUE:%.*]], label [[COND_FALSE:%.*]]
-; IS__TUNIT____:       cond.true:
-; IS__TUNIT____-NEXT:    br label [[COND_END:%.*]]
-; IS__TUNIT____:       cond.false:
-; IS__TUNIT____-NEXT:    [[CALL14:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[A]], double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[COND_END]]
-; IS__TUNIT____:       cond.end:
-; IS__TUNIT____-NEXT:    [[COND:%.*]] = phi double* [ [[R]], [[COND_TRUE]] ], [ [[R]], [[COND_FALSE]] ]
-; IS__TUNIT____-NEXT:    br label [[RETURN]]
-; IS__TUNIT____:       return:
-; IS__TUNIT____-NEXT:    [[RETVAL_0:%.*]] = phi double* [ [[R]], [[IF_THEN]] ], [ [[R]], [[IF_THEN3]] ], [ [[COND]], [[COND_END]] ]
-; IS__TUNIT____-NEXT:    ret double* [[R]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__CGSCC____-LABEL: define {{[^@]+}}@ptr_scc_r2
-; IS__CGSCC____-SAME: (double* nocapture nofree readnone [[A:%.*]], double* nocapture nofree readnone [[B:%.*]], double* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]]) #[[ATTR2]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[CMP:%.*]] = icmp ugt double* [[A]], [[B]]
-; IS__CGSCC____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__CGSCC____:       if.then:
-; IS__CGSCC____-NEXT:    [[CALL1:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[B]], double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[RETURN:%.*]]
-; IS__CGSCC____:       if.end:
-; IS__CGSCC____-NEXT:    [[CMP2:%.*]] = icmp ult double* [[A]], [[B]]
-; IS__CGSCC____-NEXT:    br i1 [[CMP2]], label [[IF_THEN3:%.*]], label [[IF_END12:%.*]]
-; IS__CGSCC____:       if.then3:
-; IS__CGSCC____-NEXT:    [[CALL5:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[B]], double* noalias nocapture nofree readnone undef) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL6:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[R]], double* noalias nocapture nofree readnone [[R]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL7:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]], double* noalias nocapture nofree readnone undef) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL8:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[A]], double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL9:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[B]], double* noalias nocapture nofree readnone [[R]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    [[CALL11:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]], double* noalias nocapture nofree readnone undef) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[RETURN]]
-; IS__CGSCC____:       if.end12:
-; IS__CGSCC____-NEXT:    [[CMP13:%.*]] = icmp eq double* [[A]], [[B]]
-; IS__CGSCC____-NEXT:    br i1 [[CMP13]], label [[COND_TRUE:%.*]], label [[COND_FALSE:%.*]]
-; IS__CGSCC____:       cond.true:
-; IS__CGSCC____-NEXT:    br label [[COND_END:%.*]]
-; IS__CGSCC____:       cond.false:
-; IS__CGSCC____-NEXT:    [[CALL14:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[A]], double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[COND_END]]
-; IS__CGSCC____:       cond.end:
-; IS__CGSCC____-NEXT:    [[COND:%.*]] = phi double* [ [[R]], [[COND_TRUE]] ], [ [[R]], [[COND_FALSE]] ]
-; IS__CGSCC____-NEXT:    br label [[RETURN]]
-; IS__CGSCC____:       return:
-; IS__CGSCC____-NEXT:    [[RETVAL_0:%.*]] = phi double* [ [[R]], [[IF_THEN]] ], [ [[R]], [[IF_THEN3]] ], [ [[COND]], [[COND_END]] ]
-; IS__CGSCC____-NEXT:    ret double* [[R]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@ptr_scc_r2
+; CHECK-SAME: (double* nocapture nofree readnone [[A:%.*]], double* nocapture nofree readnone [[B:%.*]], double* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]]) #[[ATTR1]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[CMP:%.*]] = icmp ugt double* [[A]], [[B]]
+; CHECK-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+; CHECK:       if.then:
+; CHECK-NEXT:    [[CALL1:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[B]], double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    br label [[RETURN:%.*]]
+; CHECK:       if.end:
+; CHECK-NEXT:    [[CMP2:%.*]] = icmp ult double* [[A]], [[B]]
+; CHECK-NEXT:    br i1 [[CMP2]], label [[IF_THEN3:%.*]], label [[IF_END12:%.*]]
+; CHECK:       if.then3:
+; CHECK-NEXT:    [[CALL5:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[B]], double* noalias nocapture nofree readnone undef) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL6:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[R]], double* noalias nocapture nofree readnone [[R]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL7:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[A]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]], double* noalias nocapture nofree readnone undef) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL8:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[A]], double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL9:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[B]], double* noalias nocapture nofree readnone [[R]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    [[CALL11:%.*]] = call double* @ptr_scc_r1(double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]], double* noalias nocapture nofree readnone undef) #[[ATTR10]]
+; CHECK-NEXT:    br label [[RETURN]]
+; CHECK:       if.end12:
+; CHECK-NEXT:    [[CMP13:%.*]] = icmp eq double* [[A]], [[B]]
+; CHECK-NEXT:    br i1 [[CMP13]], label [[COND_TRUE:%.*]], label [[COND_FALSE:%.*]]
+; CHECK:       cond.true:
+; CHECK-NEXT:    br label [[COND_END:%.*]]
+; CHECK:       cond.false:
+; CHECK-NEXT:    [[CALL14:%.*]] = call double* @ptr_scc_r2(double* noalias nocapture nofree readnone [[A]], double* noalias nocapture nofree readnone [[B]], double* noalias nofree readnone "no-capture-maybe-returned" [[R]]) #[[ATTR10]]
+; CHECK-NEXT:    br label [[COND_END]]
+; CHECK:       cond.end:
+; CHECK-NEXT:    [[COND:%.*]] = phi double* [ [[R]], [[COND_TRUE]] ], [ [[R]], [[COND_FALSE]] ]
+; CHECK-NEXT:    br label [[RETURN]]
+; CHECK:       return:
+; CHECK-NEXT:    [[RETVAL_0:%.*]] = phi double* [ [[R]], [[IF_THEN]] ], [ [[R]], [[IF_THEN3]] ], [ [[COND]], [[COND_END]] ]
+; CHECK-NEXT:    ret double* [[R]]
 ;
 entry:
   %cmp = icmp ugt double* %a, %b
@@ -472,12 +397,19 @@ return:                                           ; preds = %cond.end, %if.then3
 ; }
 ;
 define i32* @rt0(i32* %a) #0 {
-; CHECK: Function Attrs: argmemonly nofree noinline nosync nounwind readonly uwtable
-; CHECK-LABEL: define {{[^@]+}}@rt0
-; CHECK-SAME: (i32* nofree noundef nonnull readonly returned align 4 dereferenceable(4) "no-capture-maybe-returned" [[A:%.*]]) #[[ATTR3:[0-9]+]] {
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[CALL:%.*]] = call i32* @rt0(i32* nofree noundef nonnull readonly align 4 dereferenceable(4) "no-capture-maybe-returned" [[A]]) #[[ATTR10:[0-9]+]]
-; CHECK-NEXT:    ret i32* [[A]]
+; IS__TUNIT____: Function Attrs: argmemonly nofree noinline nosync nounwind readonly uwtable
+; IS__TUNIT____-LABEL: define {{[^@]+}}@rt0
+; IS__TUNIT____-SAME: (i32* nofree noundef nonnull readonly returned align 4 dereferenceable(4) "no-capture-maybe-returned" [[A:%.*]]) #[[ATTR3:[0-9]+]] {
+; IS__TUNIT____-NEXT:  entry:
+; IS__TUNIT____-NEXT:    [[CALL:%.*]] = call i32* @rt0(i32* nofree noundef nonnull readonly align 4 dereferenceable(4) "no-capture-maybe-returned" [[A]]) #[[ATTR11:[0-9]+]]
+; IS__TUNIT____-NEXT:    ret i32* [[A]]
+;
+; IS__CGSCC____: Function Attrs: argmemonly nofree noinline nosync nounwind readonly uwtable
+; IS__CGSCC____-LABEL: define {{[^@]+}}@rt0
+; IS__CGSCC____-SAME: (i32* nofree noundef nonnull readonly returned align 4 dereferenceable(4) "no-capture-maybe-returned" [[A:%.*]]) #[[ATTR3:[0-9]+]] {
+; IS__CGSCC____-NEXT:  entry:
+; IS__CGSCC____-NEXT:    [[CALL:%.*]] = call i32* @rt0(i32* nofree noundef nonnull readonly align 4 dereferenceable(4) "no-capture-maybe-returned" [[A]]) #[[ATTR12:[0-9]+]]
+; IS__CGSCC____-NEXT:    ret i32* [[A]]
 ;
 entry:
   %v = load i32, i32* %a, align 4
@@ -494,9 +426,9 @@ entry:
 ; }
 ;
 define i32* @rt1(i32* %a) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@rt1
-; CHECK-SAME: (i32* nocapture nofree nonnull readnone align 4 dereferenceable(4) [[A:%.*]]) #[[ATTR0]] {
+; CHECK-SAME: (i32* nocapture nofree nonnull readnone align 4 dereferenceable(4) [[A:%.*]]) #[[ATTR4:[0-9]+]] {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    ret i32* undef
 ;
@@ -511,19 +443,12 @@ entry:
 ; TEST another SCC test
 ;
 define i32* @rt2_helper(i32* %a) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@rt2_helper
-; IS__TUNIT____-SAME: (i32* nofree readnone returned [[A:%.*]]) #[[ATTR1]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[CALL:%.*]] = call i32* @rt2(i32* noalias nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[A]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    ret i32* [[A]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__CGSCC____-LABEL: define {{[^@]+}}@rt2_helper
-; IS__CGSCC____-SAME: (i32* nofree readnone returned [[A:%.*]]) #[[ATTR2]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[CALL:%.*]] = call i32* @rt2(i32* noalias nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[A]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    ret i32* [[A]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@rt2_helper
+; CHECK-SAME: (i32* nofree readnone returned [[A:%.*]]) #[[ATTR1]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[CALL:%.*]] = call i32* @rt2(i32* noalias nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[A]]) #[[ATTR10]]
+; CHECK-NEXT:    ret i32* [[A]]
 ;
 entry:
   %call = call i32* @rt2(i32* %a, i32* %a)
@@ -531,31 +456,18 @@ entry:
 }
 
 define i32* @rt2(i32* %a, i32 *%b) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@rt2
-; IS__TUNIT____-SAME: (i32* nofree readnone [[A:%.*]], i32* nofree readnone "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR1]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[CMP:%.*]] = icmp eq i32* [[A]], null
-; IS__TUNIT____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__TUNIT____:       if.then:
-; IS__TUNIT____-NEXT:    [[CALL:%.*]] = call i32* @rt2_helper(i32* noalias nofree readnone [[A]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[IF_END]]
-; IS__TUNIT____:       if.end:
-; IS__TUNIT____-NEXT:    [[SEL:%.*]] = phi i32* [ [[B]], [[ENTRY:%.*]] ], [ [[A]], [[IF_THEN]] ]
-; IS__TUNIT____-NEXT:    ret i32* [[SEL]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__CGSCC____-LABEL: define {{[^@]+}}@rt2
-; IS__CGSCC____-SAME: (i32* nofree readnone [[A:%.*]], i32* nofree readnone "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR2]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[CMP:%.*]] = icmp eq i32* [[A]], null
-; IS__CGSCC____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__CGSCC____:       if.then:
-; IS__CGSCC____-NEXT:    [[CALL:%.*]] = call i32* @rt2_helper(i32* noalias nofree readnone [[A]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[IF_END]]
-; IS__CGSCC____:       if.end:
-; IS__CGSCC____-NEXT:    [[SEL:%.*]] = phi i32* [ [[B]], [[ENTRY:%.*]] ], [ [[A]], [[IF_THEN]] ]
-; IS__CGSCC____-NEXT:    ret i32* [[SEL]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@rt2
+; CHECK-SAME: (i32* nofree readnone [[A:%.*]], i32* nofree readnone "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR1]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32* [[A]], null
+; CHECK-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+; CHECK:       if.then:
+; CHECK-NEXT:    [[CALL:%.*]] = call i32* @rt2_helper(i32* noalias nofree readnone [[A]]) #[[ATTR10]]
+; CHECK-NEXT:    br label [[IF_END]]
+; CHECK:       if.end:
+; CHECK-NEXT:    [[SEL:%.*]] = phi i32* [ [[B]], [[ENTRY:%.*]] ], [ [[A]], [[IF_THEN]] ]
+; CHECK-NEXT:    ret i32* [[SEL]]
 ;
 entry:
   %cmp = icmp eq i32* %a, null
@@ -573,19 +485,12 @@ if.end:
 ; TEST another SCC test
 ;
 define i32* @rt3_helper(i32* %a, i32* %b) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@rt3_helper
-; IS__TUNIT____-SAME: (i32* nocapture nofree readnone [[A:%.*]], i32* nofree readnone returned "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR1]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[CALL:%.*]] = call i32* @rt3(i32* noalias nocapture nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[B]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    ret i32* [[B]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__CGSCC____-LABEL: define {{[^@]+}}@rt3_helper
-; IS__CGSCC____-SAME: (i32* nocapture nofree readnone [[A:%.*]], i32* nofree readnone returned "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR2]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[CALL:%.*]] = call i32* @rt3(i32* noalias nocapture nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[B]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    ret i32* [[B]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@rt3_helper
+; CHECK-SAME: (i32* nocapture nofree readnone [[A:%.*]], i32* nofree readnone returned "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR1]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[CALL:%.*]] = call i32* @rt3(i32* noalias nocapture nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[B]]) #[[ATTR10]]
+; CHECK-NEXT:    ret i32* [[B]]
 ;
 entry:
   %call = call i32* @rt3(i32* %a, i32* %b)
@@ -593,31 +498,18 @@ entry:
 }
 
 define i32* @rt3(i32* %a, i32 *%b) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@rt3
-; IS__TUNIT____-SAME: (i32* nocapture nofree readnone [[A:%.*]], i32* nofree readnone returned "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR1]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[CMP:%.*]] = icmp eq i32* [[A]], null
-; IS__TUNIT____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__TUNIT____:       if.then:
-; IS__TUNIT____-NEXT:    [[CALL:%.*]] = call i32* @rt3_helper(i32* noalias nocapture nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[B]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[IF_END]]
-; IS__TUNIT____:       if.end:
-; IS__TUNIT____-NEXT:    [[SEL:%.*]] = phi i32* [ [[B]], [[ENTRY:%.*]] ], [ [[B]], [[IF_THEN]] ]
-; IS__TUNIT____-NEXT:    ret i32* [[B]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__CGSCC____-LABEL: define {{[^@]+}}@rt3
-; IS__CGSCC____-SAME: (i32* nocapture nofree readnone [[A:%.*]], i32* nofree readnone returned "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR2]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[CMP:%.*]] = icmp eq i32* [[A]], null
-; IS__CGSCC____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__CGSCC____:       if.then:
-; IS__CGSCC____-NEXT:    [[CALL:%.*]] = call i32* @rt3_helper(i32* noalias nocapture nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[B]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[IF_END]]
-; IS__CGSCC____:       if.end:
-; IS__CGSCC____-NEXT:    [[SEL:%.*]] = phi i32* [ [[B]], [[ENTRY:%.*]] ], [ [[B]], [[IF_THEN]] ]
-; IS__CGSCC____-NEXT:    ret i32* [[B]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@rt3
+; CHECK-SAME: (i32* nocapture nofree readnone [[A:%.*]], i32* nofree readnone returned "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR1]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32* [[A]], null
+; CHECK-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+; CHECK:       if.then:
+; CHECK-NEXT:    [[CALL:%.*]] = call i32* @rt3_helper(i32* noalias nocapture nofree readnone [[A]], i32* noalias nofree readnone "no-capture-maybe-returned" [[B]]) #[[ATTR10]]
+; CHECK-NEXT:    br label [[IF_END]]
+; CHECK:       if.end:
+; CHECK-NEXT:    [[SEL:%.*]] = phi i32* [ [[B]], [[ENTRY:%.*]] ], [ [[B]], [[IF_THEN]] ]
+; CHECK-NEXT:    ret i32* [[B]]
 ;
 entry:
   %cmp = icmp eq i32* %a, null
@@ -644,11 +536,17 @@ if.end:
 declare void @unknown_fn(i32* (i32*)*) #0
 
 define i32* @calls_unknown_fn(i32* %r) #0 {
-; CHECK: Function Attrs: noinline nounwind uwtable
-; CHECK-LABEL: define {{[^@]+}}@calls_unknown_fn
-; CHECK-SAME: (i32* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]]) #[[ATTR4:[0-9]+]] {
-; CHECK-NEXT:    tail call void @unknown_fn(i32* (i32*)* noundef nonnull @calls_unknown_fn) #[[ATTR11:[0-9]+]]
-; CHECK-NEXT:    ret i32* [[R]]
+; IS__TUNIT____: Function Attrs: noinline nounwind uwtable
+; IS__TUNIT____-LABEL: define {{[^@]+}}@calls_unknown_fn
+; IS__TUNIT____-SAME: (i32* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]]) #[[ATTR5:[0-9]+]] {
+; IS__TUNIT____-NEXT:    tail call void @unknown_fn(i32* (i32*)* noundef nonnull @calls_unknown_fn) #[[ATTR12:[0-9]+]]
+; IS__TUNIT____-NEXT:    ret i32* [[R]]
+;
+; IS__CGSCC____: Function Attrs: noinline nounwind uwtable
+; IS__CGSCC____-LABEL: define {{[^@]+}}@calls_unknown_fn
+; IS__CGSCC____-SAME: (i32* nofree readnone returned "no-capture-maybe-returned" [[R:%.*]]) #[[ATTR5:[0-9]+]] {
+; IS__CGSCC____-NEXT:    tail call void @unknown_fn(i32* (i32*)* noundef nonnull @calls_unknown_fn) #[[ATTR13:[0-9]+]]
+; IS__CGSCC____-NEXT:    ret i32* [[R]]
 ;
   tail call void @unknown_fn(i32* (i32*)* nonnull @calls_unknown_fn)
   ret i32* %r
@@ -671,7 +569,7 @@ define i32* @calls_unknown_fn(i32* %r) #0 {
 define linkonce_odr i32* @maybe_redefined_fn(i32* %r) #0 {
 ; CHECK: Function Attrs: noinline nounwind uwtable
 ; CHECK-LABEL: define {{[^@]+}}@maybe_redefined_fn
-; CHECK-SAME: (i32* [[R:%.*]]) #[[ATTR4]] {
+; CHECK-SAME: (i32* [[R:%.*]]) #[[ATTR5:[0-9]+]] {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    ret i32* [[R]]
 ;
@@ -680,12 +578,19 @@ entry:
 }
 
 define i32* @calls_maybe_redefined_fn(i32* %r) #0 {
-; CHECK: Function Attrs: noinline norecurse nounwind uwtable
-; CHECK-LABEL: define {{[^@]+}}@calls_maybe_redefined_fn
-; CHECK-SAME: (i32* returned [[R:%.*]]) #[[ATTR5:[0-9]+]] {
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[CALL:%.*]] = call i32* @maybe_redefined_fn(i32* [[R]]) #[[ATTR11]]
-; CHECK-NEXT:    ret i32* [[R]]
+; IS__TUNIT____: Function Attrs: noinline norecurse nounwind uwtable
+; IS__TUNIT____-LABEL: define {{[^@]+}}@calls_maybe_redefined_fn
+; IS__TUNIT____-SAME: (i32* returned [[R:%.*]]) #[[ATTR6:[0-9]+]] {
+; IS__TUNIT____-NEXT:  entry:
+; IS__TUNIT____-NEXT:    [[CALL:%.*]] = call i32* @maybe_redefined_fn(i32* [[R]]) #[[ATTR12]]
+; IS__TUNIT____-NEXT:    ret i32* [[R]]
+;
+; IS__CGSCC____: Function Attrs: noinline norecurse nounwind uwtable
+; IS__CGSCC____-LABEL: define {{[^@]+}}@calls_maybe_redefined_fn
+; IS__CGSCC____-SAME: (i32* returned [[R:%.*]]) #[[ATTR6:[0-9]+]] {
+; IS__CGSCC____-NEXT:  entry:
+; IS__CGSCC____-NEXT:    [[CALL:%.*]] = call i32* @maybe_redefined_fn(i32* [[R]]) #[[ATTR13]]
+; IS__CGSCC____-NEXT:    ret i32* [[R]]
 ;
 entry:
   %call = call i32* @maybe_redefined_fn(i32* %r)
@@ -707,7 +612,7 @@ entry:
 define linkonce_odr i32* @maybe_redefined_fn2(i32* %r) #0 {
 ; CHECK: Function Attrs: noinline nounwind uwtable
 ; CHECK-LABEL: define {{[^@]+}}@maybe_redefined_fn2
-; CHECK-SAME: (i32* [[R:%.*]]) #[[ATTR4]] {
+; CHECK-SAME: (i32* [[R:%.*]]) #[[ATTR5]] {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    ret i32* [[R]]
 ;
@@ -716,12 +621,19 @@ entry:
 }
 
 define i32* @calls_maybe_redefined_fn2(i32* %r) #0 {
-; CHECK: Function Attrs: noinline norecurse nounwind uwtable
-; CHECK-LABEL: define {{[^@]+}}@calls_maybe_redefined_fn2
-; CHECK-SAME: (i32* [[R:%.*]]) #[[ATTR5]] {
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[CALL:%.*]] = call i32* @maybe_redefined_fn2(i32* [[R]]) #[[ATTR11]]
-; CHECK-NEXT:    ret i32* [[CALL]]
+; IS__TUNIT____: Function Attrs: noinline norecurse nounwind uwtable
+; IS__TUNIT____-LABEL: define {{[^@]+}}@calls_maybe_redefined_fn2
+; IS__TUNIT____-SAME: (i32* [[R:%.*]]) #[[ATTR6]] {
+; IS__TUNIT____-NEXT:  entry:
+; IS__TUNIT____-NEXT:    [[CALL:%.*]] = call i32* @maybe_redefined_fn2(i32* [[R]]) #[[ATTR12]]
+; IS__TUNIT____-NEXT:    ret i32* [[CALL]]
+;
+; IS__CGSCC____: Function Attrs: noinline norecurse nounwind uwtable
+; IS__CGSCC____-LABEL: define {{[^@]+}}@calls_maybe_redefined_fn2
+; IS__CGSCC____-SAME: (i32* [[R:%.*]]) #[[ATTR6]] {
+; IS__CGSCC____-NEXT:  entry:
+; IS__CGSCC____-NEXT:    [[CALL:%.*]] = call i32* @maybe_redefined_fn2(i32* [[R]]) #[[ATTR13]]
+; IS__CGSCC____-NEXT:    ret i32* [[CALL]]
 ;
 entry:
   %call = call i32* @maybe_redefined_fn2(i32* %r)
@@ -739,7 +651,7 @@ entry:
 ; }
 ;
 define double @select_and_phi(double %b) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@select_and_phi
 ; CHECK-SAME: (double returned [[B:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -775,31 +687,18 @@ if.end:                                           ; preds = %if.then, %entry
 ; }
 ;
 define double @recursion_select_and_phi(i32 %a, double %b) #0 {
-; IS__TUNIT____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__TUNIT____-LABEL: define {{[^@]+}}@recursion_select_and_phi
-; IS__TUNIT____-SAME: (i32 [[A:%.*]], double returned [[B:%.*]]) #[[ATTR1]] {
-; IS__TUNIT____-NEXT:  entry:
-; IS__TUNIT____-NEXT:    [[DEC:%.*]] = add nsw i32 [[A]], -1
-; IS__TUNIT____-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[A]], 0
-; IS__TUNIT____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__TUNIT____:       if.then:
-; IS__TUNIT____-NEXT:    [[CALL:%.*]] = call double @recursion_select_and_phi(i32 [[DEC]], double [[B]]) #[[ATTR9]]
-; IS__TUNIT____-NEXT:    br label [[IF_END]]
-; IS__TUNIT____:       if.end:
-; IS__TUNIT____-NEXT:    ret double [[B]]
-;
-; IS__CGSCC____: Function Attrs: nofree noinline nosync nounwind readnone uwtable
-; IS__CGSCC____-LABEL: define {{[^@]+}}@recursion_select_and_phi
-; IS__CGSCC____-SAME: (i32 [[A:%.*]], double returned [[B:%.*]]) #[[ATTR2]] {
-; IS__CGSCC____-NEXT:  entry:
-; IS__CGSCC____-NEXT:    [[DEC:%.*]] = add nsw i32 [[A]], -1
-; IS__CGSCC____-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[A]], 0
-; IS__CGSCC____-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
-; IS__CGSCC____:       if.then:
-; IS__CGSCC____-NEXT:    [[CALL:%.*]] = call double @recursion_select_and_phi(i32 [[DEC]], double [[B]]) #[[ATTR9]]
-; IS__CGSCC____-NEXT:    br label [[IF_END]]
-; IS__CGSCC____:       if.end:
-; IS__CGSCC____-NEXT:    ret double [[B]]
+; CHECK: Function Attrs: nofree noinline nosync nounwind readnone uwtable
+; CHECK-LABEL: define {{[^@]+}}@recursion_select_and_phi
+; CHECK-SAME: (i32 [[A:%.*]], double returned [[B:%.*]]) #[[ATTR1]] {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    [[DEC:%.*]] = add nsw i32 [[A]], -1
+; CHECK-NEXT:    [[CMP:%.*]] = icmp sgt i32 [[A]], 0
+; CHECK-NEXT:    br i1 [[CMP]], label [[IF_THEN:%.*]], label [[IF_END:%.*]]
+; CHECK:       if.then:
+; CHECK-NEXT:    [[CALL:%.*]] = call double @recursion_select_and_phi(i32 [[DEC]], double [[B]]) #[[ATTR10]]
+; CHECK-NEXT:    br label [[IF_END]]
+; CHECK:       if.end:
+; CHECK-NEXT:    ret double [[B]]
 ;
 entry:
   %dec = add nsw i32 %a, -1
@@ -825,7 +724,7 @@ if.end:                                           ; preds = %if.then, %entry
 ; }
 ;
 define double* @bitcast(i32* %b) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@bitcast
 ; CHECK-SAME: (i32* nofree readnone "no-capture-maybe-returned" [[B:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -848,7 +747,7 @@ entry:
 ; }
 ;
 define double* @bitcasts_select_and_phi(i32* %b) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@bitcasts_select_and_phi
 ; CHECK-SAME: (i32* nofree readnone [[B:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -898,7 +797,7 @@ if.end:                                           ; preds = %if.then, %entry
 ; }
 ;
 define double* @ret_arg_arg_undef(i32* %b) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@ret_arg_arg_undef
 ; CHECK-SAME: (i32* nofree readnone [[B:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -946,7 +845,7 @@ ret_undef:
 ; }
 ;
 define double* @ret_undef_arg_arg(i32* %b) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@ret_undef_arg_arg
 ; CHECK-SAME: (i32* nofree readnone [[B:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -994,7 +893,7 @@ ret_arg1:
 ; }
 ;
 define double* @ret_undef_arg_undef(i32* %b) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@ret_undef_arg_undef
 ; CHECK-SAME: (i32* nofree readnone [[B:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -1043,7 +942,7 @@ declare i32* @unknown(i32*)
 define i32* @ret_arg_or_unknown(i32* %b) #0 {
 ; CHECK: Function Attrs: noinline nounwind uwtable
 ; CHECK-LABEL: define {{[^@]+}}@ret_arg_or_unknown
-; CHECK-SAME: (i32* [[B:%.*]]) #[[ATTR4]] {
+; CHECK-SAME: (i32* [[B:%.*]]) #[[ATTR5]] {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32* [[B]], null
 ; CHECK-NEXT:    br i1 [[CMP]], label [[RET_ARG:%.*]], label [[RET_UNKNOWN:%.*]]
@@ -1068,7 +967,7 @@ ret_unknown:
 define i32* @ret_arg_or_unknown_through_phi(i32* %b) #0 {
 ; CHECK: Function Attrs: noinline nounwind uwtable
 ; CHECK-LABEL: define {{[^@]+}}@ret_arg_or_unknown_through_phi
-; CHECK-SAME: (i32* [[B:%.*]]) #[[ATTR4]] {
+; CHECK-SAME: (i32* [[B:%.*]]) #[[ATTR5]] {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[CMP:%.*]] = icmp eq i32* [[B]], null
 ; CHECK-NEXT:    br i1 [[CMP]], label [[RET_ARG:%.*]], label [[RET_UNKNOWN:%.*]]
@@ -1100,7 +999,7 @@ r:
 ; TEST inconsistent IR in dead code.
 ;
 define i32 @deadblockcall1(i32 %A) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@deadblockcall1
 ; CHECK-SAME: (i32 returned [[A:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -1118,7 +1017,7 @@ unreachableblock:
 declare i32 @deadblockcall_helper(i32 returned %A);
 
 define i32 @deadblockcall2(i32 %A) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@deadblockcall2
 ; CHECK-SAME: (i32 returned [[A:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -1139,7 +1038,7 @@ unreachableblock2:
 }
 
 define i32 @deadblockphi1(i32 %A) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@deadblockphi1
 ; CHECK-SAME: (i32 returned [[A:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -1165,7 +1064,7 @@ r:
 }
 
 define i32 @deadblockphi2(i32 %A) #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@deadblockphi2
 ; CHECK-SAME: (i32 returned [[A:%.*]]) #[[ATTR0]] {
 ; CHECK-NEXT:  entry:
@@ -1200,11 +1099,11 @@ declare void @noreturn() noreturn;
 define i32 @deadblockphi3(i32 %A, i1 %c) #0 {
 ; CHECK: Function Attrs: noinline nounwind uwtable
 ; CHECK-LABEL: define {{[^@]+}}@deadblockphi3
-; CHECK-SAME: (i32 returned [[A:%.*]], i1 [[C:%.*]]) #[[ATTR4]] {
+; CHECK-SAME: (i32 returned [[A:%.*]], i1 [[C:%.*]]) #[[ATTR5]] {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    br i1 [[C]], label [[R:%.*]], label [[UNREACHABLECALL:%.*]]
 ; CHECK:       unreachablecall:
-; CHECK-NEXT:    call void @noreturn() #[[ATTR6:[0-9]+]]
+; CHECK-NEXT:    call void @noreturn() #[[ATTR7:[0-9]+]]
 ; CHECK-NEXT:    unreachable
 ; CHECK:       unreachableblock2:
 ; CHECK-NEXT:    unreachable
@@ -1271,7 +1170,7 @@ define weak_odr align 16 i32* @non_exact_4(i32* align 32 %a) {
 define i32 @exact(i32* align 8 %a, i32* align 8 %b) {
 ; CHECK: Function Attrs: norecurse
 ; CHECK-LABEL: define {{[^@]+}}@exact
-; CHECK-SAME: (i32* align 8 [[A:%.*]], i32* align 8 [[B:%.*]]) #[[ATTR7:[0-9]+]] {
+; CHECK-SAME: (i32* align 8 [[A:%.*]], i32* align 8 [[B:%.*]]) #[[ATTR8:[0-9]+]] {
 ; CHECK-NEXT:    [[C0:%.*]] = call i32 @non_exact_0()
 ; CHECK-NEXT:    [[C1:%.*]] = call i32 @non_exact_1(i32 noundef 1)
 ; CHECK-NEXT:    [[C2:%.*]] = call i32 @non_exact_2(i32 noundef 2)
@@ -1301,7 +1200,7 @@ define i32 @exact(i32* align 8 %a, i32* align 8 %b) {
 
 @G = external global i8
 define i32* @ret_const() #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@ret_const
 ; CHECK-SAME: () #[[ATTR0]] {
 ; CHECK-NEXT:    ret i32* bitcast (i8* @G to i32*)
@@ -1310,7 +1209,7 @@ define i32* @ret_const() #0 {
   ret i32* %bc
 }
 define i32* @use_const() #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@use_const
 ; CHECK-SAME: () #[[ATTR0]] {
 ; CHECK-NEXT:    ret i32* bitcast (i8* @G to i32*)
@@ -1319,7 +1218,7 @@ define i32* @use_const() #0 {
   ret i32* %c
 }
 define i32* @dont_use_const() #0 {
-; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone uwtable willreturn
+; CHECK: Function Attrs: nofree noinline norecurse nosync nounwind readnone willreturn uwtable
 ; CHECK-LABEL: define {{[^@]+}}@dont_use_const
 ; CHECK-SAME: () #[[ATTR0]] {
 ; CHECK-NEXT:    ret i32* bitcast (i8* @G to i32*)
@@ -1373,31 +1272,33 @@ declare dso_local i8* @__dynamic_cast(i8*, i8*, i8*, i64)
 
 attributes #0 = { noinline nounwind uwtable }
 ;.
-; IS__TUNIT____: attributes #[[ATTR0]] = { nofree noinline norecurse nosync nounwind readnone uwtable willreturn }
+; IS__TUNIT____: attributes #[[ATTR0]] = { nofree noinline norecurse nosync nounwind readnone willreturn uwtable }
 ; IS__TUNIT____: attributes #[[ATTR1]] = { nofree noinline nosync nounwind readnone uwtable }
 ; IS__TUNIT____: attributes #[[ATTR2]] = { nofree noinline norecurse nosync nounwind readnone uwtable }
 ; IS__TUNIT____: attributes #[[ATTR3]] = { argmemonly nofree noinline nosync nounwind readonly uwtable }
-; IS__TUNIT____: attributes #[[ATTR4]] = { noinline nounwind uwtable }
-; IS__TUNIT____: attributes #[[ATTR5]] = { noinline norecurse nounwind uwtable }
-; IS__TUNIT____: attributes #[[ATTR6]] = { noreturn }
-; IS__TUNIT____: attributes #[[ATTR7]] = { norecurse }
-; IS__TUNIT____: attributes #[[ATTR8:[0-9]+]] = { nofree norecurse nosync nounwind readnone willreturn }
-; IS__TUNIT____: attributes #[[ATTR9]] = { nofree nosync nounwind readnone }
-; IS__TUNIT____: attributes #[[ATTR10]] = { nofree nosync nounwind readonly }
-; IS__TUNIT____: attributes #[[ATTR11]] = { nounwind }
-; IS__TUNIT____: attributes #[[ATTR12:[0-9]+]] = { nounwind readnone }
+; IS__TUNIT____: attributes #[[ATTR4]] = { nofree noinline nosync nounwind readnone willreturn uwtable }
+; IS__TUNIT____: attributes #[[ATTR5]] = { noinline nounwind uwtable }
+; IS__TUNIT____: attributes #[[ATTR6]] = { noinline norecurse nounwind uwtable }
+; IS__TUNIT____: attributes #[[ATTR7]] = { noreturn }
+; IS__TUNIT____: attributes #[[ATTR8]] = { norecurse }
+; IS__TUNIT____: attributes #[[ATTR9:[0-9]+]] = { nofree norecurse nosync nounwind readnone willreturn }
+; IS__TUNIT____: attributes #[[ATTR10]] = { nofree nosync nounwind readnone }
+; IS__TUNIT____: attributes #[[ATTR11]] = { nofree nosync nounwind readonly }
+; IS__TUNIT____: attributes #[[ATTR12]] = { nounwind }
+; IS__TUNIT____: attributes #[[ATTR13:[0-9]+]] = { nounwind readnone }
 ;.
-; IS__CGSCC____: attributes #[[ATTR0]] = { nofree noinline norecurse nosync nounwind readnone uwtable willreturn }
-; IS__CGSCC____: attributes #[[ATTR1]] = { nofree noinline nosync nounwind readnone uwtable willreturn }
-; IS__CGSCC____: attributes #[[ATTR2]] = { nofree noinline nosync nounwind readnone uwtable }
+; IS__CGSCC____: attributes #[[ATTR0]] = { nofree noinline norecurse nosync nounwind readnone willreturn uwtable }
+; IS__CGSCC____: attributes #[[ATTR1]] = { nofree noinline nosync nounwind readnone uwtable }
+; IS__CGSCC____: attributes #[[ATTR2]] = { nofree noinline norecurse nosync nounwind readnone uwtable }
 ; IS__CGSCC____: attributes #[[ATTR3]] = { argmemonly nofree noinline nosync nounwind readonly uwtable }
-; IS__CGSCC____: attributes #[[ATTR4]] = { noinline nounwind uwtable }
-; IS__CGSCC____: attributes #[[ATTR5]] = { noinline norecurse nounwind uwtable }
-; IS__CGSCC____: attributes #[[ATTR6]] = { noreturn }
-; IS__CGSCC____: attributes #[[ATTR7]] = { norecurse }
-; IS__CGSCC____: attributes #[[ATTR8:[0-9]+]] = { nofree norecurse nosync nounwind readnone willreturn }
-; IS__CGSCC____: attributes #[[ATTR9]] = { nofree nosync nounwind readnone }
-; IS__CGSCC____: attributes #[[ATTR10]] = { nofree nosync nounwind readonly }
-; IS__CGSCC____: attributes #[[ATTR11]] = { nounwind }
-; IS__CGSCC____: attributes #[[ATTR12:[0-9]+]] = { nounwind readnone }
+; IS__CGSCC____: attributes #[[ATTR4]] = { nofree noinline nosync nounwind readnone willreturn uwtable }
+; IS__CGSCC____: attributes #[[ATTR5]] = { noinline nounwind uwtable }
+; IS__CGSCC____: attributes #[[ATTR6]] = { noinline norecurse nounwind uwtable }
+; IS__CGSCC____: attributes #[[ATTR7]] = { noreturn }
+; IS__CGSCC____: attributes #[[ATTR8]] = { norecurse }
+; IS__CGSCC____: attributes #[[ATTR9:[0-9]+]] = { nofree norecurse nosync nounwind readnone willreturn }
+; IS__CGSCC____: attributes #[[ATTR10]] = { nofree nosync nounwind readnone }
+; IS__CGSCC____: attributes #[[ATTR11]] = { nounwind readnone }
+; IS__CGSCC____: attributes #[[ATTR12]] = { nofree nosync nounwind readonly }
+; IS__CGSCC____: attributes #[[ATTR13]] = { nounwind }
 ;.

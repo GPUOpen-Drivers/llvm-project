@@ -2629,6 +2629,13 @@ public:
         /*Scope=*/nullptr, Callee, LParenLoc, Args, RParenLoc, ExecConfig);
   }
 
+  ExprResult RebuildCxxSubscriptExpr(Expr *Callee, SourceLocation LParenLoc,
+                                     MultiExprArg Args,
+                                     SourceLocation RParenLoc) {
+    return getSema().ActOnArraySubscriptExpr(
+        /*Scope=*/nullptr, Callee, LParenLoc, Args, RParenLoc);
+  }
+
   /// Build a new member access expression.
   ///
   /// By default, performs semantic analysis to build the new expression.
@@ -7896,12 +7903,6 @@ TreeTransform<Derived>::TransformCoroutineBodyStmt(CoroutineBodyStmt *S) {
       return StmtError();
     Builder.Deallocate = DeallocRes.get();
 
-    assert(S->getResultDecl() && "ResultDecl must already be built");
-    StmtResult ResultDecl = getDerived().TransformStmt(S->getResultDecl());
-    if (ResultDecl.isInvalid())
-      return StmtError();
-    Builder.ResultDecl = ResultDecl.get();
-
     if (auto *ReturnStmt = S->getReturnStmt()) {
       StmtResult Res = getDerived().TransformStmt(ReturnStmt);
       if (Res.isInvalid())
@@ -11507,6 +11508,7 @@ TreeTransform<Derived>::TransformCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
   case OO_Array_Delete:
     llvm_unreachable("new and delete operators cannot use CXXOperatorCallExpr");
 
+  case OO_Subscript:
   case OO_Call: {
     // This is a call to an object's operator().
     assert(E->getNumArgs() >= 1 && "Object call is missing arguments");
@@ -11526,17 +11528,20 @@ TreeTransform<Derived>::TransformCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
                                     Args))
       return ExprError();
 
+    if (E->getOperator() == OO_Subscript)
+      return getDerived().RebuildCxxSubscriptExpr(Object.get(), FakeLParenLoc,
+                                                  Args, E->getEndLoc());
+
     return getDerived().RebuildCallExpr(Object.get(), FakeLParenLoc, Args,
                                         E->getEndLoc());
   }
 
-#define OVERLOADED_OPERATOR(Name,Spelling,Token,Unary,Binary,MemberOnly) \
-  case OO_##Name:
+#define OVERLOADED_OPERATOR(Name, Spelling, Token, Unary, Binary, MemberOnly)  \
+  case OO_##Name:                                                              \
+    break;
+
 #define OVERLOADED_OPERATOR_MULTI(Name,Spelling,Unary,Binary,MemberOnly)
 #include "clang/Basic/OperatorKinds.def"
-  case OO_Subscript:
-    // Handled below.
-    break;
 
   case OO_Conditional:
     llvm_unreachable("conditional operator is not actually overloadable");
@@ -11907,9 +11912,9 @@ TreeTransform<Derived>::TransformCXXNewExpr(CXXNewExpr *E) {
 
   // Transform the size of the array we're allocating (if any).
   Optional<Expr *> ArraySize;
-  if (Optional<Expr *> OldArraySize = E->getArraySize()) {
+  if (E->isArray()) {
     ExprResult NewArraySize;
-    if (*OldArraySize) {
+    if (Optional<Expr *> OldArraySize = E->getArraySize()) {
       NewArraySize = getDerived().TransformExpr(*OldArraySize);
       if (NewArraySize.isInvalid())
         return ExprError();
@@ -12743,6 +12748,9 @@ ExprResult TreeTransform<Derived>::TransformCXXInheritedCtorInitExpr(
 template<typename Derived>
 ExprResult
 TreeTransform<Derived>::TransformCXXBindTemporaryExpr(CXXBindTemporaryExpr *E) {
+  if (auto *Dtor = E->getTemporary()->getDestructor())
+    SemaRef.MarkFunctionReferenced(E->getBeginLoc(),
+                                   const_cast<CXXDestructorDecl *>(Dtor));
   return getDerived().TransformExpr(E->getSubExpr());
 }
 

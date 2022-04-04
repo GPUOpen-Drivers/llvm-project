@@ -43,9 +43,7 @@ add_object_library(
   DEPENDS
     libc.include.errno
     libc.include.math
-    libc.src.errno.__errno_location
-  COMPILE_OPTIONS
-    -Wno-c++17-extensions
+    libc.src.errno.errno
 )
 
 add_object_library(
@@ -56,8 +54,6 @@ add_object_library(
     sincosf_data.cpp
   DEPENDS
     .math_utils
-  COMPILE_OPTIONS
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -69,10 +65,9 @@ add_entrypoint_object(
   DEPENDS
     .sincosf_utils
     libc.include.math
-    libc.src.errno.__errno_location
+    libc.src.errno.errno
   COMPILE_OPTIONS
     -O3
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -84,11 +79,10 @@ add_entrypoint_object(
   DEPENDS
     .sincosf_utils
     libc.include.math
-    libc.src.errno.__errno_location
+    libc.src.errno.errno
     libc.src.__support.FPUtil.fputil
   COMPILE_OPTIONS
     -O3
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -100,10 +94,9 @@ add_entrypoint_object(
   DEPENDS
     .sincosf_utils
     libc.include.math
-    libc.src.errno.__errno_location
+    libc.src.errno.errno
   COMPILE_OPTIONS
     -O3
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -483,9 +476,10 @@ add_entrypoint_object(
   HDRS
     ../expf.h
   DEPENDS
-    .exp_utils
-    .math_utils
+    libc.src.__support.FPUtil.fputil
     libc.include.math
+  COMPILE_OPTIONS
+    -O3
 )
 
 add_entrypoint_object(
@@ -662,8 +656,6 @@ add_object_library(
     common_constants.h
   SRCS
     common_constants.cpp
-  COMPILE_OPTIONS
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -677,7 +669,19 @@ add_entrypoint_object(
     libc.src.__support.FPUtil.fputil
   COMPILE_OPTIONS
     -O3
-    -Wno-c++17-extensions
+)
+
+add_entrypoint_object(
+  log1pf
+  SRCS
+    log1pf.cpp
+  HDRS
+    ../log1pf.h
+  DEPENDS
+    .common_constants
+    libc.src.__support.FPUtil.fputil
+  COMPILE_OPTIONS
+    -O3
 )
 
 add_entrypoint_object(
@@ -689,9 +693,8 @@ add_entrypoint_object(
   DEPENDS
     .common_constants
     libc.src.__support.FPUtil.fputil
-  COMPILE_OPTIONS
+    COMPILE_OPTIONS
     -O3
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -862,7 +865,6 @@ add_entrypoint_object(
     libc.src.__support.FPUtil.sqrt
   COMPILE_OPTIONS
     -O3
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -876,7 +878,6 @@ add_entrypoint_object(
     libc.src.__support.FPUtil.sqrt
   COMPILE_OPTIONS
     -O3
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -890,7 +891,6 @@ add_entrypoint_object(
     libc.src.__support.FPUtil.sqrt
   COMPILE_OPTIONS
     -O3
-    -Wno-c++17-extensions
 )
 
 add_entrypoint_object(
@@ -973,6 +973,7 @@ add_entrypoint_object(
     ../hypotf.h
   DEPENDS
     libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.sqrt
   COMPILE_OPTIONS
     -O3
 )

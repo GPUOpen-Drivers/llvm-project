@@ -6,24 +6,22 @@
 //
 //===----------------------------------------------------------------------===//
 
-// UNSUPPORTED: no-exceptions
-
 // <algorithm>
 
 // template <class _Compare> struct __debug_less
 
 // __debug_less checks that a comparator actually provides a strict-weak ordering.
 
-struct DebugException {};
+// UNSUPPORTED: libcxx-no-debug-mode
 
-#define _LIBCPP_DEBUG 0
-#define _LIBCPP_ASSERT(x, m) ((x) ? (void)0 : throw ::DebugException())
+// ADDITIONAL_COMPILE_FLAGS: -D_LIBCPP_DEBUG=1
 
 #include <algorithm>
 #include <iterator>
 #include <cassert>
 
 #include "test_macros.h"
+#include "debug_macros.h"
 
 template <int ID>
 struct MyType {
@@ -141,8 +139,6 @@ void test_passing() {
 }
 
 void test_failing() {
-    int& called = CompareBase::called;
-    called = 0;
     MT0 one(1);
     MT0 two(2);
 
@@ -152,14 +148,7 @@ void test_failing() {
         C c;
         D d(c);
 
-        try {
-            d(one, two);
-            assert(false);
-        } catch (DebugException const&) {
-        }
-
-        assert(called == 2);
-        called = 0;
+        TEST_LIBCPP_ASSERT_FAILURE(d(one, two), "Comparator does not induce a strict weak ordering");
     }
 }
 
@@ -270,7 +259,7 @@ void test_value_categories() {
     assert(dl(static_cast<int&&>(1), static_cast<const int&&>(2)));
 }
 
-#if TEST_STD_VER > 17
+#if TEST_STD_VER > 11
 constexpr bool test_constexpr() {
     std::less<> cmp{};
     __debug_less<std::less<> > dcmp(cmp);
@@ -287,7 +276,7 @@ int main(int, char**) {
     test_non_const_arg_cmp();
     test_value_iterator();
     test_value_categories();
-#if TEST_STD_VER > 17
+#if TEST_STD_VER > 11
     static_assert(test_constexpr(), "");
 #endif
     return 0;

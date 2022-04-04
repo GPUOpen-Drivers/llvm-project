@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 // UNSUPPORTED: c++03, c++11, c++14, c++17
-// UNSUPPORTED: libcpp-no-concepts
 
 // template<class T>
 // concept movable = see below;
@@ -22,8 +21,10 @@
 #include <unordered_map>
 #include <vector>
 
-#ifndef _LIBCPP_HAS_NO_THREADS
-#   include <mutex>
+#include "test_macros.h"
+
+#ifndef TEST_HAS_NO_THREADS
+#  include <mutex>
 #endif
 
 #include "type_classification/moveconstructible.h"

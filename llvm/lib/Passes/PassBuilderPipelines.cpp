@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 /// \file
@@ -233,9 +235,7 @@ void PassBuilder::invokePeepholeEPCallbacks(FunctionPassManager &FPM,
 
 // Helper to add AnnotationRemarksPass.
 static void addAnnotationRemarksPass(ModulePassManager &MPM) {
-  FunctionPassManager FPM;
-  FPM.addPass(AnnotationRemarksPass());
-  MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+  MPM.addPass(createModuleToFunctionPassAdaptor(AnnotationRemarksPass()));
 }
 
 // Helper to check if the current compilation phase is preparing for LTO
@@ -291,14 +291,19 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
   LPM1.addPass(LoopSimplifyCFGPass());
 
   // Try to remove as much code from the loop header as possible,
-  // to reduce amount of IR that will have to be duplicated.
+  // to reduce amount of IR that will have to be duplicated. However,
+  // do not perform speculative hoisting the first time as LICM
+  // will destroy metadata that may not need to be destroyed if run
+  // after loop rotation.
   // TODO: Investigate promotion cap for O1.
-  LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap));
+  LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+                        /*AllowSpeculation=*/false));
 
   LPM1.addPass(LoopRotatePass(/* Disable header duplication */ true,
                               isLTOPreLink(Phase)));
   // TODO: Investigate promotion cap for O1.
-  LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap));
+  LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+                        /*AllowSpeculation=*/true));
   LPM1.addPass(SimpleLoopUnswitchPass());
   if (EnableLoopFlatten)
     LPM1.addPass(LoopFlattenPass());
@@ -463,15 +468,20 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   LPM1.addPass(LoopSimplifyCFGPass());
 
   // Try to remove as much code from the loop header as possible,
-  // to reduce amount of IR that will have to be duplicated.
+  // to reduce amount of IR that will have to be duplicated. However,
+  // do not perform speculative hoisting the first time as LICM
+  // will destroy metadata that may not need to be destroyed if run
+  // after loop rotation.
   // TODO: Investigate promotion cap for O1.
-  LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap));
+  LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+                        /*AllowSpeculation=*/false));
 
   // Disable header duplication in loop rotation at -Oz.
   LPM1.addPass(
       LoopRotatePass(Level != OptimizationLevel::Oz, isLTOPreLink(Phase)));
   // TODO: Investigate promotion cap for O1.
-  LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap));
+  LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+                        /*AllowSpeculation=*/true));
   LPM1.addPass(
       SimpleLoopUnswitchPass(/* NonTrivial */ Level == OptimizationLevel::O3 &&
                              EnableO3NonTrivialUnswitching));
@@ -567,7 +577,8 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
 
   FPM.addPass(DSEPass());
   FPM.addPass(createFunctionToLoopPassAdaptor(
-      LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap),
+      LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+               /*AllowSpeculation=*/true),
       /*UseMemorySSA=*/true, /*UseBlockFrequencyInfo=*/true));
 
   FPM.addPass(CoroElidePass());
@@ -641,13 +652,13 @@ void PassBuilder::addPGOInstrPasses(ModulePassManager &MPM,
   // Perform PGO instrumentation.
   MPM.addPass(PGOInstrumentationGen(IsCS));
 
-  FunctionPassManager FPM;
   // Disable header duplication in loop rotation at -Oz.
-  FPM.addPass(createFunctionToLoopPassAdaptor(
-      LoopRotatePass(Level != OptimizationLevel::Oz), /*UseMemorySSA=*/false,
-      /*UseBlockFrequencyInfo=*/false));
-  MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM),
-                                                PTO.EagerlyInvalidateAnalyses));
+  MPM.addPass(createModuleToFunctionPassAdaptor(
+      createFunctionToLoopPassAdaptor(
+          LoopRotatePass(Level != OptimizationLevel::Oz),
+          /*UseMemorySSA=*/false,
+          /*UseBlockFrequencyInfo=*/false),
+      PTO.EagerlyInvalidateAnalyses));
 
   // Add the profile lowering pass.
   InstrProfOptions Options;
@@ -1007,7 +1018,8 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
     ExtraPasses.addPass(CorrelatedValuePropagationPass());
     ExtraPasses.addPass(InstCombinePass());
     LoopPassManager LPM;
-    LPM.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap));
+    LPM.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+                         /*AllowSpeculation=*/true));
     LPM.addPass(SimpleLoopUnswitchPass(/* NonTrivial */ Level ==
                                        OptimizationLevel::O3));
     ExtraPasses.addPass(
@@ -1073,7 +1085,8 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
     FPM.addPass(
         RequireAnalysisPass<OptimizationRemarkEmitterAnalysis, Function>());
     FPM.addPass(createFunctionToLoopPassAdaptor(
-        LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap),
+        LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+                 /*AllowSpeculation=*/true),
         /*UseMemorySSA=*/true, /*UseBlockFrequencyInfo=*/true));
   }
 
@@ -1425,6 +1438,9 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   // Convert @llvm.global.annotations to !annotation metadata.
   MPM.addPass(Annotation2MetadataPass());
 
+  for (auto &C : FullLinkTimeOptimizationEarlyEPCallbacks)
+    C(MPM, Level);
+
   // Create a function that performs CFI checks for cross-DSO calls with targets
   // in the current module.
   MPM.addPass(CrossDSOCFIPass());
@@ -1437,6 +1453,9 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     // Run a second time to clean up any type tests left behind by WPD for use
     // in ICP.
     MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
+
+    for (auto &C : FullLinkTimeOptimizationLastEPCallbacks)
+      C(MPM, Level);
 
     // Emit annotation remarks.
     addAnnotationRemarksPass(MPM);
@@ -1469,10 +1488,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   MPM.addPass(InferFunctionAttrsPass());
 
   if (Level.getSpeedupLevel() > 1) {
-    FunctionPassManager EarlyFPM;
-    EarlyFPM.addPass(CallSiteSplittingPass());
     MPM.addPass(createModuleToFunctionPassAdaptor(
-        std::move(EarlyFPM), PTO.EagerlyInvalidateAnalyses));
+        CallSiteSplittingPass(), PTO.EagerlyInvalidateAnalyses));
 
     // Indirect call promotion. This should promote all the targets that are
     // left by the earlier promotion pass that promotes intra-module targets.
@@ -1518,6 +1535,9 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     // in ICP (which is performed earlier than this in the regular LTO
     // pipeline).
     MPM.addPass(LowerTypeTestsPass(nullptr, nullptr, true));
+
+    for (auto &C : FullLinkTimeOptimizationLastEPCallbacks)
+      C(MPM, Level);
 
     // Emit annotation remarks.
     addAnnotationRemarksPass(MPM);
@@ -1612,7 +1632,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
 
   FunctionPassManager MainFPM;
   MainFPM.addPass(createFunctionToLoopPassAdaptor(
-      LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap),
+      LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+               /*AllowSpeculation=*/true),
       /*USeMemorySSA=*/true, /*UseBlockFrequencyInfo=*/true));
 
   if (RunNewGVN)
@@ -1687,6 +1708,9 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
 
   if (PTO.MergeFunctions)
     MPM.addPass(MergeFunctionsPass());
+
+  for (auto &C : FullLinkTimeOptimizationLastEPCallbacks)
+    C(MPM, Level);
 
   // Emit annotation remarks.
   addAnnotationRemarksPass(MPM);
