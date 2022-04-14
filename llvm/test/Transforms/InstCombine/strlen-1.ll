@@ -14,6 +14,7 @@ target datalayout = "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:32:64-f3
 @null_hello_mid = constant [13 x i8] c"hello wor\00ld\00"
 
 declare i32 @strlen(i8*)
+declare noalias i8* @strdup(i8*)
 
 ; Check strlen(string constant) -> integer constant.
 
@@ -113,12 +114,22 @@ define i32 @test_simplify9(i1 %x) {
 ; Check the case that should be simplified to a sub instruction.
 ; strlen(@hello + x) --> 5 - x
 
-define i32 @test_simplify10(i32 %x) {
-; CHECK-LABEL: @test_simplify10(
+define i32 @test_simplify10_inbounds(i32 %x) {
+; CHECK-LABEL: @test_simplify10_inbounds(
 ; CHECK-NEXT:    [[TMP1:%.*]] = sub i32 5, [[X:%.*]]
 ; CHECK-NEXT:    ret i32 [[TMP1]]
 ;
   %hello_p = getelementptr inbounds [6 x i8], [6 x i8]* @hello, i32 0, i32 %x
+  %hello_l = call i32 @strlen(i8* %hello_p)
+  ret i32 %hello_l
+}
+
+define i32 @test_simplify10_no_inbounds(i32 %x) {
+; CHECK-LABEL: @test_simplify10_no_inbounds(
+; CHECK-NEXT:    [[TMP1:%.*]] = sub i32 5, [[X:%.*]]
+; CHECK-NEXT:    ret i32 [[TMP1]]
+;
+  %hello_p = getelementptr [6 x i8], [6 x i8]* @hello, i32 0, i32 %x
   %hello_l = call i32 @strlen(i8* %hello_p)
   ret i32 %hello_l
 }
@@ -203,7 +214,7 @@ define i32 @test_no_simplify3_on_null_opt(i32 %x) #0 {
 
 define i32 @test1(i8* %str) {
 ; CHECK-LABEL: @test1(
-; CHECK-NEXT:    [[LEN:%.*]] = tail call i32 @strlen(i8* noundef nonnull dereferenceable(1) [[STR:%.*]]) [[ATTR1:#.*]]
+; CHECK-NEXT:    [[LEN:%.*]] = tail call i32 @strlen(i8* noundef nonnull dereferenceable(1) [[STR:%.*]]) #[[ATTR1:[0-9]+]]
 ; CHECK-NEXT:    ret i32 [[LEN]]
 ;
   %len = tail call i32 @strlen(i8* %str) nounwind
@@ -212,7 +223,7 @@ define i32 @test1(i8* %str) {
 
 define i32 @test2(i8* %str) #0 {
 ; CHECK-LABEL: @test2(
-; CHECK-NEXT:    [[LEN:%.*]] = tail call i32 @strlen(i8* noundef [[STR:%.*]]) [[ATTR1]]
+; CHECK-NEXT:    [[LEN:%.*]] = tail call i32 @strlen(i8* noundef [[STR:%.*]]) #[[ATTR1]]
 ; CHECK-NEXT:    ret i32 [[LEN]]
 ;
   %len = tail call i32 @strlen(i8* %str) nounwind
@@ -269,5 +280,18 @@ define i1 @strlen0_after_write_to_second_byte(i8 *%ptr) {
   %cmp = icmp eq i32 %len, 0
   ret i1 %cmp
 }
+
+; Check strlen(strdup(string constant)) -> integer constant.
+
+define i32 @test_simplify_strduped_constant() {
+; CHECK-LABEL: @test_simplify_strduped_constant(
+; CHECK-NEXT:    ret i32 5
+;
+  %hello_p = getelementptr [6 x i8], [6 x i8]* @hello, i32 0, i32 0
+  %hello_s = call i8* @strdup(i8* %hello_p)
+  %hello_l = call i32 @strlen(i8* %hello_s)
+  ret i32 %hello_l
+}
+
 
 attributes #0 = { null_pointer_is_valid }

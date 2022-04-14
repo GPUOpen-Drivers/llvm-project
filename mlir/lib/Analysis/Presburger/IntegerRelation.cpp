@@ -14,6 +14,7 @@
 
 #include "mlir/Analysis/Presburger/IntegerRelation.h"
 #include "mlir/Analysis/Presburger/LinearTransform.h"
+#include "mlir/Analysis/Presburger/PWMAFunction.h"
 #include "mlir/Analysis/Presburger/PresburgerRelation.h"
 #include "mlir/Analysis/Presburger/Simplex.h"
 #include "mlir/Analysis/Presburger/Utils.h"
@@ -38,7 +39,7 @@ std::unique_ptr<IntegerPolyhedron> IntegerPolyhedron::clone() const {
 }
 
 void IntegerRelation::append(const IntegerRelation &other) {
-  assert(isSpaceEqual(other) && "Spaces must be equal.");
+  assert(space.isEqual(other.getSpace()) && "Spaces must be equal.");
 
   inequalities.reserveRows(inequalities.getNumRows() +
                            other.getNumInequalities());
@@ -60,12 +61,12 @@ IntegerRelation IntegerRelation::intersect(IntegerRelation other) const {
 }
 
 bool IntegerRelation::isEqual(const IntegerRelation &other) const {
-  assert(isSpaceEqual(other) && "Spaces must be equal.");
+  assert(space.isEqual(other.getSpace()) && "Spaces must be equal.");
   return PresburgerRelation(*this).isEqual(PresburgerRelation(other));
 }
 
 bool IntegerRelation::isSubsetOf(const IntegerRelation &other) const {
-  assert(isSpaceEqual(other) && "Spaces must be equal.");
+  assert(space.isEqual(other.getSpace()) && "Spaces must be equal.");
   return PresburgerRelation(*this).isSubsetOf(PresburgerRelation(other));
 }
 
@@ -128,7 +129,13 @@ void removeConstraintsInvolvingIdRange(IntegerRelation &poly, unsigned begin,
 }
 
 IntegerRelation::CountsSnapshot IntegerRelation::getCounts() const {
-  return {PresburgerSpace(*this), getNumInequalities(), getNumEqualities()};
+  return {getSpace(), getNumInequalities(), getNumEqualities()};
+}
+
+void IntegerRelation::truncateIdKind(IdKind kind, unsigned num) {
+  unsigned curNum = getNumIdKind(kind);
+  assert(num <= curNum && "Can't truncate to more ids!");
+  removeIdRange(kind, num, curNum);
 }
 
 void IntegerRelation::truncateIdKind(IdKind kind,
@@ -145,10 +152,25 @@ void IntegerRelation::truncate(const CountsSnapshot &counts) {
   removeEqualityRange(counts.getNumEqs(), getNumEqualities());
 }
 
+SymbolicLexMin IntegerPolyhedron::findSymbolicIntegerLexMin() const {
+  // Compute the symbolic lexmin of the dims and locals, with the symbols being
+  // the actual symbols of this set.
+  SymbolicLexMin result =
+      SymbolicLexSimplex(*this, IntegerPolyhedron(PresburgerSpace::getSetSpace(
+                                    /*numDims=*/getNumSymbolIds())))
+          .computeSymbolicIntegerLexMin();
+
+  // We want to return only the lexmin over the dims, so strip the locals from
+  // the computed lexmin.
+  result.lexmin.truncateOutput(result.lexmin.getNumOutputs() -
+                               getNumLocalIds());
+  return result;
+}
+
 unsigned IntegerRelation::insertId(IdKind kind, unsigned pos, unsigned num) {
   assert(pos <= getNumIdKind(kind));
 
-  unsigned insertPos = PresburgerSpace::insertId(kind, pos, num);
+  unsigned insertPos = space.insertId(kind, pos, num);
   inequalities.insertColumns(insertPos, num);
   equalities.insertColumns(insertPos, num);
   return insertPos;
@@ -192,7 +214,7 @@ void IntegerRelation::removeIdRange(IdKind kind, unsigned idStart,
   inequalities.removeColumns(offset + idStart, idLimit - idStart);
 
   // Remove eliminated identifiers from the space.
-  PresburgerSpace::removeIdRange(kind, idStart, idLimit);
+  space.removeIdRange(kind, idStart, idLimit);
 }
 
 void IntegerRelation::removeIdRange(unsigned idStart, unsigned idLimit) {
@@ -866,7 +888,7 @@ void IntegerRelation::gcdTightenInequalities() {
   unsigned numCols = getNumCols();
   for (unsigned i = 0, e = getNumInequalities(); i < e; ++i) {
     // Normalize the constraint and tighten the constant term by the GCD.
-    uint64_t gcd = inequalities.normalizeRow(i, getNumCols() - 1);
+    int64_t gcd = inequalities.normalizeRow(i, getNumCols() - 1);
     if (gcd > 1)
       atIneq(i, numCols - 1) = mlir::floorDiv(atIneq(i, numCols - 1), gcd);
   }
@@ -1067,7 +1089,8 @@ void IntegerRelation::eliminateRedundantLocalId(unsigned posA, unsigned posB) {
 /// division representation for some local id cannot be obtained, and thus these
 /// local ids are not considered for detecting duplicates.
 void IntegerRelation::mergeLocalIds(IntegerRelation &other) {
-  assert(isSpaceCompatible(other) && "Spaces should be compatible.");
+  assert(space.isCompatible(other.getSpace()) &&
+         "Spaces should be compatible.");
 
   IntegerRelation &relA = *this;
   IntegerRelation &relB = other;
@@ -1104,7 +1127,20 @@ void IntegerRelation::mergeLocalIds(IntegerRelation &other) {
 
   // Merge all divisions by removing duplicate divisions.
   unsigned localOffset = getIdKindOffset(IdKind::Local);
-  removeDuplicateDivs(divsA, denomsA, localOffset, merge);
+  presburger::removeDuplicateDivs(divsA, denomsA, localOffset, merge);
+}
+
+void IntegerRelation::removeDuplicateDivs() {
+  std::vector<SmallVector<int64_t, 8>> divs;
+  SmallVector<unsigned, 4> denoms;
+
+  getLocalReprs(divs, denoms);
+  auto merge = [this](unsigned i, unsigned j) -> bool {
+    eliminateRedundantLocalId(i, j);
+    return true;
+  };
+  presburger::removeDuplicateDivs(divs, denoms, getIdKindOffset(IdKind::Local),
+                                  merge);
 }
 
 /// Removes local variables using equalities. Each equality is checked if it
@@ -1702,20 +1738,14 @@ void IntegerRelation::fourierMotzkinEliminate(unsigned pos, bool darkShadow,
     }
   }
 
-  // Set the number of dimensions, symbols, locals in the resulting system.
-  unsigned newNumDomain =
-      getNumDomainIds() - getIdKindOverlap(IdKind::Domain, pos, pos + 1);
-  unsigned newNumRange =
-      getNumRangeIds() - getIdKindOverlap(IdKind::Range, pos, pos + 1);
-  unsigned newNumSymbols =
-      getNumSymbolIds() - getIdKindOverlap(IdKind::Symbol, pos, pos + 1);
-  unsigned newNumLocals =
-      getNumLocalIds() - getIdKindOverlap(IdKind::Local, pos, pos + 1);
+  PresburgerSpace newSpace = getSpace();
+  IdKind idKindRemove = newSpace.getIdKindAt(pos);
+  unsigned relativePos = pos - newSpace.getIdKindOffset(idKindRemove);
+  newSpace.removeIdRange(idKindRemove, relativePos, relativePos + 1);
 
   /// Create the new system which has one identifier less.
   IntegerRelation newRel(lbIndices.size() * ubIndices.size() + nbIndices.size(),
-                         getNumEqualities(), getNumCols() - 1, newNumDomain,
-                         newNumRange, newNumSymbols, newNumLocals);
+                         getNumEqualities(), getNumCols() - 1, newSpace);
 
   // This will be used to check if the elimination was integer exact.
   unsigned lcmProducts = 1;
@@ -1866,8 +1896,7 @@ static BoundCmpResult compareBounds(ArrayRef<int64_t> a, ArrayRef<int64_t> b) {
 // Returns constraints that are common to both A & B.
 static void getCommonConstraints(const IntegerRelation &a,
                                  const IntegerRelation &b, IntegerRelation &c) {
-  c = IntegerRelation(a.getNumDomainIds(), a.getNumRangeIds(),
-                      a.getNumSymbolIds(), a.getNumLocalIds());
+  c = IntegerRelation(a.getSpace());
   // a naive O(n^2) check should be enough here given the input sizes.
   for (unsigned r = 0, e = a.getNumInequalities(); r < e; ++r) {
     for (unsigned s = 0, f = b.getNumInequalities(); s < f; ++s) {
@@ -1891,12 +1920,12 @@ static void getCommonConstraints(const IntegerRelation &a,
 // lower bounds and the max of the upper bounds along each of the dimensions.
 LogicalResult
 IntegerRelation::unionBoundingBox(const IntegerRelation &otherCst) {
-  assert(isSpaceEqual(otherCst) && "Spaces should match.");
+  assert(space.isEqual(otherCst.getSpace()) && "Spaces should match.");
   assert(getNumLocalIds() == 0 && "local ids not supported yet here");
 
   // Get the constraints common to both systems; these will be added as is to
   // the union.
-  IntegerRelation commonCst;
+  IntegerRelation commonCst(PresburgerSpace::getRelationSpace());
   getCommonConstraints(*this, otherCst, commonCst);
 
   std::vector<SmallVector<int64_t, 8>> boundingLbs;
@@ -2055,7 +2084,7 @@ void IntegerRelation::removeIndependentConstraints(unsigned pos, unsigned num) {
 }
 
 void IntegerRelation::printSpace(raw_ostream &os) const {
-  PresburgerSpace::print(os);
+  space.print(os);
   os << getNumConstraints() << " constraints\n";
 }
 

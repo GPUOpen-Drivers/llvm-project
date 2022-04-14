@@ -116,10 +116,10 @@ static bool hasaUniqueDim(ArrayRef<AffineMap> maps, unsigned testMapLocation) {
     if (expr != nullptr)
       dimsToCheck.insert(expr.getPosition());
   }
-  for (auto It : llvm::enumerate(maps)) {
-    if (It.index() == testMapLocation)
+  for (const auto &it : llvm::enumerate(maps)) {
+    if (it.index() == testMapLocation)
       continue;
-    auto map = It.value();
+    auto map = it.value();
     for (auto result : map.getResults()) {
       auto expr = result.dyn_cast<AffineDimExpr>();
       if (expr != nullptr) {
@@ -913,35 +913,12 @@ struct DeadArgsGenericOpInputs : public OpRewritePattern<GenericOp> {
     return success();
   }
 };
-
-/// Fold linalg.fill into linalg.generic
-struct FoldFillWithGenericOp : public OpRewritePattern<GenericOp> {
-  using OpRewritePattern<GenericOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(GenericOp genericOp,
-                                PatternRewriter &rewriter) const override {
-    if (!genericOp.hasTensorSemantics())
-      return failure();
-    bool fillFound = false;
-    Block &payload = genericOp.region().front();
-    for (OpOperand *opOperand : genericOp.getInputOperands()) {
-      FillOp fillOp = opOperand->get().getDefiningOp<FillOp>();
-      if (fillOp) {
-        fillFound = true;
-        payload.getArgument(opOperand->getOperandNumber())
-            .replaceAllUsesWith(fillOp.value());
-      }
-    }
-    // fail if there are no FillOps to fold.
-    return success(fillFound);
-  }
-};
 } // namespace
 
 void GenericOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
   results.add<DeduplicateGenericOpInputs, EraseIdentityGenericOp,
-              DeadArgsGenericOpInputs, FoldFillWithGenericOp>(context);
+              DeadArgsGenericOpInputs>(context);
 }
 
 LogicalResult GenericOp::fold(ArrayRef<Attribute>,
@@ -1741,7 +1718,7 @@ static void populateMap(LinalgOp linalgOp, ArrayRef<OpOperand *> operands,
     // Get the `sourceShape` of the `sourceType`. If the operand is a result of
     // `tensor.cast` operation and source of the cast operation has a static
     // shape, then assign it to the `sourceShape`.
-    auto parentOp = src.getDefiningOp();
+    auto *parentOp = src.getDefiningOp();
     ArrayRef<int64_t> sourceShape = sourceType.getShape();
     if (parentOp) {
       if (auto castOp = dyn_cast<tensor::CastOp>(parentOp)) {

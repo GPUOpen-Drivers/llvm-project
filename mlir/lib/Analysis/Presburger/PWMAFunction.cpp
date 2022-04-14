@@ -27,8 +27,7 @@ static SmallVector<int64_t, 8> subtract(ArrayRef<int64_t> vecA,
 }
 
 PresburgerSet PWMAFunction::getDomain() const {
-  PresburgerSet domain =
-      PresburgerSet::getEmpty(getNumDimIds(), getNumSymbolIds());
+  PresburgerSet domain = PresburgerSet::getEmpty(getSpace());
   for (const MultiAffineFunction &piece : pieces)
     domain.unionInPlace(piece.getDomain());
   return domain;
@@ -84,7 +83,8 @@ void MultiAffineFunction::print(raw_ostream &os) const {
 void MultiAffineFunction::dump() const { print(llvm::errs()); }
 
 bool MultiAffineFunction::isEqual(const MultiAffineFunction &other) const {
-  return isSpaceCompatible(other) && getDomain().isEqual(other.getDomain()) &&
+  return space.isCompatible(other.getSpace()) &&
+         getDomain().isEqual(other.getDomain()) &&
          isEqualWhereDomainsOverlap(other);
 }
 
@@ -115,9 +115,21 @@ void MultiAffineFunction::eliminateRedundantLocalId(unsigned posA,
   IntegerPolyhedron::eliminateRedundantLocalId(posA, posB);
 }
 
+void MultiAffineFunction::truncateOutput(unsigned count) {
+  assert(count <= output.getNumRows());
+  output.resizeVertically(count);
+}
+
+void PWMAFunction::truncateOutput(unsigned count) {
+  assert(count <= numOutputs);
+  for (MultiAffineFunction &piece : pieces)
+    piece.truncateOutput(count);
+  numOutputs = count;
+}
+
 bool MultiAffineFunction::isEqualWhereDomainsOverlap(
     MultiAffineFunction other) const {
-  if (!isSpaceCompatible(other))
+  if (!space.isCompatible(other.getSpace()))
     return false;
 
   // `commonFunc` has the same output as `this`.
@@ -150,7 +162,7 @@ bool MultiAffineFunction::isEqualWhereDomainsOverlap(
 /// Two PWMAFunctions are equal if they have the same dimensionalities,
 /// the same domain, and take the same value at every point in the domain.
 bool PWMAFunction::isEqual(const PWMAFunction &other) const {
-  if (!isSpaceCompatible(other))
+  if (!space.isCompatible(other.space))
     return false;
 
   if (!this->getDomain().isEqual(other.getDomain()))
@@ -168,7 +180,7 @@ bool PWMAFunction::isEqual(const PWMAFunction &other) const {
 }
 
 void PWMAFunction::addPiece(const MultiAffineFunction &piece) {
-  assert(piece.isSpaceCompatible(*this) &&
+  assert(space.isCompatible(piece.getSpace()) &&
          "Piece to be added is not compatible with this PWMAFunction!");
   assert(piece.isConsistent() && "Piece is internally inconsistent!");
   assert(this->getDomain()

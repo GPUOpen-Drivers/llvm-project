@@ -41,8 +41,11 @@ for.end:
 ; CHECK-EMPTY:
 ; CHECK-NEXT: Live-in vp<[[BTC:%.+]]> = backedge-taken count
 ; CHECK-EMPTY:
+; CHECK-NEXT: vector.ph:
+; CHECK-NEXT: Successor(s): vector loop
+; CHECK-EMPTY:
 ; CHECK-NEXT: <x1> vector loop: {
-; CHECK-NEXT: loop:
+; CHECK-NEXT: vector.body:
 ; CHECK-NEXT:   EMIT vp<[[CAN_IV:%.+]]> = CANONICAL-INDUCTION
 ; CHECK-NEXT:   WIDEN-INDUCTION %iv = phi 0, %iv.next
 ; CHECK-NEXT:   vp<[[STEPS:%.+]]> = SCALAR-STEPS vp<[[CAN_IV]]>, ir<0>, ir<1>
@@ -55,7 +58,7 @@ for.end:
 ; CHECK-NEXT:    pred.store.entry:
 ; CHECK-NEXT:      BRANCH-ON-MASK vp<[[COND]]>
 ; CHECK-NEXT:    Successor(s): pred.store.if, pred.store.continue
-; CHECK-NEXT:    CondBit: vp<[[COND]]> (loop)
+; CHECK-NEXT:    CondBit: vp<[[COND]]> (vector.body)
 ; CHECK-EMPTY:
 ; CHECK-NEXT:    pred.store.if:
 ; CHECK-NEXT:      REPLICATE ir<%gep> = getelementptr ir<%ptr>, vp<[[STEPS]]>

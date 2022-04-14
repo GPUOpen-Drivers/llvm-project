@@ -28,86 +28,6 @@
 #include <limits>
 #include <utility>
 
-#define FOR_EACH_NODE_KIND(X)                                                  \
-  X(NodeArrayNode)                                                             \
-  X(DotSuffix)                                                                 \
-  X(VendorExtQualType)                                                         \
-  X(QualType)                                                                  \
-  X(ConversionOperatorType)                                                    \
-  X(PostfixQualifiedType)                                                      \
-  X(ElaboratedTypeSpefType)                                                    \
-  X(NameType)                                                                  \
-  X(AbiTagAttr)                                                                \
-  X(EnableIfAttr)                                                              \
-  X(ObjCProtoName)                                                             \
-  X(PointerType)                                                               \
-  X(ReferenceType)                                                             \
-  X(PointerToMemberType)                                                       \
-  X(ArrayType)                                                                 \
-  X(FunctionType)                                                              \
-  X(NoexceptSpec)                                                              \
-  X(DynamicExceptionSpec)                                                      \
-  X(FunctionEncoding)                                                          \
-  X(LiteralOperator)                                                           \
-  X(SpecialName)                                                               \
-  X(CtorVtableSpecialName)                                                     \
-  X(QualifiedName)                                                             \
-  X(NestedName)                                                                \
-  X(LocalName)                                                                 \
-  X(ModuleName)                                                                \
-  X(ModuleEntity)                                                              \
-  X(VectorType)                                                                \
-  X(PixelVectorType)                                                           \
-  X(BinaryFPType)                                                              \
-  X(SyntheticTemplateParamName)                                                \
-  X(TypeTemplateParamDecl)                                                     \
-  X(NonTypeTemplateParamDecl)                                                  \
-  X(TemplateTemplateParamDecl)                                                 \
-  X(TemplateParamPackDecl)                                                     \
-  X(ParameterPack)                                                             \
-  X(TemplateArgumentPack)                                                      \
-  X(ParameterPackExpansion)                                                    \
-  X(TemplateArgs)                                                              \
-  X(ForwardTemplateReference)                                                  \
-  X(NameWithTemplateArgs)                                                      \
-  X(GlobalQualifiedName)                                                       \
-  X(ExpandedSpecialSubstitution)                                               \
-  X(SpecialSubstitution)                                                       \
-  X(CtorDtorName)                                                              \
-  X(DtorName)                                                                  \
-  X(UnnamedTypeName)                                                           \
-  X(ClosureTypeName)                                                           \
-  X(StructuredBindingName)                                                     \
-  X(BinaryExpr)                                                                \
-  X(ArraySubscriptExpr)                                                        \
-  X(PostfixExpr)                                                               \
-  X(ConditionalExpr)                                                           \
-  X(MemberExpr)                                                                \
-  X(SubobjectExpr)                                                             \
-  X(EnclosingExpr)                                                             \
-  X(CastExpr)                                                                  \
-  X(SizeofParamPackExpr)                                                       \
-  X(CallExpr)                                                                  \
-  X(NewExpr)                                                                   \
-  X(DeleteExpr)                                                                \
-  X(PrefixExpr)                                                                \
-  X(FunctionParam)                                                             \
-  X(ConversionExpr)                                                            \
-  X(PointerToMemberConversionExpr)                                             \
-  X(InitListExpr)                                                              \
-  X(FoldExpr)                                                                  \
-  X(ThrowExpr)                                                                 \
-  X(BoolExpr)                                                                  \
-  X(StringLiteral)                                                             \
-  X(LambdaExpr)                                                                \
-  X(EnumLiteral)                                                               \
-  X(IntegerLiteral)                                                            \
-  X(FloatLiteral)                                                              \
-  X(DoubleLiteral)                                                             \
-  X(LongDoubleLiteral)                                                         \
-  X(BracedExpr)                                                                \
-  X(BracedRangeExpr)
-
 DEMANGLE_NAMESPACE_BEGIN
 
 template <class T, size_t N> class PODSmallVector {
@@ -235,9 +155,8 @@ public:
 class Node {
 public:
   enum Kind : unsigned char {
-#define ENUMERATOR(NodeKind) K ## NodeKind,
-    FOR_EACH_NODE_KIND(ENUMERATOR)
-#undef ENUMERATOR
+#define NODE(NodeKind) K##NodeKind,
+#include "ItaniumNodes.def"
   };
 
   /// Three-way bool to track a cached value. Unknown is possible if this node
@@ -538,7 +457,7 @@ class PostfixQualifiedType final : public Node {
   const StringView Postfix;
 
 public:
-  PostfixQualifiedType(Node *Ty_, StringView Postfix_)
+  PostfixQualifiedType(const Node *Ty_, StringView Postfix_)
       : Node(KPostfixQualifiedType), Ty(Ty_), Postfix(Postfix_) {}
 
   template<typename Fn> void match(Fn F) const { F(Ty, Postfix); }
@@ -561,6 +480,26 @@ public:
   StringView getBaseName() const override { return Name; }
 
   void printLeft(OutputBuffer &OB) const override { OB += Name; }
+};
+
+class BitIntType final : public Node {
+  const Node *Size;
+  bool Signed;
+
+public:
+  BitIntType(const Node *Size_, bool Signed_)
+      : Node(KBitIntType), Size(Size_), Signed(Signed_) {}
+
+  template <typename Fn> void match(Fn F) const { F(Size, Signed); }
+
+  void printLeft(OutputBuffer &OB) const override {
+    if (!Signed)
+      OB += "unsigned ";
+    OB += "_BitInt";
+    OB.printOpen();
+    Size->printAsOperand(OB);
+    OB.printClose();
+  }
 };
 
 class ElaboratedTypeSpefType : public Node {
@@ -737,7 +676,7 @@ public:
   void printLeft(OutputBuffer &OB) const override {
     if (Printing)
       return;
-    SwapAndRestore<bool> SavePrinting(Printing, true);
+    ScopedOverride<bool> SavePrinting(Printing, true);
     std::pair<ReferenceKind, const Node *> Collapsed = collapse(OB);
     if (!Collapsed.second)
       return;
@@ -752,7 +691,7 @@ public:
   void printRight(OutputBuffer &OB) const override {
     if (Printing)
       return;
-    SwapAndRestore<bool> SavePrinting(Printing, true);
+    ScopedOverride<bool> SavePrinting(Printing, true);
     std::pair<ReferenceKind, const Node *> Collapsed = collapse(OB);
     if (!Collapsed.second)
       return;
@@ -1128,9 +1067,8 @@ class VectorType final : public Node {
   const Node *Dimension;
 
 public:
-  VectorType(const Node *BaseType_, Node *Dimension_)
-      : Node(KVectorType), BaseType(BaseType_),
-        Dimension(Dimension_) {}
+  VectorType(const Node *BaseType_, const Node *Dimension_)
+      : Node(KVectorType), BaseType(BaseType_), Dimension(Dimension_) {}
 
   template<typename Fn> void match(Fn F) const { F(BaseType, Dimension); }
 
@@ -1262,7 +1200,7 @@ public:
   template<typename Fn> void match(Fn F) const { F(Name, Params); }
 
   void printLeft(OutputBuffer &OB) const override {
-    SwapAndRestore<unsigned> LT(OB.GtIsGt, 0);
+    ScopedOverride<unsigned> LT(OB.GtIsGt, 0);
     OB += "template<";
     Params.printWithComma(OB);
     OB += "> typename ";
@@ -1398,8 +1336,8 @@ public:
 
   void printLeft(OutputBuffer &OB) const override {
     constexpr unsigned Max = std::numeric_limits<unsigned>::max();
-    SwapAndRestore<unsigned> SavePackIdx(OB.CurrentPackIndex, Max);
-    SwapAndRestore<unsigned> SavePackMax(OB.CurrentPackMax, Max);
+    ScopedOverride<unsigned> SavePackIdx(OB.CurrentPackIndex, Max);
+    ScopedOverride<unsigned> SavePackMax(OB.CurrentPackMax, Max);
     size_t StreamPos = OB.getCurrentPosition();
 
     // Print the first element in the pack. If Child contains a ParameterPack,
@@ -1440,7 +1378,7 @@ public:
   NodeArray getParams() { return Params; }
 
   void printLeft(OutputBuffer &OB) const override {
-    SwapAndRestore<unsigned> LT(OB.GtIsGt, 0);
+    ScopedOverride<unsigned> LT(OB.GtIsGt, 0);
     OB += "<";
     Params.printWithComma(OB);
     if (OB.back() == '>')
@@ -1490,38 +1428,38 @@ struct ForwardTemplateReference : Node {
   bool hasRHSComponentSlow(OutputBuffer &OB) const override {
     if (Printing)
       return false;
-    SwapAndRestore<bool> SavePrinting(Printing, true);
+    ScopedOverride<bool> SavePrinting(Printing, true);
     return Ref->hasRHSComponent(OB);
   }
   bool hasArraySlow(OutputBuffer &OB) const override {
     if (Printing)
       return false;
-    SwapAndRestore<bool> SavePrinting(Printing, true);
+    ScopedOverride<bool> SavePrinting(Printing, true);
     return Ref->hasArray(OB);
   }
   bool hasFunctionSlow(OutputBuffer &OB) const override {
     if (Printing)
       return false;
-    SwapAndRestore<bool> SavePrinting(Printing, true);
+    ScopedOverride<bool> SavePrinting(Printing, true);
     return Ref->hasFunction(OB);
   }
   const Node *getSyntaxNode(OutputBuffer &OB) const override {
     if (Printing)
       return this;
-    SwapAndRestore<bool> SavePrinting(Printing, true);
+    ScopedOverride<bool> SavePrinting(Printing, true);
     return Ref->getSyntaxNode(OB);
   }
 
   void printLeft(OutputBuffer &OB) const override {
     if (Printing)
       return;
-    SwapAndRestore<bool> SavePrinting(Printing, true);
+    ScopedOverride<bool> SavePrinting(Printing, true);
     Ref->printLeft(OB);
   }
   void printRight(OutputBuffer &OB) const override {
     if (Printing)
       return;
-    SwapAndRestore<bool> SavePrinting(Printing, true);
+    ScopedOverride<bool> SavePrinting(Printing, true);
     Ref->printRight(OB);
   }
 };
@@ -1738,7 +1676,7 @@ public:
 
   void printDeclarator(OutputBuffer &OB) const {
     if (!TemplateParams.empty()) {
-      SwapAndRestore<unsigned> LT(OB.GtIsGt, 0);
+      ScopedOverride<unsigned> LT(OB.GtIsGt, 0);
       OB += "<";
       TemplateParams.printWithComma(OB);
       OB += ">";
@@ -1789,7 +1727,8 @@ public:
   }
 
   void printLeft(OutputBuffer &OB) const override {
-    bool ParenAll = OB.isGtInsideTemplateArgs() && InfixOperator == ">";
+    bool ParenAll = OB.isGtInsideTemplateArgs() &&
+                    (InfixOperator == ">" || InfixOperator == ">>");
     if (ParenAll)
       OB.printOpen();
     // Assignment is right associative, with special LHS precedence.
@@ -1927,7 +1866,8 @@ class EnclosingExpr : public Node {
   const StringView Postfix;
 
 public:
-  EnclosingExpr(StringView Prefix_, Node *Infix_, Prec Prec_ = Prec::Primary)
+  EnclosingExpr(StringView Prefix_, const Node *Infix_,
+                Prec Prec_ = Prec::Primary)
       : Node(KEnclosingExpr, Prec_), Prefix(Prefix_), Infix(Infix_) {}
 
   template <typename Fn> void match(Fn F) const {
@@ -1960,7 +1900,7 @@ public:
   void printLeft(OutputBuffer &OB) const override {
     OB += CastKind;
     {
-      SwapAndRestore<unsigned> LT(OB.GtIsGt, 0);
+      ScopedOverride<unsigned> LT(OB.GtIsGt, 0);
       OB += "<";
       To->printLeft(OB);
       if (OB.back() == '>')
@@ -2440,24 +2380,22 @@ using LongDoubleLiteral = FloatLiteralImpl<long double>;
 template<typename Fn>
 void Node::visit(Fn F) const {
   switch (K) {
-#define CASE(X) case K ## X: return F(static_cast<const X*>(this));
-    FOR_EACH_NODE_KIND(CASE)
-#undef CASE
+#define NODE(X)                                                                \
+  case K##X:                                                                   \
+    return F(static_cast<const X *>(this));
+#include "ItaniumNodes.def"
   }
   assert(0 && "unknown mangling node kind");
 }
 
 /// Determine the kind of a node from its type.
 template<typename NodeT> struct NodeKind;
-#define SPECIALIZATION(X) \
-  template<> struct NodeKind<X> { \
-    static constexpr Node::Kind Kind = Node::K##X; \
-    static constexpr const char *name() { return #X; } \
+#define NODE(X)                                                                \
+  template <> struct NodeKind<X> {                                             \
+    static constexpr Node::Kind Kind = Node::K##X;                             \
+    static constexpr const char *name() { return #X; }                         \
   };
-FOR_EACH_NODE_KIND(SPECIALIZATION)
-#undef SPECIALIZATION
-
-#undef FOR_EACH_NODE_KIND
+#include "ItaniumNodes.def"
 
 template <typename Derived, typename Alloc> struct AbstractManglingParser {
   const char *First;
@@ -2811,8 +2749,8 @@ Node *AbstractManglingParser<Derived, Alloc>::parseLocalName(NameState *State) {
   return make<LocalName>(Encoding, Entity);
 }
 
-// <unscoped-name> ::= [L]* <unqualified-name>
-//                 ::= St [L]* <unqualified-name>   # ::std::
+// <unscoped-name> ::= <unqualified-name>
+//                 ::= St <unqualified-name>   # ::std::
 // [*] extension
 template <typename Derived, typename Alloc>
 Node *
@@ -2825,7 +2763,6 @@ AbstractManglingParser<Derived, Alloc>::parseUnscopedName(NameState *State,
     if (Std == nullptr)
       return nullptr;
   }
-  consumeIf('L');
 
   Node *Res = nullptr;
   ModuleName *Module = nullptr;
@@ -2843,29 +2780,32 @@ AbstractManglingParser<Derived, Alloc>::parseUnscopedName(NameState *State,
     }
   }
 
-  if (Res == nullptr)
+  if (Res == nullptr || Std != nullptr) {
     Res = getDerived().parseUnqualifiedName(State, Std, Module);
+  }
 
   return Res;
 }
 
-// <unqualified-name> ::= [<module-name>] <operator-name> [<abi-tags>]
+// <unqualified-name> ::= [<module-name>] L? <operator-name> [<abi-tags>]
 //                    ::= [<module-name>] <ctor-dtor-name> [<abi-tags>]
-//                    ::= [<module-name>] <source-name> [<abi-tags>]
-//                    ::= [<module-name>] <unnamed-type-name> [<abi-tags>]
+//                    ::= [<module-name>] L? <source-name> [<abi-tags>]
+//                    ::= [<module-name>] L? <unnamed-type-name> [<abi-tags>]
 //			# structured binding declaration
-//                    ::= [<module-name>] DC <source-name>+ E
+//                    ::= [<module-name>] L? DC <source-name>+ E
 template <typename Derived, typename Alloc>
 Node *AbstractManglingParser<Derived, Alloc>::parseUnqualifiedName(
     NameState *State, Node *Scope, ModuleName *Module) {
   if (getDerived().parseModuleNameOpt(Module))
     return nullptr;
 
+  consumeIf('L');
+
   Node *Result;
-  if (look() == 'U') {
-    Result = getDerived().parseUnnamedTypeName(State);
-  } else if (look() >= '1' && look() <= '9') {
+  if (look() >= '1' && look() <= '9') {
     Result = getDerived().parseSourceName(State);
+  } else if (look() == 'U') {
+    Result = getDerived().parseUnnamedTypeName(State);
   } else if (consumeIf("DC")) {
     // Structured binding
     size_t BindingsBegin = Names.size();
@@ -2937,7 +2877,7 @@ AbstractManglingParser<Derived, Alloc>::parseUnnamedTypeName(NameState *State) {
     return make<UnnamedTypeName>(Count);
   }
   if (consumeIf("Ul")) {
-    SwapAndRestore<size_t> SwapParams(ParsingLambdaParamsAtLevel,
+    ScopedOverride<size_t> SwapParams(ParsingLambdaParamsAtLevel,
                                       TemplateParams.size());
     ScopedTemplateParamList LambdaTemplateParams(this);
 
@@ -3142,11 +3082,11 @@ AbstractManglingParser<Derived, Alloc>::parseOperatorName(NameState *State) {
   if (const auto *Op = parseOperatorEncoding()) {
     if (Op->getKind() == OperatorInfo::CCast) {
       //              ::= cv <type>    # (cast)
-      SwapAndRestore<bool> SaveTemplate(TryToParseTemplateArgs, false);
+      ScopedOverride<bool> SaveTemplate(TryToParseTemplateArgs, false);
       // If we're parsing an encoding, State != nullptr and the conversion
       // operators' <type> could have a <template-param> that refers to some
       // <template-arg>s further ahead in the mangled name.
-      SwapAndRestore<bool> SavePermit(PermitForwardTemplateReferences,
+      ScopedOverride<bool> SavePermit(PermitForwardTemplateReferences,
                                       PermitForwardTemplateReferences ||
                                           State != nullptr);
       Node *Ty = getDerived().parseType();
@@ -3245,10 +3185,12 @@ AbstractManglingParser<Derived, Alloc>::parseCtorDtorName(Node *&SoFar,
   return nullptr;
 }
 
-// <nested-name> ::= N [<CV-Qualifiers>] [<ref-qualifier>] <prefix> <unqualified-name> E
-//               ::= N [<CV-Qualifiers>] [<ref-qualifier>] <template-prefix> <template-args> E
+// <nested-name> ::= N [<CV-Qualifiers>] [<ref-qualifier>] <prefix>
+// 			<unqualified-name> E
+//               ::= N [<CV-Qualifiers>] [<ref-qualifier>] <template-prefix>
+//               	<template-args> E
 //
-// <prefix> ::= <prefix> [L]* <unqualified-name>
+// <prefix> ::= <prefix> <unqualified-name>
 //          ::= <template-prefix> <template-args>
 //          ::= <template-param>
 //          ::= <decltype>
@@ -3312,7 +3254,6 @@ AbstractManglingParser<Derived, Alloc>::parseNestedName(NameState *State) {
       SoFar = getDerived().parseDecltype();
     } else {
       ModuleName *Module = nullptr;
-      bool IsLocal = consumeIf('L'); // extension
 
       if (look() == 'S') {
         //          ::= <substitution>
@@ -3327,7 +3268,7 @@ AbstractManglingParser<Derived, Alloc>::parseNestedName(NameState *State) {
           return nullptr;
         if (S->getKind() == Node::KModuleName) {
           Module = static_cast<ModuleName *>(S);
-        } else if (SoFar != nullptr || IsLocal) {
+        } else if (SoFar != nullptr) {
           return nullptr; // Cannot have a prefix.
         } else {
           SoFar = S;
@@ -3797,8 +3738,8 @@ Node *AbstractManglingParser<Derived, Alloc>::parseQualifiedType() {
       StringView ProtoSourceName = Qual.dropFront(std::strlen("objcproto"));
       StringView Proto;
       {
-        SwapAndRestore<const char *> SaveFirst(First, ProtoSourceName.begin()),
-                                     SaveLast(Last, ProtoSourceName.end());
+        ScopedOverride<const char *> SaveFirst(First, ProtoSourceName.begin()),
+            SaveLast(Last, ProtoSourceName.end());
         Proto = parseBareSourceName();
       }
       if (Proto.empty())
@@ -4002,6 +3943,22 @@ Node *AbstractManglingParser<Derived, Alloc>::parseType() {
       if (!consumeIf('_'))
         return nullptr;
       return make<BinaryFPType>(DimensionNumber);
+    }
+    //                ::= DB <number> _                             # C23 signed _BitInt(N)
+    //                ::= DB <instantiation-dependent expression> _ # C23 signed _BitInt(N)
+    //                ::= DU <number> _                             # C23 unsigned _BitInt(N)
+    //                ::= DU <instantiation-dependent expression> _ # C23 unsigned _BitInt(N)
+    case 'B':
+    case 'U': {
+      bool Signed = look(1) == 'B';
+      First += 2;
+      Node *Size = std::isdigit(look()) ? make<NameType>(parseNumber())
+                                        : getDerived().parseExpr();
+      if (!Size)
+        return nullptr;
+      if (!consumeIf('_'))
+        return nullptr;
+      return make<BitIntType>(Size, Signed);
     }
     //                ::= Di   # char32_t
     case 'i':
@@ -4278,7 +4235,7 @@ Node *AbstractManglingParser<Derived, Alloc>::parseConversionExpr() {
     return nullptr;
   Node *Ty;
   {
-    SwapAndRestore<bool> SaveTemp(TryToParseTemplateArgs, false);
+    ScopedOverride<bool> SaveTemp(TryToParseTemplateArgs, false);
     Ty = getDerived().parseType();
   }
 
@@ -4713,7 +4670,7 @@ Node *AbstractManglingParser<Derived, Alloc>::parseExpr() {
       // C Cast: (type)expr
       Node *Ty;
       {
-        SwapAndRestore<bool> SaveTemp(TryToParseTemplateArgs, false);
+        ScopedOverride<bool> SaveTemp(TryToParseTemplateArgs, false);
         Ty = getDerived().parseType();
       }
       if (Ty == nullptr)

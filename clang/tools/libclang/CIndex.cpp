@@ -1462,7 +1462,7 @@ bool CursorVisitor::VisitTemplateName(TemplateName Name, SourceLocation Loc) {
   case TemplateName::QualifiedTemplate:
     // FIXME: Visit nested-name-specifier.
     return Visit(MakeCursorTemplateRef(
-        Name.getAsQualifiedTemplateName()->getDecl(), Loc, TU));
+        Name.getAsQualifiedTemplateName()->getTemplateDecl(), Loc, TU));
 
   case TemplateName::SubstTemplateTemplateParm:
     return Visit(MakeCursorTemplateRef(
@@ -2571,6 +2571,10 @@ void OMPClauseEnqueue::VisitOMPUseDeviceAddrClause(
 }
 void OMPClauseEnqueue::VisitOMPIsDevicePtrClause(
     const OMPIsDevicePtrClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPHasDeviceAddrClause(
+    const OMPHasDeviceAddrClause *C) {
   VisitOMPClauseList(C);
 }
 void OMPClauseEnqueue::VisitOMPNontemporalClause(

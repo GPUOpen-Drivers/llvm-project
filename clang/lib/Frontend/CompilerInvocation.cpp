@@ -94,6 +94,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -105,20 +106,6 @@ using namespace clang;
 using namespace driver;
 using namespace options;
 using namespace llvm::opt;
-
-//===----------------------------------------------------------------------===//
-// Helpers.
-//===----------------------------------------------------------------------===//
-
-// Parse misexpect tolerance argument value.
-// Valid option values are integers in the range [0, 100)
-inline Expected<Optional<uint64_t>> parseToleranceOption(StringRef Arg) {
-  int64_t Val;
-  if (Arg.getAsInteger(10, Val))
-    return llvm::createStringError(llvm::inconvertibleErrorCode(),
-                                   "Not an integer: %s", Arg.data());
-  return Val;
-}
 
 //===----------------------------------------------------------------------===//
 // Initialization.
@@ -516,6 +503,22 @@ static bool FixupInvocation(CompilerInvocation &Invocation,
   if (Args.hasArg(OPT_gpu_max_threads_per_block_EQ) && !LangOpts.HIP)
     Diags.Report(diag::warn_ignored_hip_only_option)
         << Args.getLastArg(OPT_gpu_max_threads_per_block_EQ)->getAsString(Args);
+
+  // When these options are used, the compiler is allowed to apply
+  // optimizations that may affect the final result. For example
+  // (x+y)+z is transformed to x+(y+z) but may not give the same
+  // final result; it's not value safe.
+  // Another example can be to simplify x/x to 1.0 but x could be 0.0, INF
+  // or NaN. Final result may then differ. An error is issued when the eval
+  // method is set with one of these options.
+  if (Args.hasArg(OPT_ffp_eval_method_EQ)) {
+    if (LangOpts.ApproxFunc)
+      Diags.Report(diag::err_incompatible_fp_eval_method_options) << 0;
+    if (LangOpts.AllowFPReassoc)
+      Diags.Report(diag::err_incompatible_fp_eval_method_options) << 1;
+    if (LangOpts.AllowRecip)
+      Diags.Report(diag::err_incompatible_fp_eval_method_options) << 2;
+  }
 
   // -cl-strict-aliasing needs to emit diagnostic in the case where CL > 1.0.
   // This option should be deprecated for CL > 1.0 because
@@ -1549,9 +1552,6 @@ void CompilerInvocation::GenerateCodeGenArgs(
                   : "auto",
               SA);
 
-  GenerateArg(Args, OPT_fdiagnostics_misexpect_tolerance_EQ,
-              Twine(*Opts.DiagnosticsMisExpectTolerance), SA);
-
   for (StringRef Sanitizer : serializeSanitizerKinds(Opts.SanitizeRecover))
     GenerateArg(Args, OPT_fsanitize_recover_EQ, Sanitizer, SA);
 
@@ -1613,23 +1613,22 @@ bool CompilerInvocation::ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args,
 
   // At O0 we want to fully disable inlining outside of cases marked with
   // 'alwaysinline' that are required for correctness.
-  Opts.setInlining((Opts.OptimizationLevel == 0)
-                       ? CodeGenOptions::OnlyAlwaysInlining
-                       : CodeGenOptions::NormalInlining);
-  // Explicit inlining flags can disable some or all inlining even at
-  // optimization levels above zero.
-  if (Arg *InlineArg = Args.getLastArg(
-          options::OPT_finline_functions, options::OPT_finline_hint_functions,
-          options::OPT_fno_inline_functions, options::OPT_fno_inline)) {
-    if (Opts.OptimizationLevel > 0) {
-      const Option &InlineOpt = InlineArg->getOption();
-      if (InlineOpt.matches(options::OPT_finline_functions))
-        Opts.setInlining(CodeGenOptions::NormalInlining);
-      else if (InlineOpt.matches(options::OPT_finline_hint_functions))
-        Opts.setInlining(CodeGenOptions::OnlyHintInlining);
-      else
-        Opts.setInlining(CodeGenOptions::OnlyAlwaysInlining);
-    }
+  if (Opts.OptimizationLevel == 0) {
+    Opts.setInlining(CodeGenOptions::OnlyAlwaysInlining);
+  } else if (const Arg *A = Args.getLastArg(options::OPT_finline_functions,
+                                            options::OPT_finline_hint_functions,
+                                            options::OPT_fno_inline_functions,
+                                            options::OPT_fno_inline)) {
+    // Explicit inlining flags can disable some or all inlining even at
+    // optimization levels above zero.
+    if (A->getOption().matches(options::OPT_finline_functions))
+      Opts.setInlining(CodeGenOptions::NormalInlining);
+    else if (A->getOption().matches(options::OPT_finline_hint_functions))
+      Opts.setInlining(CodeGenOptions::OnlyHintInlining);
+    else
+      Opts.setInlining(CodeGenOptions::OnlyAlwaysInlining);
+  } else {
+    Opts.setInlining(CodeGenOptions::NormalInlining);
   }
 
   // PIC defaults to -fno-direct-access-external-data while non-PIC defaults to
@@ -1969,23 +1968,6 @@ bool CompilerInvocation::ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args,
     }
   }
 
-  if (auto *arg =
-          Args.getLastArg(options::OPT_fdiagnostics_misexpect_tolerance_EQ)) {
-    auto ResultOrErr = parseToleranceOption(arg->getValue());
-
-    if (!ResultOrErr) {
-      Diags.Report(diag::err_drv_invalid_diagnotics_misexpect_tolerance)
-          << "-fdiagnostics-misexpect-tolerance=";
-    } else {
-      Opts.DiagnosticsMisExpectTolerance = *ResultOrErr;
-      if ((!Opts.DiagnosticsMisExpectTolerance.hasValue() ||
-           Opts.DiagnosticsMisExpectTolerance.getValue() > 0) &&
-          !UsingProfile)
-        Diags.Report(diag::warn_drv_diagnostics_misexpect_requires_pgo)
-            << "-fdiagnostics-misexpect-tolerance=";
-    }
-  }
-
   // If the user requested to use a sample profile for PGO, then the
   // backend will need to track source location information so the profile
   // can be incorporated into the IR.
@@ -2141,11 +2123,9 @@ static bool parseShowColorsArgs(const ArgList &Args, bool DefaultColor) {
   } ShowColors = DefaultColor ? Colors_Auto : Colors_Off;
   for (auto *A : Args) {
     const Option &O = A->getOption();
-    if (O.matches(options::OPT_fcolor_diagnostics) ||
-        O.matches(options::OPT_fdiagnostics_color)) {
+    if (O.matches(options::OPT_fcolor_diagnostics)) {
       ShowColors = Colors_On;
-    } else if (O.matches(options::OPT_fno_color_diagnostics) ||
-               O.matches(options::OPT_fno_diagnostics_color)) {
+    } else if (O.matches(options::OPT_fno_color_diagnostics)) {
       ShowColors = Colors_Off;
     } else if (O.matches(options::OPT_fdiagnostics_color_EQ)) {
       StringRef Value(A->getValue());
@@ -3281,6 +3261,8 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
   Opts.GNUCVersion = 0;
   Opts.HexFloats = Std.hasHexFloats();
   Opts.ImplicitInt = Std.hasImplicitInt();
+  Opts.WChar = Std.isCPlusPlus();
+  Opts.Digraphs = Std.hasDigraphs();
 
   Opts.HLSL = IK.getLanguage() == Language::HLSL;
 
@@ -3346,6 +3328,10 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
     // whereas respecting contract flag in backend.
     Opts.setDefaultFPContractMode(LangOptions::FPM_FastHonorPragmas);
   } else if (Opts.CUDA) {
+    if (T.isSPIRV()) {
+      // Emit OpenCL version metadata in LLVM IR when targeting SPIR-V.
+      Opts.OpenCLVersion = 200;
+    }
     // Allow fuse across statements disregarding pragmas.
     Opts.setDefaultFPContractMode(LangOptions::FPM_Fast);
   }
@@ -3697,6 +3683,9 @@ void CompilerInvocation::GenerateLangArgs(const LangOptions &Opts,
 
   for (const auto &MP : Opts.MacroPrefixMap)
     GenerateArg(Args, OPT_fmacro_prefix_map_EQ, MP.first + "=" + MP.second, SA);
+
+  if (!Opts.RandstructSeed.empty())
+    GenerateArg(Args, OPT_frandomize_layout_seed_EQ, Opts.RandstructSeed, SA);
 }
 
 bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
@@ -4249,6 +4238,19 @@ bool CompilerInvocation::ParseLangArgs(LangOptions &Opts, ArgList &Args,
       Diags.Report(diag::err_cc1_unbounded_vscale_min);
   }
 
+  if (const Arg *A = Args.getLastArg(OPT_frandomize_layout_seed_file_EQ)) {
+    std::ifstream SeedFile(A->getValue(0));
+
+    if (!SeedFile.is_open())
+      Diags.Report(diag::err_drv_cannot_open_randomize_layout_seed_file)
+          << A->getValue(0);
+
+    std::getline(SeedFile, Opts.RandstructSeed);
+  }
+
+  if (const Arg *A = Args.getLastArg(OPT_frandomize_layout_seed_EQ))
+    Opts.RandstructSeed = A->getValue(0);
+
   return Diags.getNumErrors() == NumErrorsBefore;
 }
 
@@ -4610,13 +4612,6 @@ bool CompilerInvocation::CreateFromArgsImpl(
                 Diags);
   if (Res.getFrontendOpts().ProgramAction == frontend::RewriteObjC)
     LangOpts.ObjCExceptions = 1;
-
-  for (auto Warning : Res.getDiagnosticOpts().Warnings) {
-    if (Warning == "misexpect" &&
-        !Diags.isIgnored(diag::warn_profile_data_misexpect, SourceLocation())) {
-      Res.getCodeGenOpts().MisExpect = true;
-    }
-  }
 
   if (LangOpts.CUDA) {
     // During CUDA device-side compilation, the aux triple is the

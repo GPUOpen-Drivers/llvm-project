@@ -1884,7 +1884,7 @@ bool RewriteInstance::analyzeRelocation(
     IsSectionRelocation = (cantFail(Symbol.getType()) == SymbolRef::ST_Debug);
     // Check for PLT entry registered with symbol name
     if (!SymbolAddress && IsAArch64) {
-      BinaryData *BD = BC->getBinaryDataByName(SymbolName + "@PLT");
+      const BinaryData *BD = BC->getPLTBinaryDataByName(SymbolName);
       SymbolAddress = BD ? BD->getAddress() : 0;
     }
   }
@@ -2350,7 +2350,7 @@ void RewriteInstance::readRelocations(const SectionRef &Section) {
         continue;
     }
 
-    if (BC->getDynamicRelocationAt(Rel.getOffset())) {
+    if (!IsAArch64 && BC->getDynamicRelocationAt(Rel.getOffset())) {
       LLVM_DEBUG(
           dbgs() << "BOLT-DEBUG: address 0x"
                  << Twine::utohexstr(Rel.getOffset())
@@ -3035,7 +3035,7 @@ public:
         std::string SymName = Symbol.str();
         LLVM_DEBUG(dbgs() << "BOLT: looking for " << SymName << "\n");
         // Resolve to a PLT entry if possible
-        if (BinaryData *I = BC.getBinaryDataByName(SymName + "@PLT")) {
+        if (const BinaryData *I = BC.getPLTBinaryDataByName(SymName)) {
           AllResults[Symbol] =
               JITEvaluatedSymbol(I->getAddress(), JITSymbolFlags());
           continue;
@@ -3108,6 +3108,10 @@ void RewriteInstance::emitAndLink() {
   emitBinaryContext(*Streamer, *BC, getOrgSecPrefix());
 
   Streamer->Finish();
+  if (Streamer->getContext().hadError()) {
+    errs() << "BOLT-ERROR: Emission failed.\n";
+    exit(1);
+  }
 
   //////////////////////////////////////////////////////////////////////////////
   // Assign addresses to new sections.
@@ -3137,7 +3141,7 @@ void RewriteInstance::emitAndLink() {
 
   RTDyld->finalizeWithMemoryManagerLocking();
   if (RTDyld->hasError()) {
-    outs() << "BOLT-ERROR: RTDyld failed: " << RTDyld->getErrorString() << "\n";
+    errs() << "BOLT-ERROR: RTDyld failed: " << RTDyld->getErrorString() << "\n";
     exit(1);
   }
 

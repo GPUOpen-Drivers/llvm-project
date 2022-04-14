@@ -240,21 +240,19 @@ ParseResult AllocaOp::parse(OpAsmParser &parser, OperationState &result) {
 // LLVM::BrOp
 //===----------------------------------------------------------------------===//
 
-Optional<MutableOperandRange>
-BrOp::getMutableSuccessorOperands(unsigned index) {
+SuccessorOperands BrOp::getSuccessorOperands(unsigned index) {
   assert(index == 0 && "invalid successor index");
-  return getDestOperandsMutable();
+  return SuccessorOperands(getDestOperandsMutable());
 }
 
 //===----------------------------------------------------------------------===//
 // LLVM::CondBrOp
 //===----------------------------------------------------------------------===//
 
-Optional<MutableOperandRange>
-CondBrOp::getMutableSuccessorOperands(unsigned index) {
+SuccessorOperands CondBrOp::getSuccessorOperands(unsigned index) {
   assert(index < getNumSuccessors() && "invalid successor index");
-  return index == 0 ? getTrueDestOperandsMutable()
-                    : getFalseDestOperandsMutable();
+  return SuccessorOperands(index == 0 ? getTrueDestOperandsMutable()
+                                      : getFalseDestOperandsMutable());
 }
 
 //===----------------------------------------------------------------------===//
@@ -356,11 +354,10 @@ LogicalResult SwitchOp::verify() {
   return success();
 }
 
-Optional<MutableOperandRange>
-SwitchOp::getMutableSuccessorOperands(unsigned index) {
+SuccessorOperands SwitchOp::getSuccessorOperands(unsigned index) {
   assert(index < getNumSuccessors() && "invalid successor index");
-  return index == 0 ? getDefaultOperandsMutable()
-                    : getCaseOperandsMutable(index - 1);
+  return SuccessorOperands(index == 0 ? getDefaultOperandsMutable()
+                                      : getCaseOperandsMutable(index - 1));
 }
 
 //===----------------------------------------------------------------------===//
@@ -735,11 +732,10 @@ ParseResult StoreOp::parse(OpAsmParser &parser, OperationState &result) {
 /// LLVM::InvokeOp
 ///===---------------------------------------------------------------------===//
 
-Optional<MutableOperandRange>
-InvokeOp::getMutableSuccessorOperands(unsigned index) {
+SuccessorOperands InvokeOp::getSuccessorOperands(unsigned index) {
   assert(index < getNumSuccessors() && "invalid successor index");
-  return index == 0 ? getNormalDestOperandsMutable()
-                    : getUnwindDestOperandsMutable();
+  return SuccessorOperands(index == 0 ? getNormalDestOperandsMutable()
+                                      : getUnwindDestOperandsMutable());
 }
 
 LogicalResult InvokeOp::verify() {
@@ -2648,7 +2644,7 @@ LogicalResult LLVMDialect::verifyStructAttr(Operation *op, Attribute attr,
 
 static LogicalResult verifyFuncOpInterfaceStructAttr(
     Operation *op, Attribute attr,
-    std::function<Type(FunctionOpInterface)> getAnnotatedType) {
+    const std::function<Type(FunctionOpInterface)> &getAnnotatedType) {
   if (auto funcOp = dyn_cast<FunctionOpInterface>(op))
     return LLVMDialect::verifyStructAttr(op, attr, getAnnotatedType(funcOp));
   return op->emitError() << "expected '"

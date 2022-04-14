@@ -134,6 +134,14 @@ private:
       OpBuilder &builder, Operation *op, SmallVectorImpl<Value> &results,
       function_ref<void(Operation *)> processGeneratedConstants = nullptr);
 
+  /// Try to process a set of fold results, generating constants as necessary.
+  /// Populates `results` on success, otherwise leaves it unchanged.
+  LogicalResult
+  processFoldResults(OpBuilder &builder, Operation *op,
+                     SmallVectorImpl<Value> &results,
+                     ArrayRef<OpFoldResult> foldResults,
+                     function_ref<void(Operation *)> processGeneratedConstants);
+
   /// Try to get or create a new constant entry. On success this returns the
   /// constant operation, nullptr otherwise.
   Operation *tryGetOrCreateConstant(ConstantMap &uniquedConstants,

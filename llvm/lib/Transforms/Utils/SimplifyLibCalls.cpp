@@ -212,7 +212,7 @@ Value *LibCallSimplifier::optimizeStrCat(CallInst *CI, IRBuilderBase &B) {
   annotateNonNullNoUndefBasedOnAccess(CI, {0, 1});
 
   // See if we can get the length of the input string.
-  uint64_t Len = GetStringLength(Src);
+  uint64_t Len = GetStringLength(Src, TLI);
   if (Len)
     annotateDereferenceableBytes(CI, 1, Len);
   else
@@ -269,7 +269,7 @@ Value *LibCallSimplifier::optimizeStrNCat(CallInst *CI, IRBuilderBase &B) {
   }
 
   // See if we can get the length of the input string.
-  uint64_t SrcLen = GetStringLength(Src);
+  uint64_t SrcLen = GetStringLength(Src, TLI);
   if (SrcLen) {
     annotateDereferenceableBytes(CI, 1, SrcLen);
     --SrcLen; // Unbias length.
@@ -300,7 +300,7 @@ Value *LibCallSimplifier::optimizeStrChr(CallInst *CI, IRBuilderBase &B) {
   // of the input string and turn this into memchr.
   ConstantInt *CharC = dyn_cast<ConstantInt>(CI->getArgOperand(1));
   if (!CharC) {
-    uint64_t Len = GetStringLength(SrcStr);
+    uint64_t Len = GetStringLength(SrcStr, TLI);
     if (Len)
       annotateDereferenceableBytes(CI, 0, Len);
     else
@@ -387,10 +387,10 @@ Value *LibCallSimplifier::optimizeStrCmp(CallInst *CI, IRBuilderBase &B) {
                         CI->getType());
 
   // strcmp(P, "x") -> memcmp(P, "x", 2)
-  uint64_t Len1 = GetStringLength(Str1P);
+  uint64_t Len1 = GetStringLength(Str1P, TLI);
   if (Len1)
     annotateDereferenceableBytes(CI, 0, Len1);
-  uint64_t Len2 = GetStringLength(Str2P);
+  uint64_t Len2 = GetStringLength(Str2P, TLI);
   if (Len2)
     annotateDereferenceableBytes(CI, 1, Len2);
 
@@ -464,10 +464,10 @@ Value *LibCallSimplifier::optimizeStrNCmp(CallInst *CI, IRBuilderBase &B) {
     return B.CreateZExt(B.CreateLoad(B.getInt8Ty(), Str1P, "strcmpload"),
                         CI->getType());
 
-  uint64_t Len1 = GetStringLength(Str1P);
+  uint64_t Len1 = GetStringLength(Str1P, TLI);
   if (Len1)
     annotateDereferenceableBytes(CI, 0, Len1);
-  uint64_t Len2 = GetStringLength(Str2P);
+  uint64_t Len2 = GetStringLength(Str2P, TLI);
   if (Len2)
     annotateDereferenceableBytes(CI, 1, Len2);
 
@@ -496,7 +496,7 @@ Value *LibCallSimplifier::optimizeStrNCmp(CallInst *CI, IRBuilderBase &B) {
 Value *LibCallSimplifier::optimizeStrNDup(CallInst *CI, IRBuilderBase &B) {
   Value *Src = CI->getArgOperand(0);
   ConstantInt *Size = dyn_cast<ConstantInt>(CI->getArgOperand(1));
-  uint64_t SrcLen = GetStringLength(Src);
+  uint64_t SrcLen = GetStringLength(Src, TLI);
   if (SrcLen && Size) {
     annotateDereferenceableBytes(CI, 0, SrcLen);
     if (SrcLen <= Size->getZExtValue() + 1)
@@ -513,7 +513,7 @@ Value *LibCallSimplifier::optimizeStrCpy(CallInst *CI, IRBuilderBase &B) {
 
   annotateNonNullNoUndefBasedOnAccess(CI, {0, 1});
   // See if we can get the length of the input string.
-  uint64_t Len = GetStringLength(Src);
+  uint64_t Len = GetStringLength(Src, TLI);
   if (Len)
     annotateDereferenceableBytes(CI, 1, Len);
   else
@@ -544,7 +544,7 @@ Value *LibCallSimplifier::optimizeStpCpy(CallInst *CI, IRBuilderBase &B) {
   }
 
   // See if we can get the length of the input string.
-  uint64_t Len = GetStringLength(Src);
+  uint64_t Len = GetStringLength(Src, TLI);
   if (Len)
     annotateDereferenceableBytes(CI, 1, Len);
   else
@@ -584,7 +584,7 @@ Value *LibCallSimplifier::optimizeStrNCpy(CallInst *CI, IRBuilderBase &B) {
     return Dst;
 
   // See if we can get the length of the input string.
-  uint64_t SrcLen = GetStringLength(Src);
+  uint64_t SrcLen = GetStringLength(Src, TLI);
   if (SrcLen) {
     annotateDereferenceableBytes(CI, 1, SrcLen);
     --SrcLen; // Unbias length.
@@ -633,7 +633,7 @@ Value *LibCallSimplifier::optimizeStringLength(CallInst *CI, IRBuilderBase &B,
   Value *Src = CI->getArgOperand(0);
 
   // Constant folding: strlen("xyz") -> 3
-  if (uint64_t Len = GetStringLength(Src, CharSize))
+  if (uint64_t Len = GetStringLength(Src, TLI, CharSize))
     return ConstantInt::get(CI->getType(), Len - 1);
 
   // If s is a constant pointer pointing to a string literal, we can fold
@@ -669,22 +669,15 @@ Value *LibCallSimplifier::optimizeStringLength(CallInst *CI, IRBuilderBase &B,
 
       Value *Offset = GEP->getOperand(2);
       KnownBits Known = computeKnownBits(Offset, DL, 0, nullptr, CI, nullptr);
-      Known.Zero.flipAllBits();
       uint64_t ArrSize =
              cast<ArrayType>(GEP->getSourceElementType())->getNumElements();
 
-      // KnownZero's bits are flipped, so zeros in KnownZero now represent
-      // bits known to be zeros in Offset, and ones in KnowZero represent
-      // bits unknown in Offset. Therefore, Offset is known to be in range
-      // [0, NullTermIdx] when the flipped KnownZero is non-negative and
-      // unsigned-less-than NullTermIdx.
-      //
       // If Offset is not provably in the range [0, NullTermIdx], we can still
       // optimize if we can prove that the program has undefined behavior when
       // Offset is outside that range. That is the case when GEP->getOperand(0)
       // is a pointer to an object whose memory extent is NullTermIdx+1.
-      if ((Known.Zero.isNonNegative() && Known.Zero.ule(NullTermIdx)) ||
-          (GEP->isInBounds() && isa<GlobalVariable>(GEP->getOperand(0)) &&
+      if ((Known.isNonNegative() && Known.getMaxValue().ule(NullTermIdx)) ||
+          (isa<GlobalVariable>(GEP->getOperand(0)) &&
            NullTermIdx == ArrSize - 1)) {
         Offset = B.CreateSExtOrTrunc(Offset, CI->getType());
         return B.CreateSub(ConstantInt::get(CI->getType(), NullTermIdx),
@@ -695,8 +688,8 @@ Value *LibCallSimplifier::optimizeStringLength(CallInst *CI, IRBuilderBase &B,
 
   // strlen(x?"foo":"bars") --> x ? 3 : 4
   if (SelectInst *SI = dyn_cast<SelectInst>(Src)) {
-    uint64_t LenTrue = GetStringLength(SI->getTrueValue(), CharSize);
-    uint64_t LenFalse = GetStringLength(SI->getFalseValue(), CharSize);
+    uint64_t LenTrue = GetStringLength(SI->getTrueValue(), TLI, CharSize);
+    uint64_t LenFalse = GetStringLength(SI->getFalseValue(), TLI, CharSize);
     if (LenTrue && LenFalse) {
       ORE.emit([&]() {
         return OptimizationRemark("instcombine", "simplify-libcalls", CI)
@@ -884,25 +877,54 @@ Value *LibCallSimplifier::optimizeMemChr(CallInst *CI, IRBuilderBase &B) {
   Value *SrcStr = CI->getArgOperand(0);
   Value *Size = CI->getArgOperand(2);
   annotateNonNullAndDereferenceable(CI, 0, Size, DL);
-  ConstantInt *CharC = dyn_cast<ConstantInt>(CI->getArgOperand(1));
+  Value *CharVal = CI->getArgOperand(1);
+  ConstantInt *CharC = dyn_cast<ConstantInt>(CharVal);
   ConstantInt *LenC = dyn_cast<ConstantInt>(Size);
 
   // memchr(x, y, 0) -> null
   if (LenC) {
     if (LenC->isZero())
       return Constant::getNullValue(CI->getType());
-  } else {
-    // From now on we need at least constant length and string.
-    return nullptr;
+
+    if (LenC->isOne()) {
+      // Fold memchr(x, y, 1) --> *x == y ? x : null for any x and y,
+      // constant or otherwise.
+      Value *Val = B.CreateLoad(B.getInt8Ty(), SrcStr, "memchr.char0");
+      // Slice off the character's high end bits.
+      CharVal = B.CreateTrunc(CharVal, B.getInt8Ty());
+      Value *Cmp = B.CreateICmpEQ(Val, CharVal, "memchr.char0cmp");
+      Value *NullPtr = Constant::getNullValue(CI->getType());
+      return B.CreateSelect(Cmp, SrcStr, NullPtr, "memchr.sel");
+    }
   }
 
   StringRef Str;
   if (!getConstantStringInfo(SrcStr, Str, 0, /*TrimAtNul=*/false))
     return nullptr;
 
-  // Truncate the string to LenC. If Str is smaller than LenC we will still only
-  // scan the string, as reading past the end of it is undefined and we can just
-  // return null if we don't find the char.
+  if (CharC) {
+    size_t Pos = Str.find(CharC->getZExtValue());
+    if (Pos == StringRef::npos)
+      // When the character is not in the source array fold the result
+      // to null regardless of Size.
+      return Constant::getNullValue(CI->getType());
+
+    // Fold memchr(s, c, n) -> n <= Pos ? null : s + Pos
+    // When the constant Size is less than or equal to the character
+    // position also fold the result to null.
+    Value *Cmp = B.CreateICmpULE(Size, ConstantInt::get(Size->getType(), Pos),
+                                 "memchr.cmp");
+    Value *NullPtr = Constant::getNullValue(CI->getType());
+    Value *SrcPlus =
+        B.CreateGEP(B.getInt8Ty(), SrcStr, B.getInt64(Pos), "memchr.ptr");
+    return B.CreateSelect(Cmp, NullPtr, SrcPlus);
+  }
+
+  if (!LenC)
+    // From now on we need a constant length and constant array.
+    return nullptr;
+
+  // Truncate the string to LenC.
   Str = Str.substr(0, LenC->getZExtValue());
 
   // If the char is variable but the input str and length are not we can turn
@@ -915,58 +937,47 @@ Value *LibCallSimplifier::optimizeMemChr(CallInst *CI, IRBuilderBase &B) {
   // memchr("\r\n", C, 2) != nullptr -> (1 << C & ((1 << '\r') | (1 << '\n')))
   // != 0
   //   after bounds check.
-  if (!CharC && !Str.empty() && isOnlyUsedInZeroEqualityComparison(CI)) {
-    unsigned char Max =
-        *std::max_element(reinterpret_cast<const unsigned char *>(Str.begin()),
-                          reinterpret_cast<const unsigned char *>(Str.end()));
-
-    // Make sure the bit field we're about to create fits in a register on the
-    // target.
-    // FIXME: On a 64 bit architecture this prevents us from using the
-    // interesting range of alpha ascii chars. We could do better by emitting
-    // two bitfields or shifting the range by 64 if no lower chars are used.
-    if (!DL.fitsInLegalInteger(Max + 1))
-      return nullptr;
-
-    // For the bit field use a power-of-2 type with at least 8 bits to avoid
-    // creating unnecessary illegal types.
-    unsigned char Width = NextPowerOf2(std::max((unsigned char)7, Max));
-
-    // Now build the bit field.
-    APInt Bitfield(Width, 0);
-    for (char C : Str)
-      Bitfield.setBit((unsigned char)C);
-    Value *BitfieldC = B.getInt(Bitfield);
-
-    // Adjust width of "C" to the bitfield width, then mask off the high bits.
-    Value *C = B.CreateZExtOrTrunc(CI->getArgOperand(1), BitfieldC->getType());
-    C = B.CreateAnd(C, B.getIntN(Width, 0xFF));
-
-    // First check that the bit field access is within bounds.
-    Value *Bounds = B.CreateICmp(ICmpInst::ICMP_ULT, C, B.getIntN(Width, Width),
-                                 "memchr.bounds");
-
-    // Create code that checks if the given bit is set in the field.
-    Value *Shl = B.CreateShl(B.getIntN(Width, 1ULL), C);
-    Value *Bits = B.CreateIsNotNull(B.CreateAnd(Shl, BitfieldC), "memchr.bits");
-
-    // Finally merge both checks and cast to pointer type. The inttoptr
-    // implicitly zexts the i1 to intptr type.
-    return B.CreateIntToPtr(B.CreateLogicalAnd(Bounds, Bits, "memchr"),
-                            CI->getType());
-  }
-
-  // Check if all arguments are constants.  If so, we can constant fold.
-  if (!CharC)
+  if (Str.empty() || !isOnlyUsedInZeroEqualityComparison(CI))
     return nullptr;
 
-  // Compute the offset.
-  size_t I = Str.find(CharC->getSExtValue() & 0xFF);
-  if (I == StringRef::npos) // Didn't find the char.  memchr returns null.
-    return Constant::getNullValue(CI->getType());
+  unsigned char Max =
+      *std::max_element(reinterpret_cast<const unsigned char *>(Str.begin()),
+                        reinterpret_cast<const unsigned char *>(Str.end()));
 
-  // memchr(s+n,c,l) -> gep(s+n+i,c)
-  return B.CreateGEP(B.getInt8Ty(), SrcStr, B.getInt64(I), "memchr");
+  // Make sure the bit field we're about to create fits in a register on the
+  // target.
+  // FIXME: On a 64 bit architecture this prevents us from using the
+  // interesting range of alpha ascii chars. We could do better by emitting
+  // two bitfields or shifting the range by 64 if no lower chars are used.
+  if (!DL.fitsInLegalInteger(Max + 1))
+    return nullptr;
+
+  // For the bit field use a power-of-2 type with at least 8 bits to avoid
+  // creating unnecessary illegal types.
+  unsigned char Width = NextPowerOf2(std::max((unsigned char)7, Max));
+
+  // Now build the bit field.
+  APInt Bitfield(Width, 0);
+  for (char C : Str)
+    Bitfield.setBit((unsigned char)C);
+  Value *BitfieldC = B.getInt(Bitfield);
+
+  // Adjust width of "C" to the bitfield width, then mask off the high bits.
+  Value *C = B.CreateZExtOrTrunc(CharVal, BitfieldC->getType());
+  C = B.CreateAnd(C, B.getIntN(Width, 0xFF));
+
+  // First check that the bit field access is within bounds.
+  Value *Bounds = B.CreateICmp(ICmpInst::ICMP_ULT, C, B.getIntN(Width, Width),
+                               "memchr.bounds");
+
+  // Create code that checks if the given bit is set in the field.
+  Value *Shl = B.CreateShl(B.getIntN(Width, 1ULL), C);
+  Value *Bits = B.CreateIsNotNull(B.CreateAnd(Shl, BitfieldC), "memchr.bits");
+
+  // Finally merge both checks and cast to pointer type. The inttoptr
+  // implicitly zexts the i1 to intptr type.
+  return B.CreateIntToPtr(B.CreateLogicalAnd(Bounds, Bits, "memchr"),
+                          CI->getType());
 }
 
 static Value *optimizeMemCmpConstantSize(CallInst *CI, Value *LHS, Value *RHS,
@@ -2500,7 +2511,7 @@ Value *LibCallSimplifier::optimizeSPrintFString(CallInst *CI,
       // sprintf(dest, "%s", str) -> strcpy(dest, str)
       return copyFlags(*CI, emitStrCpy(Dest, CI->getArgOperand(2), B, TLI));
 
-    uint64_t SrcLen = GetStringLength(CI->getArgOperand(2));
+    uint64_t SrcLen = GetStringLength(CI->getArgOperand(2), TLI);
     if (SrcLen) {
       B.CreateMemCpy(
           Dest, Align(1), CI->getArgOperand(2), Align(1),
@@ -2792,7 +2803,7 @@ Value *LibCallSimplifier::optimizeFPuts(CallInst *CI, IRBuilderBase &B) {
     return nullptr;
 
   // fputs(s,F) --> fwrite(s,strlen(s),1,F)
-  uint64_t Len = GetStringLength(CI->getArgOperand(0));
+  uint64_t Len = GetStringLength(CI->getArgOperand(0), TLI);
   if (!Len)
     return nullptr;
 
@@ -3236,7 +3247,7 @@ FortifiedLibCallSimplifier::isFortifiedCallFoldable(CallInst *CI,
     if (OnlyLowerUnknownSize)
       return false;
     if (StrOp) {
-      uint64_t Len = GetStringLength(CI->getArgOperand(*StrOp));
+      uint64_t Len = GetStringLength(CI->getArgOperand(*StrOp), TLI);
       // If the length is 0 we don't know how long it is and so we can't
       // remove the check.
       if (Len)
@@ -3340,7 +3351,7 @@ Value *FortifiedLibCallSimplifier::optimizeStrpCpyChk(CallInst *CI,
     return nullptr;
 
   // Maybe we can stil fold __st[rp]cpy_chk to __memcpy_chk.
-  uint64_t Len = GetStringLength(Src);
+  uint64_t Len = GetStringLength(Src, TLI);
   if (Len)
     annotateDereferenceableBytes(CI, 1, Len);
   else

@@ -3658,11 +3658,7 @@ ExpectedDecl ASTNodeImporter::VisitFieldDecl(FieldDecl *D) {
             if (!FoundField->getInClassInitializer())
               FoundField->setInClassInitializer(*ToInitializerOrErr);
           } else {
-            // We can't return error here,
-            // since we already mapped D as imported.
-            // FIXME: warning message?
-            consumeError(ToInitializerOrErr.takeError());
-            return FoundField;
+              return ToInitializerOrErr.takeError();
           }
         }
         return FoundField;
@@ -8584,6 +8580,13 @@ Expected<Attr *> ASTImporter::Import(const Attr *FromAttr) {
     const auto *From = cast<FormatAttr>(FromAttr);
     AI.importAttr(From, Import(From->getType()), From->getFormatIdx(),
                   From->getFirstArg());
+    break;
+  }
+
+  case attr::EnableIf: {
+    const auto *From = cast<EnableIfAttr>(FromAttr);
+    AI.importAttr(From, AI.importArg(From->getCond()).value(),
+                  From->getMessage());
     break;
   }
 
