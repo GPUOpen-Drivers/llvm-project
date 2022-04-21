@@ -914,8 +914,7 @@ void VPlan::prepareToExecute(Value *TripCountV, Value *VectorTripCountV,
   // When vectorizing the epilogue loop, the canonical induction start value
   // needs to be changed from zero to the value after the main vector loop.
   if (CanonicalIVStartValue) {
-    VPValue *VPV = new VPValue(CanonicalIVStartValue);
-    addExternalDef(VPV);
+    VPValue *VPV = getOrAddExternalDef(CanonicalIVStartValue);
     auto *IV = getCanonicalIV();
     assert(all_of(IV->users(),
                   [](const VPUser *U) {
@@ -1295,6 +1294,9 @@ void VPWidenIntOrFpInductionRecipe::print(raw_ostream &O, const Twine &Indent,
     getVPValue(0)->printAsOperand(O, SlotTracker);
   } else
     O << " " << VPlanIngredient(IV);
+
+  O << ", ";
+  getStepValue()->printAsOperand(O, SlotTracker);
 }
 
 void VPWidenPointerInductionRecipe::print(raw_ostream &O, const Twine &Indent,
@@ -1727,8 +1729,8 @@ void VPSlotTracker::assignSlot(const VPValue *V) {
 
 void VPSlotTracker::assignSlots(const VPlan &Plan) {
 
-  for (const VPValue *V : Plan.VPExternalDefs)
-    assignSlot(V);
+  for (const auto &P : Plan.VPExternalDefs)
+    assignSlot(P.second);
 
   assignSlot(&Plan.VectorTripCount);
   if (Plan.BackedgeTakenCount)
@@ -1749,4 +1751,17 @@ bool vputils::onlyFirstLaneUsed(VPValue *Def) {
   return all_of(Def->users(), [Def](VPUser *U) {
     return cast<VPRecipeBase>(U)->onlyFirstLaneUsed(Def);
   });
+}
+
+VPValue *vputils::getOrCreateVPValueForSCEVExpr(VPlan &Plan, const SCEV *Expr,
+                                                ScalarEvolution &SE) {
+  if (auto *E = dyn_cast<SCEVConstant>(Expr))
+    return Plan.getOrAddExternalDef(E->getValue());
+  if (auto *E = dyn_cast<SCEVUnknown>(Expr))
+    return Plan.getOrAddExternalDef(E->getValue());
+
+  VPBasicBlock *Preheader = Plan.getEntry()->getEntryBasicBlock();
+  VPValue *Step = new VPExpandSCEVRecipe(Expr, SE);
+  Preheader->appendRecipe(cast<VPRecipeBase>(Step->getDef()));
+  return Step;
 }

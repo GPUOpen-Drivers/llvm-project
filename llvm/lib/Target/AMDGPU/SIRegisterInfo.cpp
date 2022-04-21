@@ -700,12 +700,11 @@ BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   // On GFX908, in order to guarantee copying between AGPRs, we need a scratch
   // VGPR available at all times.
   if (ST.hasMAIInsts() && !ST.hasGFX90AInsts()) {
-    reserveRegisterTuples(Reserved, AMDGPU::VGPR32);
+    reserveRegisterTuples(Reserved, MFI->getVGPRForAGPRCopy());
   }
 
-  for (auto Reg : MFI->WWMReservedRegs) {
-    reserveRegisterTuples(Reserved, Reg.first);
-  }
+  for (Register Reg : MFI->WWMReservedRegs)
+    reserveRegisterTuples(Reserved, Reg);
 
   // FIXME: Stop using reserved registers for this.
   for (MCPhysReg Reg : MFI->getAGPRSpillVGPRs())
@@ -1558,8 +1557,8 @@ void SIRegisterInfo::buildSpillLoadStore(
       assert(EltSize == 4);
 
       if (!TmpIntermediateVGPR) {
-        assert(MF->getRegInfo().isReserved(AMDGPU::VGPR32));
-        TmpIntermediateVGPR = AMDGPU::VGPR32;
+        TmpIntermediateVGPR = FuncInfo->getVGPRForAGPRCopy();
+        assert(MF->getRegInfo().isReserved(TmpIntermediateVGPR));
       }
       if (IsStore) {
         auto AccRead = BuildMI(MBB, MI, DL,

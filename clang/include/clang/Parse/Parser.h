@@ -1861,6 +1861,8 @@ private:
                                      Token &Replacement);
   ExprResult ParseCXXIdExpression(bool isAddressOfOperand = false);
 
+  ExprResult ParseCXXMaybeMutableAgnosticExpression();
+
   bool areTokensAdjacent(const Token &A, const Token &B);
 
   void CheckForTemplateAndDigraph(Token &Next, ParsedType ObjectTypePtr,
@@ -1901,6 +1903,8 @@ private:
   ParseLambdaIntroducer(LambdaIntroducer &Intro,
                         LambdaIntroducerTentativeParse *Tentative = nullptr);
   ExprResult ParseLambdaExpressionAfterIntroducer(LambdaIntroducer &Intro);
+  void ParseLambdaLexedGNUAttributeArgs(LateParsedAttribute &LA,
+                                        ParsedAttributes &Attrs, Declarator &D);
 
   //===--------------------------------------------------------------------===//
   // C++ 5.2p1: C++ Casts
@@ -2785,6 +2789,15 @@ private:
       SourceLocation &Loc,
       Sema::AttributeCompletion Completion = Sema::AttributeCompletion::None,
       const IdentifierInfo *EnclosingScope = nullptr);
+
+  void MaybeParseHLSLSemantics(ParsedAttributes &Attrs,
+                               SourceLocation *EndLoc = nullptr) {
+    if (getLangOpts().HLSL && Tok.is(tok::colon))
+      ParseHLSLSemantics(Attrs, EndLoc);
+  }
+
+  void ParseHLSLSemantics(ParsedAttributes &Attrs,
+                          SourceLocation *EndLoc = nullptr);
 
   void MaybeParseMicrosoftAttributes(ParsedAttributes &Attrs) {
     if ((getLangOpts().MicrosoftExt || getLangOpts().HLSL) &&

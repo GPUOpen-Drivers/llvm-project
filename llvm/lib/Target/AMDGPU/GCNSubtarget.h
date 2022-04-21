@@ -72,7 +72,6 @@ protected:
   // Dynamically set bits that enable features.
   bool FlatForGlobal = false;
   bool AutoWaitcntBeforeBarrier = false;
-  bool BackOffBarrier = false;
   bool UnalignedScratchAccess = false;
   bool UnalignedAccessMode = false;
   bool HasApertureRegs = false;
@@ -96,8 +95,8 @@ protected:
 
   // Subtarget statically properties set by tablegen
   bool FP64 = false;
-  bool FMA;
-  bool MIMG_R128;
+  bool FMA = false;
+  bool MIMG_R128 = false;
   bool CIInsts = false;
   bool GFX8Insts = false;
   bool GFX9Insts = false;
@@ -492,12 +491,6 @@ public:
 
   bool hasAutoWaitcntBeforeBarrier() const {
     return AutoWaitcntBeforeBarrier;
-  }
-
-  /// \returns true if the target supports backing off of s_barrier instructions
-  /// when an exception is raised.
-  bool supportsBackOffBarrier() const {
-    return BackOffBarrier;
   }
 
   bool hasUnalignedBufferAccess() const {
