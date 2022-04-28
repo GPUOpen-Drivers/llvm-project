@@ -726,7 +726,7 @@ TEST(DiagnosticTest, ClangTidySelfContainedDiags) {
       TextEdit{Main.range("MathHeader"), "#include <math.h>\n\n"});
   EXPECT_THAT(
       *TU.build().getDiagnostics(),
-      UnorderedElementsAre(
+      ifTidyChecks(UnorderedElementsAre(
           AllOf(Diag(Main.range("A"), "'A' should be initialized in a member "
                                       "initializer of the constructor"),
                 withFix(equalToFix(ExpectedAFix))),
@@ -736,7 +736,7 @@ TEST(DiagnosticTest, ClangTidySelfContainedDiags) {
           AllOf(Diag(Main.range("C"), "variable 'C' is not initialized"),
                 withFix(equalToFix(ExpectedCFix))),
           AllOf(Diag(Main.range("D"), "variable 'D' is not initialized"),
-                withFix(equalToFix(ExpectedDFix)))));
+                withFix(equalToFix(ExpectedDFix))))));
 }
 
 TEST(DiagnosticsTest, Preprocessor) {
@@ -1409,7 +1409,7 @@ TEST(IncludeFixerTest, NoCrashOnTemplateInstantiations) {
 TEST(IncludeFixerTest, HeaderNamedInDiag) {
   Annotations Test(R"cpp(
     $insert[[]]int main() {
-      [[printf]]("");
+      [[printf]](""); // error-ok
     }
   )cpp");
   auto TU = TestTU::withCode(Test.code());
@@ -1420,16 +1420,19 @@ TEST(IncludeFixerTest, HeaderNamedInDiag) {
   EXPECT_THAT(
       *TU.build().getDiagnostics(),
       ElementsAre(AllOf(
-          Diag(Test.range(), "implicitly declaring library function 'printf' "
-                             "with type 'int (const char *, ...)'"),
+          Diag(Test.range(), "call to undeclared library function 'printf' "
+                             "with type 'int (const char *, ...)'; ISO C99 "
+                             "and later do not support implicit function "
+                             "declarations"),
           withFix(Fix(Test.range("insert"), "#include <stdio.h>\n",
                       "Include <stdio.h> for symbol printf")))));
 }
 
 TEST(IncludeFixerTest, CImplicitFunctionDecl) {
-  Annotations Test("void x() { [[foo]](); }");
+  Annotations Test("void x() { [[foo]](); /* error-ok */ }");
   auto TU = TestTU::withCode(Test.code());
   TU.Filename = "test.c";
+  TU.ExtraArgs.push_back("-std=c99");
 
   Symbol Sym = func("foo");
   Sym.Flags |= Symbol::IndexedForCodeCompletion;
@@ -1446,7 +1449,8 @@ TEST(IncludeFixerTest, CImplicitFunctionDecl) {
       *TU.build().getDiagnostics(),
       ElementsAre(AllOf(
           Diag(Test.range(),
-               "implicit declaration of function 'foo' is invalid in C99"),
+               "call to undeclared function 'foo'; ISO C99 and later do not "
+               "support implicit function declarations"),
           withFix(Fix(Range{}, "#include \"foo.h\"\n",
                       "Include \"foo.h\" for symbol foo")))));
 }

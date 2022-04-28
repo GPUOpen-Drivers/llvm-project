@@ -22,9 +22,11 @@ using namespace mlir;
 
 namespace {
 /// Simple transform op defined outside of the dialect. Just emits a remark when
-/// applied.
+/// applied. This op is defined in C++ to test that C++ definitions also work
+/// for op injection into the Transform dialect.
 class TestTransformOp
-    : public Op<TestTransformOp, transform::TransformOpInterface::Trait> {
+    : public Op<TestTransformOp, transform::TransformOpInterface::Trait,
+                MemoryEffectOpInterface::Trait> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestTransformOp)
 
@@ -62,6 +64,40 @@ public:
     if (getMessage())
       printer << " " << getMessage();
   }
+
+  // No side effects.
+  void getEffects(SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {}
+};
+
+/// A test op to exercise the verifier of the PossibleTopLevelTransformOpTrait
+/// in cases where it is attached to ops that do not comply with the trait
+/// requirements. This op cannot be defined in ODS because ODS generates strict
+/// verifiers that overalp with those in the trait and run earlier.
+class TestTransformUnrestrictedOpNoInterface
+    : public Op<TestTransformUnrestrictedOpNoInterface,
+                transform::PossibleTopLevelTransformOpTrait,
+                transform::TransformOpInterface::Trait,
+                MemoryEffectOpInterface::Trait> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+      TestTransformUnrestrictedOpNoInterface)
+
+  using Op::Op;
+
+  static ArrayRef<StringRef> getAttributeNames() { return {}; }
+
+  static constexpr llvm::StringLiteral getOperationName() {
+    return llvm::StringLiteral(
+        "transform.test_transform_unrestricted_op_no_interface");
+  }
+
+  LogicalResult apply(transform::TransformResults &results,
+                      transform::TransformState &state) {
+    return success();
+  }
+
+  // No side effects.
+  void getEffects(SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {}
 };
 } // namespace
 
@@ -97,6 +133,15 @@ LogicalResult mlir::test::TestConsumeOperandIfMatchesParamOrFail::apply(
   return success();
 }
 
+LogicalResult mlir::test::TestPrintRemarkAtOperandOp::apply(
+    transform::TransformResults &results, transform::TransformState &state) {
+  ArrayRef<Operation *> payload = state.getPayloadOps(getOperand());
+  for (Operation *op : payload)
+    op->emitRemark() << getMessage();
+
+  return success();
+}
+
 namespace {
 /// Test extension of the Transform dialect. Registers additional ops and
 /// declares PDL as dependent dialect since the additional ops are using PDL
@@ -108,6 +153,7 @@ public:
   TestTransformDialectExtension() {
     declareDependentDialect<pdl::PDLDialect>();
     registerTransformOps<TestTransformOp,
+                         TestTransformUnrestrictedOpNoInterface,
 #define GET_OP_LIST
 #include "TestTransformDialectExtension.cpp.inc"
                          >();

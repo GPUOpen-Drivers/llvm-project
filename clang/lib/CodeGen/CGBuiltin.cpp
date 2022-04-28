@@ -9823,6 +9823,15 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
     return Builder.CreateCall(F, Metadata);
   }
 
+  if (BuiltinID == AArch64::BI__break) {
+    Expr::EvalResult Result;
+    if (!E->getArg(0)->EvaluateAsInt(Result, CGM.getContext()))
+      llvm_unreachable("Sema will ensure that the parameter is constant");
+
+    llvm::Function *F = CGM.getIntrinsic(llvm::Intrinsic::aarch64_break);
+    return Builder.CreateCall(F, {EmitScalarExpr(E->getArg(0))});
+  }
+
   if (BuiltinID == AArch64::BI__builtin_arm_clrex) {
     Function *F = CGM.getIntrinsic(Intrinsic::aarch64_clrex);
     return Builder.CreateCall(F);
@@ -18191,7 +18200,7 @@ RValue CodeGenFunction::EmitBuiltinIsAligned(const CallExpr *E) {
 
 /// Generate (x & ~(y-1)) to align down or ((x+(y-1)) & ~(y-1)) to align up.
 /// Note: For pointer types we can avoid ptrtoint/inttoptr pairs by using the
-/// llvm.ptrmask instrinsic (with a GEP before in the align_up case).
+/// llvm.ptrmask intrinsic (with a GEP before in the align_up case).
 /// TODO: actually use ptrmask once most optimization passes know about it.
 RValue CodeGenFunction::EmitBuiltinAlignTo(const CallExpr *E, bool AlignUp) {
   BuiltinAlignArgs Args(E, *this);

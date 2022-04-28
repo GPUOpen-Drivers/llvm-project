@@ -1392,6 +1392,13 @@ Currently, only the following parameter attributes are defined:
     alignments are permitted for the allocalign parameter, so long as the returned pointer
     is null. This attribute may only be applied to integer parameters.
 
+``allocptr``
+    The function parameter marked with this attribute is the pointer
+    that will be manipulated by the allocator. For a realloc-like
+    function the pointer will be invalidated upon success (but the
+    same address may be returned), for a free-like function the
+    pointer will always be invalidated.
+
 .. _gc:
 
 Garbage Collector Strategy Names
@@ -1870,26 +1877,27 @@ example:
     On a function, this attribute indicates that the function computes its
     result (or decides to unwind an exception) based strictly on its arguments,
     without dereferencing any pointer arguments or otherwise accessing
-    any mutable state (e.g. memory, control registers, etc) visible to
-    caller functions. It does not write through any pointer arguments
-    (including ``byval`` arguments) and never changes any state visible
-    to callers. This means while it cannot unwind exceptions by calling
-    the ``C++`` exception throwing methods (since they write to memory), there may
-    be non-``C++`` mechanisms that throw exceptions without writing to LLVM
-    visible memory.
+    any mutable state (e.g. memory, control registers, etc) visible outside the
+    ``readnone`` function. It does not write through any pointer arguments
+    (including ``byval`` arguments) and never changes any state visible to
+    callers. This means while it cannot unwind exceptions by calling the ``C++``
+    exception throwing methods (since they write to memory), there may be
+    non-``C++`` mechanisms that throw exceptions without writing to LLVM visible
+    memory.
 
     On an argument, this attribute indicates that the function does not
     dereference that pointer argument, even though it may read or write the
     memory that the pointer points to if accessed through other pointers.
 
-    If a readnone function reads or writes memory visible to the program, or
-    has other side-effects, the behavior is undefined. If a function reads from
-    or writes to a readnone pointer argument, the behavior is undefined.
+    If a readnone function reads or writes memory visible outside the function,
+    or has other side-effects, the behavior is undefined. If a
+    function reads from or writes to a readnone pointer argument, the behavior
+    is undefined.
 ``readonly``
     On a function, this attribute indicates that the function does not write
     through any pointer arguments (including ``byval`` arguments) or otherwise
-    modify any state (e.g. memory, control registers, etc) visible to
-    caller functions. It may dereference pointer arguments and read
+    modify any state (e.g. memory, control registers, etc) visible outside the
+    ``readonly`` function. It may dereference pointer arguments and read
     state that may be set in the caller. A readonly function always
     returns the same value (or unwinds an exception identically) when
     called with the same set of arguments and global state.  This means while it
@@ -1901,9 +1909,9 @@ example:
     through this pointer argument, even though it may write to the memory that
     the pointer points to.
 
-    If a readonly function writes memory visible to the program, or
-    has other side-effects, the behavior is undefined. If a function writes to
-    a readonly pointer argument, the behavior is undefined.
+    If a readonly function writes memory visible outside the function, or has
+    other side-effects, the behavior is undefined. If a function writes to a
+    readonly pointer argument, the behavior is undefined.
 ``"stack-probe-size"``
     This attribute controls the behavior of stack probes: either
     the ``"probe-stack"`` attribute, or ABI-required stack probes, if any.
@@ -1923,14 +1931,14 @@ example:
     This attribute disables ABI-required stack probes, if any.
 ``writeonly``
     On a function, this attribute indicates that the function may write to but
-    does not read from memory.
+    does not read from memory visible outside the ``writeonly`` function.
 
     On an argument, this attribute indicates that the function may write to but
     does not read through this pointer argument (even though it may read from
     the memory that the pointer points to).
 
-    If a writeonly function reads memory visible to the program, or
-    has other side-effects, the behavior is undefined. If a function reads
+    If a writeonly function reads memory visible outside the function or has
+    other side-effects, the behavior is undefined. If a function reads
     from a writeonly pointer argument, the behavior is undefined.
 ``argmemonly``
     This attribute indicates that the only memory accesses inside function are
@@ -23241,6 +23249,83 @@ The '``llvm.set.rounding``' intrinsic sets the current rounding mode. It is
 similar to C library function 'fesetround', however this intrinsic does not
 return any value and uses platform-independent representation of IEEE rounding
 modes.
+
+
+Floating-Point Test Intrinsics
+------------------------------
+
+These functions get properties of floating-point values.
+
+
+'``llvm.is.fpclass``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare i1 @llvm.is.fpclass(<fptype> <op>, i32 <test>)
+      declare <N x i1> @llvm.is.fpclass(<vector-fptype> <op>, i32 <test>)
+
+Overview:
+"""""""""
+
+The '``llvm.is.fpclass``' intrinsic returns a boolean value or vector of boolean
+values depending on whether the first argument satisfies the test specified by
+the second argument.
+
+If the first argument is a floating-point scalar, then the result type is a
+boolean (:ref:`i1 <t_integer>`).
+
+If the first argument is a floating-point vector, then the result type is a
+vector of boolean with the same number of elements as the first argument.
+
+Arguments:
+""""""""""
+
+The first argument to the '``llvm.is.fpclass``' intrinsic must be
+:ref:`floating-point <t_floating>` or :ref:`vector <t_vector>`
+of floating-point values.
+
+The second argument specifies, which tests to perform. It is an integer value,
+each bit in which specifies floating-point class:
+
++-------+----------------------+
+| Bit # | floating-point class |
++=======+======================+
+| 0     | Signaling NaN        |
++-------+----------------------+
+| 1     | Quiet NaN            |
++-------+----------------------+
+| 2     | Negative infinity    |
++-------+----------------------+
+| 3     | Negative normal      |
++-------+----------------------+
+| 4     | Negative subnormal   |
++-------+----------------------+
+| 5     | Negative zero        |
++-------+----------------------+
+| 6     | Positive zero        |
++-------+----------------------+
+| 7     | Positive subnormal   |
++-------+----------------------+
+| 8     | Positive normal      |
++-------+----------------------+
+| 9     | Positive infinity    |
++-------+----------------------+
+
+Semantics:
+""""""""""
+
+The function checks if ``op`` belongs to any of the floating-point classes
+specified by ``test``. If ``op`` is a vector, then the check is made element by
+element. Each check yields an :ref:`i1 <t_integer>` result, which is ``true``,
+if the element value satisfies the specified test. The argument ``test`` is a
+bit mask where each bit specifies floating-point class to test. For example, the
+value 0x108 makes test for normal value, - bits 3 and 8 in it are set, which
+means that the function returns ``true`` if ``op`` is a positive or negative
+normal value. The function never raises floating-point exceptions.
 
 
 General Intrinsics

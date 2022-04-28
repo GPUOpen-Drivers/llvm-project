@@ -7331,9 +7331,9 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
             Flags = (SCEV::NoWrapFlags)(Flags | SCEV::FlagNUW);
         }
 
-        Constant *X = ConstantInt::get(
+        ConstantInt *X = ConstantInt::get(
             getContext(), APInt::getOneBitSet(BitWidth, SA->getZExtValue()));
-        return getMulExpr(getSCEV(BO->LHS), getSCEV(X), Flags);
+        return getMulExpr(getSCEV(BO->LHS), getConstant(X), Flags);
       }
       break;
 
@@ -12684,6 +12684,15 @@ bool ScalarEvolution::containsUndefs(const SCEV *S) const {
   return SCEVExprContains(S, [](const SCEV *S) {
     if (const auto *SU = dyn_cast<SCEVUnknown>(S))
       return isa<UndefValue>(SU->getValue());
+    return false;
+  });
+}
+
+// Return true when S contains a value that is a nullptr.
+bool ScalarEvolution::containsErasedValue(const SCEV *S) const {
+  return SCEVExprContains(S, [](const SCEV *S) {
+    if (const auto *SU = dyn_cast<SCEVUnknown>(S))
+      return SU->getValue() == nullptr;
     return false;
   });
 }
