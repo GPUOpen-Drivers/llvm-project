@@ -1,4 +1,5 @@
 ; RUN: llc < %s -mtriple=nvptx64-nvidia-cuda | FileCheck %s
+; RUN: %if ptxas %{ llc < %s -mtriple=nvptx64-nvidia-cuda | %ptxas-verify %}
 
 ; // Bitcode int this test case is reduced version of compiled code below:
 ;extern "C" {
@@ -83,8 +84,8 @@ bb:
 ; CHECK-NEXT: .b8 105
 ; CHECK-NEXT: .b8 114
 ; CHECK-NEXT: .b8 0
-; CHECK-NEXT: .b64 Lfunc_begin0                    // DW_AT_low_pc
-; CHECK-NEXT: .b64 Lfunc_end1                      // DW_AT_high_pc
+; CHECK-NEXT: .b64 $L__func_begin0                 // DW_AT_low_pc
+; CHECK-NEXT: .b64 $L__func_end1                   // DW_AT_high_pc
 ; CHECK-NEXT: }
 ; CHECK-NEXT: .section .debug_loc { }
 ; CHECK-NOT: debug_

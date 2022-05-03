@@ -6457,7 +6457,7 @@ static bool SalvageDVI(llvm::Loop *L, ScalarEvolution &SE,
 static void
 DbgRewriteSalvageableDVIs(llvm::Loop *L, ScalarEvolution &SE,
                           llvm::PHINode *LSRInductionVar,
-                          SmallVector<DVIRecoveryRec *, 2> &DVIToUpdate) {
+                          SmallVector<std::unique_ptr<DVIRecoveryRec>, 2> &DVIToUpdate) {
   if (DVIToUpdate.empty())
     return;
 
@@ -6493,10 +6493,10 @@ DbgRewriteSalvageableDVIs(llvm::Loop *L, ScalarEvolution &SE,
 /// Identify and cache salvageable DVI locations and expressions along with the
 /// corresponding SCEV(s). Also ensure that the DVI is not deleted between
 /// cacheing and salvaging.
-static void
-DbgGatherSalvagableDVI(Loop *L, ScalarEvolution &SE,
-                       SmallVector<DVIRecoveryRec *, 2> &SalvageableDVISCEVs,
-                       SmallSet<AssertingVH<DbgValueInst>, 2> &DVIHandles) {
+static void DbgGatherSalvagableDVI(
+    Loop *L, ScalarEvolution &SE,
+    SmallVector<std::unique_ptr<DVIRecoveryRec>, 2> &SalvageableDVISCEVs,
+    SmallSet<AssertingVH<DbgValueInst>, 2> &DVIHandles) {
   for (auto &B : L->getBlocks()) {
     for (auto &I : *B) {
       auto DVI = dyn_cast<DbgValueInst>(&I);
@@ -6528,7 +6528,8 @@ DbgGatherSalvagableDVI(Loop *L, ScalarEvolution &SE,
       if (!HasTranslatableLocationOps(DVI))
         continue;
 
-      DVIRecoveryRec *NewRec = new DVIRecoveryRec(DVI);
+      std::unique_ptr<DVIRecoveryRec> NewRec =
+          std::make_unique<DVIRecoveryRec>(DVI);
       // Each location Op may need a SCEVDbgValueBuilder in order to recover it.
       // Pre-allocating a vector will enable quick lookups of the builder later
       // during the salvage.
@@ -6538,7 +6539,7 @@ DbgGatherSalvagableDVI(Loop *L, ScalarEvolution &SE,
         NewRec->LocationOps.push_back(LocOp);
         NewRec->HadLocationArgList = DVI->hasArgList();
       }
-      SalvageableDVISCEVs.push_back(NewRec);
+      SalvageableDVISCEVs.push_back(std::move(NewRec));
       DVIHandles.insert(DVI);
     }
   }
@@ -6587,7 +6588,7 @@ static bool ReduceLoopStrength(Loop *L, IVUsers &IU, ScalarEvolution &SE,
 
   // Debug preservation - before we start removing anything identify which DVI
   // meet the salvageable criteria and store their DIExpression and SCEVs.
-  SmallVector<DVIRecoveryRec *, 2> SalvageableDVIRecords;
+  SmallVector<std::unique_ptr<DVIRecoveryRec>, 2> SalvageableDVIRecords;
   SmallSet<AssertingVH<DbgValueInst>, 2> DVIHandles;
   DbgGatherSalvagableDVI(L, SE, SalvageableDVIRecords, DVIHandles);
 

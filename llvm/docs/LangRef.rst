@@ -481,7 +481,10 @@ styles:
     means that the declaration is visible to other modules and, in
     shared libraries, means that the declared entity may be overridden.
     On Darwin, default visibility means that the declaration is visible
-    to other modules. Default visibility corresponds to "external
+    to other modules. On XCOFF, default visibility means no explicit
+    visibility bit will be set and whether the symbol is visible
+    (i.e "exported") to other modules depends primarily on export lists
+    provided to the linker. Default visibility corresponds to "external
     linkage" in the language.
 "``hidden``" - Hidden style
     Two declarations of an object with hidden visibility refer to the
@@ -512,12 +515,15 @@ DLL storage class:
     symbol. On Microsoft Windows targets, the pointer name is formed by
     combining ``__imp_`` and the function or variable name.
 ``dllexport``
-    "``dllexport``" causes the compiler to provide a global pointer to a pointer
-    in a DLL, so that it can be referenced with the ``dllimport`` attribute. On
-    Microsoft Windows targets, the pointer name is formed by combining
-    ``__imp_`` and the function or variable name. Since this storage class
-    exists for defining a dll interface, the compiler, assembler and linker know
-    it is externally referenced and must refrain from deleting the symbol.
+    On Microsoft Windows targets, "``dllexport``" causes the compiler to provide
+    a global pointer to a pointer in a DLL, so that it can be referenced with the
+    ``dllimport`` attribute. the pointer name is formed by combining ``__imp_``
+    and the function or variable name. On XCOFF targets, ``dllexport`` indicates
+    that the symbol will be made visible to other modules using "exported"
+    visibility and thus placed by the linker in the loader section symbol table.
+    Since this storage class exists for defining a dll interface, the compiler,
+    assembler and linker know it is externally referenced and must refrain from
+    deleting the symbol.
 
 .. _tls_model:
 
@@ -2182,6 +2188,14 @@ example:
     unbounded. If the optional max value is omitted then max is set to the
     value of min. If the attribute is not present, no assumptions are made
     about the range of vscale.
+``"min-legal-vector-width"="<size>"``
+    This attribute indicates the minimum legal vector width required by the
+    calling conversion. It is the maximum width of vector arguments and
+    returnings in the function and functions called by this function. Because
+    all the vectors are supposed to be legal type for compatibility.
+    Backends are free to ignore the attribute if they don't need to support
+    different maximum legal vector types or such information can be inferred by
+    other attributes.
 
 Call Site Attributes
 ----------------------

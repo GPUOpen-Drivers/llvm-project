@@ -1,4 +1,5 @@
 ; RUN: llc -mtriple=nvptx64-nvidia-cuda -mattr=+ptx75 < %s | FileCheck %s
+; RUN: %if ptxas-11.5 %{ llc -mtriple=nvptx64-nvidia-cuda -mattr=+ptx75 < %s | %ptxas-verify %}
 
 ; DICompileUnit without 'nameTableKind: None' results in
 ; debug_pubnames and debug_pubtypes sections in DWARF. These sections
@@ -7,16 +8,16 @@
 
 ; CHECK-LABEL: .section .debug_pubnames
 ; CHECK-NEXT: {
-; CHECK-NEXT: .b32 LpubNames_end0-LpubNames_start0
-; CHECK-NEXT: LpubNames_start0:
-; CHECK:      LpubNames_end0:
+; CHECK-NEXT: .b32 $L__pubNames_end0-$L__pubNames_start0
+; CHECK-NEXT: $L__pubNames_start0:
+; CHECK:      $L__pubNames_end0:
 ; CHECK-NEXT: }
 
 ; CHECK-LABEL: .section .debug_pubtypes
 ; CHECK-NEXT: {
-; CHECK-NEXT: .b32 LpubTypes_end0-LpubTypes_start0
-; CHECK-NEXT: LpubTypes_start0:
-; CHECK:      LpubTypes_end0:
+; CHECK-NEXT: .b32 $L__pubTypes_end0-$L__pubTypes_start0
+; CHECK-NEXT: $L__pubTypes_start0:
+; CHECK:      $L__pubTypes_end0:
 ; CHECK-NEXT: }
 
 ; Function Attrs: nounwind ssp uwtable

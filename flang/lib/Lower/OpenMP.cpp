@@ -254,8 +254,10 @@ genOMP(Fortran::lower::AbstractConverter &converter,
     if (const auto &ifClause =
             std::get_if<Fortran::parser::OmpClause::If>(&clause.u)) {
       auto &expr = std::get<Fortran::parser::ScalarLogicalExpr>(ifClause->v.t);
-      ifClauseOperand = fir::getBase(
+      mlir::Value ifVal = fir::getBase(
           converter.genExprValue(*Fortran::semantics::GetExpr(expr), stmtCtx));
+      ifClauseOperand = firOpBuilder.createConvert(
+          currentLocation, firOpBuilder.getI1Type(), ifVal);
     } else if (const auto &numThreadsClause =
                    std::get_if<Fortran::parser::OmpClause::NumThreads>(
                        &clause.u)) {
@@ -632,4 +634,36 @@ void Fortran::lower::genOpenMPConstruct(
           },
       },
       ompConstruct.u);
+}
+
+void Fortran::lower::genOpenMPDeclarativeConstruct(
+    Fortran::lower::AbstractConverter &converter,
+    Fortran::lower::pft::Evaluation &eval,
+    const Fortran::parser::OpenMPDeclarativeConstruct &ompDeclConstruct) {
+
+  std::visit(
+      common::visitors{
+          [&](const Fortran::parser::OpenMPDeclarativeAllocate
+                  &declarativeAllocate) {
+            TODO(converter.getCurrentLocation(), "OpenMPDeclarativeAllocate");
+          },
+          [&](const Fortran::parser::OpenMPDeclareReductionConstruct
+                  &declareReductionConstruct) {
+            TODO(converter.getCurrentLocation(),
+                 "OpenMPDeclareReductionConstruct");
+          },
+          [&](const Fortran::parser::OpenMPDeclareSimdConstruct
+                  &declareSimdConstruct) {
+            TODO(converter.getCurrentLocation(), "OpenMPDeclareSimdConstruct");
+          },
+          [&](const Fortran::parser::OpenMPDeclareTargetConstruct
+                  &declareTargetConstruct) {
+            TODO(converter.getCurrentLocation(),
+                 "OpenMPDeclareTargetConstruct");
+          },
+          [&](const Fortran::parser::OpenMPThreadprivate &threadprivate) {
+            TODO(converter.getCurrentLocation(), "OpenMPThreadprivate");
+          },
+      },
+      ompDeclConstruct.u);
 }

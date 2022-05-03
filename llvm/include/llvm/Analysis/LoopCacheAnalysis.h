@@ -98,6 +98,10 @@ private:
   /// Attempt to delinearize the indexed reference.
   bool delinearize(const LoopInfo &LI);
 
+  bool tryDelinearizeFixedSize(ScalarEvolution *SE, Instruction *Src,
+                               const SCEV *SrcAccessFn,
+                               SmallVectorImpl<const SCEV *> &SrcSubscripts);
+
   /// Return true if the index reference is invariant with respect to loop \p L.
   bool isLoopInvariant(const Loop &L) const;
 
@@ -239,9 +243,10 @@ private:
 
   /// Sort the LoopCosts vector by decreasing cache cost.
   void sortLoopCosts() {
-    sort(LoopCosts, [](const LoopCacheCostTy &A, const LoopCacheCostTy &B) {
-      return A.second > B.second;
-    });
+    stable_sort(LoopCosts,
+                [](const LoopCacheCostTy &A, const LoopCacheCostTy &B) {
+                  return A.second > B.second;
+                });
   }
 
 private:
