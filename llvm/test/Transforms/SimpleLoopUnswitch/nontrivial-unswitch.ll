@@ -2717,7 +2717,8 @@ define i32 @test25(i1* %ptr, i1 %cond) {
 entry:
   br label %loop_begin
 ; CHECK-NEXT:  entry:
-; CHECK-NEXT:    br i1 %cond, label %entry.split.us, label %entry.split
+; CHECK-NEXT:    [[FROZEN:%.+]] = freeze i1 %cond
+; CHECK-NEXT:    br i1 [[FROZEN]], label %entry.split.us, label %entry.split
 
 loop_begin:
   %v1 = load i1, i1* %ptr
@@ -2790,7 +2791,9 @@ define i32 @test26(i1* %ptr1, i1* %ptr2, i1* %ptr3, i1 %cond1, i1 %cond2, i1 %co
 entry:
   br label %loop_begin
 ; CHECK-NEXT:  entry:
-; CHECK-NEXT:    %[[INV_AND:.*]] = and i1 %cond3, %cond1
+; CHECK-NEXT:    [[C3_FR:%.+]] = freeze i1 %cond3
+; CHECK-NEXT:    [[C1_FR:%.+]] = freeze i1 %cond1
+; CHECK-NEXT:    %[[INV_AND:.*]] = and i1 [[C3_FR]], [[C1_FR]]
 ; CHECK-NEXT:    br i1 %[[INV_AND]], label %entry.split, label %entry.split.us
 
 loop_begin:
@@ -2871,7 +2874,9 @@ define i32 @test27(i1* %ptr1, i1* %ptr2, i1* %ptr3, i1 %cond1, i1 %cond2, i1 %co
 entry:
   br label %loop_begin
 ; CHECK-NEXT:  entry:
-; CHECK-NEXT:    %[[INV_OR:.*]] = or i1 %cond3, %cond1
+; CHECK-NEXT:    [[C3_FR:%.+]] = freeze i1 %cond3
+; CHECK-NEXT:    [[C1_FR:%.+]] = freeze i1 %cond1
+; CHECK-NEXT:    %[[INV_OR:.*]] = or i1 [[C3_FR]], [[C1_FR]]
 ; CHECK-NEXT:    br i1 %[[INV_OR]], label %entry.split.us, label %entry.split
 
 loop_begin:
@@ -4231,7 +4236,9 @@ define i32 @test32(i1* %ptr1, i1* %ptr2, i1* %ptr3, i1 %cond1, i1 %cond2) {
 entry:
   br label %loop_begin
 ; CHECK-NEXT:  entry:
-; CHECK-NEXT:    %[[INV_AND:.*]] = and i1 %cond2, %cond1
+; CHECK-NEXT:    [[C2_FR:%.+]] = freeze i1 %cond2
+; CHECK-NEXT:    [[C1_FR:%.+]] = freeze i1 %cond1
+; CHECK-NEXT:    %[[INV_AND:.*]] = and i1 [[C2_FR]], [[C1_FR]]
 ; CHECK-NEXT:    br i1 %[[INV_AND]], label %entry.split, label %entry.split.us
 
 loop_begin:
@@ -4270,7 +4277,7 @@ loop_begin:
 ; CHECK-NEXT:    %[[V2:.*]] = load i1, i1* %ptr2
 ; CHECK-NEXT:    %[[AND1:.*]] = select i1 %[[V1]], i1 true, i1 false
 ; CHECK-NEXT:    %[[AND2:.*]] = select i1 %[[AND1]], i1 true, i1 false
-; CHECK-NEXT:    br i1 %[[V1]], label %loop_a, label %loop_b
+; CHECK-NEXT:    br i1 %[[AND2]], label %loop_a, label %loop_b
 
 loop_a:
   call i32 @a()
@@ -4309,7 +4316,9 @@ define i32 @test33(i1* %ptr1, i1* %ptr2, i1* %ptr3, i1 %cond1, i1 %cond2) {
 entry:
   br label %loop_begin
 ; CHECK-NEXT:  entry:
-; CHECK-NEXT:    %[[INV_OR:.*]] = or i1 %cond2, %cond1
+; CHECK-NEXT:    [[C2_FR:%.+]] = freeze i1 %cond2
+; CHECK-NEXT:    [[C1_FR:%.+]] = freeze i1 %cond1
+; CHECK-NEXT:    %[[INV_OR:.*]] = or i1 [[C2_FR]], [[C1_FR]]
 ; CHECK-NEXT:    br i1 %[[INV_OR]], label %entry.split.us, label %entry.split
 
 loop_begin:
@@ -4348,7 +4357,7 @@ loop_begin:
 ; CHECK-NEXT:    %[[V2:.*]] = load i1, i1* %ptr2
 ; CHECK-NEXT:    %[[AND1:.*]] = select i1 %[[V1]], i1 true, i1 false
 ; CHECK-NEXT:    %[[AND2:.*]] = select i1 %[[AND1]], i1 true, i1 false
-; CHECK-NEXT:    br i1 %[[V1]], label %loop_b, label %loop_a
+; CHECK-NEXT:    br i1 %[[AND2]], label %loop_b, label %loop_a
 
 loop_a:
   call i32 @a()

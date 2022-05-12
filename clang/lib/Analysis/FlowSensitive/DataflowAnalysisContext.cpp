@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Analysis/FlowSensitive/DataflowAnalysisContext.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/Analysis/FlowSensitive/Value.h"
 #include <cassert>
 #include <memory>
@@ -117,6 +118,19 @@ bool DataflowAnalysisContext::flowConditionImplies(AtomicBoolValue &Token,
   return S->solve(std::move(Constraints)) == Solver::Result::Unsatisfiable;
 }
 
+bool DataflowAnalysisContext::flowConditionIsTautology(AtomicBoolValue &Token) {
+  // Returns true if and only if we cannot prove that the flow condition can
+  // ever be false.
+  llvm::DenseSet<BoolValue *> Constraints = {
+      &getBoolLiteralValue(true),
+      &getOrCreateNegationValue(getBoolLiteralValue(false)),
+      &getOrCreateNegationValue(Token),
+  };
+  llvm::DenseSet<AtomicBoolValue *> VisitedTokens;
+  addTransitiveFlowConditionConstraints(Token, Constraints, VisitedTokens);
+  return S->solve(std::move(Constraints)) == Solver::Result::Unsatisfiable;
+}
+
 void DataflowAnalysisContext::addTransitiveFlowConditionConstraints(
     AtomicBoolValue &Token, llvm::DenseSet<BoolValue *> &Constraints,
     llvm::DenseSet<AtomicBoolValue *> &VisitedTokens) const {
@@ -142,3 +156,22 @@ void DataflowAnalysisContext::addTransitiveFlowConditionConstraints(
 
 } // namespace dataflow
 } // namespace clang
+
+using namespace clang;
+
+const Expr &clang::dataflow::ignoreCFGOmittedNodes(const Expr &E) {
+  const Expr *Current = &E;
+  if (auto *EWC = dyn_cast<ExprWithCleanups>(Current)) {
+    Current = EWC->getSubExpr();
+    assert(Current != nullptr);
+  }
+  Current = Current->IgnoreParens();
+  assert(Current != nullptr);
+  return *Current;
+}
+
+const Stmt &clang::dataflow::ignoreCFGOmittedNodes(const Stmt &S) {
+  if (auto *E = dyn_cast<Expr>(&S))
+    return ignoreCFGOmittedNodes(*E);
+  return S;
+}

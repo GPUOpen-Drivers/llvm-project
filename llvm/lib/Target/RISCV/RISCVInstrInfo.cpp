@@ -1196,6 +1196,11 @@ enum MachineOutlinerConstructionID {
   MachineOutlinerDefault
 };
 
+bool RISCVInstrInfo::shouldOutlineFromFunctionByDefault(
+    MachineFunction &MF) const {
+  return MF.getFunction().hasMinSize();
+}
+
 outliner::OutlinedFunction RISCVInstrInfo::getOutliningCandidateInfo(
     std::vector<outliner::Candidate> &RepeatedSequenceLocs) const {
 
@@ -1347,13 +1352,14 @@ std::string RISCVInstrInfo::createMIROperandComment(
 
   uint64_t TSFlags = MI.getDesc().TSFlags;
 
-  // Print the full VType operand of vsetvli/vsetivli instructions, and the SEW
-  // operand of vector codegen pseudos.
-  if ((MI.getOpcode() == RISCV::VSETVLI || MI.getOpcode() == RISCV::VSETIVLI ||
-       MI.getOpcode() == RISCV::PseudoVSETVLI ||
-       MI.getOpcode() == RISCV::PseudoVSETIVLI ||
-       MI.getOpcode() == RISCV::PseudoVSETVLIX0) &&
-      OpIdx == 2) {
+  // Print the full VType operand of vsetvli/vsetivli and PseudoReadVL
+  // instructions, and the SEW operand of vector codegen pseudos.
+  if (((MI.getOpcode() == RISCV::VSETVLI || MI.getOpcode() == RISCV::VSETIVLI ||
+        MI.getOpcode() == RISCV::PseudoVSETVLI ||
+        MI.getOpcode() == RISCV::PseudoVSETIVLI ||
+        MI.getOpcode() == RISCV::PseudoVSETVLIX0) &&
+       OpIdx == 2) ||
+      (MI.getOpcode() == RISCV::PseudoReadVL && OpIdx == 1)) {
     unsigned Imm = MI.getOperand(OpIdx).getImm();
     RISCVVType::printVType(Imm, OS);
   } else if (RISCVII::hasSEWOp(TSFlags)) {
@@ -1816,14 +1822,7 @@ Register RISCVInstrInfo::getVLENFactoredAmount(MachineFunction &MF,
         .setMIFlag(Flag);
   } else {
     Register N = MRI.createVirtualRegister(&RISCV::GPRRegClass);
-    if (!isInt<12>(NumOfVReg))
-      movImm(MBB, II, DL, N, NumOfVReg);
-    else {
-      BuildMI(MBB, II, DL, get(RISCV::ADDI), N)
-          .addReg(RISCV::X0)
-          .addImm(NumOfVReg)
-          .setMIFlag(Flag);
-    }
+    movImm(MBB, II, DL, N, NumOfVReg, Flag);
     if (!STI.hasStdExtM())
       MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
           MF.getFunction(),

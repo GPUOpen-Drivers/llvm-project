@@ -2344,8 +2344,12 @@ Value *InstCombinerImpl::matchSelectFromAndOr(Value *A, Value *C, Value *B,
     // not create unnecessary casts if the types already match.
     Type *SelTy = A->getType();
     if (auto *VecTy = dyn_cast<VectorType>(Cond->getType())) {
+      // For a fixed or scalable vector get N from <{vscale x} N x iM>
       unsigned Elts = VecTy->getElementCount().getKnownMinValue();
-      Type *EltTy = Builder.getIntNTy(SelTy->getPrimitiveSizeInBits() / Elts);
+      // For a fixed or scalable vector, get the size in bits of N x iM; for a
+      // scalar this is just M.
+      unsigned SelEltSize = SelTy->getPrimitiveSizeInBits().getKnownMinSize();
+      Type *EltTy = Builder.getIntNTy(SelEltSize / Elts);
       SelTy = VectorType::get(EltTy, VecTy->getElementCount());
     }
     Value *BitcastC = Builder.CreateBitCast(C, SelTy);
@@ -2687,6 +2691,14 @@ Instruction *InstCombinerImpl::visitOr(BinaryOperator &I) {
   if (match(Op0, m_Xor(m_Xor(m_Value(A), m_Value(C)), m_Value(B))))
     if (match(Op1, m_Xor(m_Specific(B), m_Specific(A))))
       return BinaryOperator::CreateOr(Op1, C);
+
+  // ((A & B) ^ C) | B -> C | B
+  if (match(Op0, m_c_Xor(m_c_And(m_Value(A), m_Specific(Op1)), m_Value(C))))
+    return BinaryOperator::CreateOr(C, Op1);
+
+  // B | ((A & B) ^ C) -> B | C
+  if (match(Op1, m_c_Xor(m_c_And(m_Value(A), m_Specific(Op0)), m_Value(C))))
+    return BinaryOperator::CreateOr(Op0, C);
 
   // ((B | C) & A) | B -> B | (A & C)
   if (match(Op0, m_And(m_Or(m_Specific(Op1), m_Value(C)), m_Value(A))))

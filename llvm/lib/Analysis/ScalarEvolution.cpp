@@ -4015,6 +4015,59 @@ public:
 
 } // namespace
 
+/// Return true if V is poison given that AssumedPoison is already poison.
+static bool impliesPoison(const SCEV *AssumedPoison, const SCEV *S) {
+  // The only way poison may be introduced in a SCEV expression is from a
+  // poison SCEVUnknown (ConstantExprs are also represented as SCEVUnknown,
+  // not SCEVConstant). Notably, nowrap flags in SCEV nodes can *not*
+  // introduce poison -- they encode guaranteed, non-speculated knowledge.
+  //
+  // Additionally, all SCEV nodes propagate poison from inputs to outputs,
+  // with the notable exception of umin_seq, where only poison from the first
+  // operand is (unconditionally) propagated.
+  struct SCEVPoisonCollector {
+    bool LookThroughSeq;
+    SmallPtrSet<const SCEV *, 4> MaybePoison;
+    SCEVPoisonCollector(bool LookThroughSeq) : LookThroughSeq(LookThroughSeq) {}
+
+    bool follow(const SCEV *S) {
+      // TODO: We can always follow the first operand, but the SCEVTraversal
+      // API doesn't support this.
+      if (!LookThroughSeq && isa<SCEVSequentialMinMaxExpr>(S))
+        return false;
+
+      if (auto *SU = dyn_cast<SCEVUnknown>(S)) {
+        if (!isGuaranteedNotToBePoison(SU->getValue()))
+          MaybePoison.insert(S);
+      }
+      return true;
+    }
+    bool isDone() const { return false; }
+  };
+
+  // First collect all SCEVs that might result in AssumedPoison to be poison.
+  // We need to look through umin_seq here, because we want to find all SCEVs
+  // that *might* result in poison, not only those that are *required* to.
+  SCEVPoisonCollector PC1(/* LookThroughSeq */ true);
+  visitAll(AssumedPoison, PC1);
+
+  // AssumedPoison is never poison. As the assumption is false, the implication
+  // is true. Don't bother walking the other SCEV in this case.
+  if (PC1.MaybePoison.empty())
+    return true;
+
+  // Collect all SCEVs in S that, if poison, *will* result in S being poison
+  // as well. We cannot look through umin_seq here, as its argument only *may*
+  // make the result poison.
+  SCEVPoisonCollector PC2(/* LookThroughSeq */ false);
+  visitAll(S, PC2);
+
+  // Make sure that no matter which SCEV in PC1.MaybePoison is actually poison,
+  // it will also make S poison by being part of PC2.MaybePoison.
+  return all_of(PC1.MaybePoison,
+                [&](const SCEV *S) { return PC2.MaybePoison.contains(S); });
+}
+
 const SCEV *
 ScalarEvolution::getSequentialMinMaxExpr(SCEVTypes Kind,
                                          SmallVectorImpl<const SCEV *> &Ops) {
@@ -4023,11 +4076,6 @@ ScalarEvolution::getSequentialMinMaxExpr(SCEVTypes Kind,
   assert(!Ops.empty() && "Cannot get empty (u|s)(min|max)!");
   if (Ops.size() == 1)
     return Ops[0];
-  if (Ops.size() == 2 &&
-      any_of(Ops, [](const SCEV *Op) { return isa<SCEVConstant>(Op); }))
-    return getMinMaxExpr(
-        SCEVSequentialMinMaxExpr::getEquivalentNonSequentialSCEVType(Kind),
-        Ops);
 #ifndef NDEBUG
   Type *ETy = getEffectiveSCEVType(Ops[0]->getType());
   for (unsigned i = 1, e = Ops.size(); i != e; ++i) {
@@ -4074,6 +4122,39 @@ ScalarEvolution::getSequentialMinMaxExpr(SCEVTypes Kind,
 
     if (DeletedAny)
       return getSequentialMinMaxExpr(Kind, Ops);
+  }
+
+  const SCEV *SaturationPoint;
+  ICmpInst::Predicate Pred;
+  switch (Kind) {
+  case scSequentialUMinExpr:
+    SaturationPoint = getZero(Ops[0]->getType());
+    Pred = ICmpInst::ICMP_ULE;
+    break;
+  default:
+    llvm_unreachable("Not a sequential min/max type.");
+  }
+
+  for (unsigned i = 1, e = Ops.size(); i != e; ++i) {
+    // We can replace %x umin_seq %y with %x umin %y if either:
+    //  * %y being poison implies %x is also poison.
+    //  * %x cannot be the saturating value (e.g. zero for umin).
+    if (::impliesPoison(Ops[i], Ops[i - 1]) ||
+        isKnownViaNonRecursiveReasoning(ICmpInst::ICMP_NE, Ops[i - 1],
+                                        SaturationPoint)) {
+      SmallVector<const SCEV *> SeqOps = {Ops[i - 1], Ops[i]};
+      Ops[i - 1] = getMinMaxExpr(
+          SCEVSequentialMinMaxExpr::getEquivalentNonSequentialSCEVType(Kind),
+          SeqOps);
+      Ops.erase(Ops.begin() + i);
+      return getSequentialMinMaxExpr(Kind, Ops);
+    }
+    // Fold %x umin_seq %y to %x if %x ule %y.
+    // TODO: We might be able to prove the predicate for a later operand.
+    if (isKnownViaNonRecursiveReasoning(Pred, Ops[i - 1], Ops[i])) {
+      Ops.erase(Ops.begin() + i);
+      return getSequentialMinMaxExpr(Kind, Ops);
+    }
   }
 
   // Okay, it looks like we really DO need an expr.  Check to see if we

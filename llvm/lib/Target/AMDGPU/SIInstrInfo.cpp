@@ -1739,6 +1739,7 @@ unsigned SIInstrInfo::getNumWaitStates(const MachineInstr &MI) {
   // hazard, even if one exist, won't really be visible. Should we handle it?
   case AMDGPU::SI_MASKED_UNREACHABLE:
   case AMDGPU::WAVE_BARRIER:
+  case AMDGPU::SCHED_BARRIER:
     return 0;
   }
 }
@@ -3456,6 +3457,9 @@ bool SIInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
   if (MI.getOpcode() == TargetOpcode::INLINEASM_BR)
     return true;
 
+  if (MI.getOpcode() == AMDGPU::SCHED_BARRIER && MI.getOperand(0).getImm() == 0)
+    return true;
+
   // Target-independent instructions do not have an implicit-use of EXEC, even
   // when they operate on VGPRs. Treating EXEC modifications as scheduling
   // boundaries prevents incorrect movements of such instructions.
@@ -4437,7 +4441,7 @@ bool SIInstrInfo::verifyInstruction(const MachineInstr &MI,
     if (MI.mayStore()) {
       // The register offset form of scalar stores may only use m0 as the
       // soffset register.
-      const MachineOperand *Soff = getNamedOperand(MI, AMDGPU::OpName::soff);
+      const MachineOperand *Soff = getNamedOperand(MI, AMDGPU::OpName::soffset);
       if (Soff && Soff->getReg() != AMDGPU::M0) {
         ErrInfo = "scalar stores must use m0 as offset register";
         return false;
@@ -5280,7 +5284,7 @@ void SIInstrInfo::legalizeOperandsSMRD(MachineRegisterInfo &MRI,
     Register SGPR = readlaneVGPRToSGPR(SBase->getReg(), MI, MRI);
     SBase->setReg(SGPR);
   }
-  MachineOperand *SOff = getNamedOperand(MI, AMDGPU::OpName::soff);
+  MachineOperand *SOff = getNamedOperand(MI, AMDGPU::OpName::soffset);
   if (SOff && !RI.isSGPRClass(MRI.getRegClass(SOff->getReg()))) {
     Register SGPR = readlaneVGPRToSGPR(SOff->getReg(), MI, MRI);
     SOff->setReg(SGPR);
@@ -7801,6 +7805,7 @@ SIInstrInfo::splitFlatOffset(int64_t COffsetVal, unsigned AddrSpace,
 }
 
 // This must be kept in sync with the SIEncodingFamily class in SIInstrInfo.td
+// and the columns of the getMCOpcodeGen table.
 enum SIEncodingFamily {
   SI = 0,
   VI = 1,
@@ -7811,7 +7816,8 @@ enum SIEncodingFamily {
   GFX10 = 6,
   SDWA10 = 7,
   GFX90A = 8,
-  GFX940 = 9
+  GFX940 = 9,
+  GFX11 = 10,
 };
 
 static SIEncodingFamily subtargetEncodingFamily(const GCNSubtarget &ST) {
@@ -7826,6 +7832,8 @@ static SIEncodingFamily subtargetEncodingFamily(const GCNSubtarget &ST) {
     return SIEncodingFamily::VI;
   case AMDGPUSubtarget::GFX10:
     return SIEncodingFamily::GFX10;
+  case AMDGPUSubtarget::GFX11:
+    return SIEncodingFamily::GFX11;
   }
   llvm_unreachable("Unknown subtarget generation!");
 }
