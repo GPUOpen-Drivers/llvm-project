@@ -1203,8 +1203,8 @@ cc_library(
     hdrs = ["include/mlir/Dialect/AMDGPU/AMDGPUDialect.h"],
     includes = ["include"],
     deps = [
-        ":IR",
         ":AMDGPUIncGen",
+        ":IR",
         ":SideEffectInterfaces",
         "//llvm:Core",
         "//llvm:Support",
@@ -2009,6 +2009,7 @@ cc_library(
     includes = ["include"],
     deps = [
         ":ArithmeticDialect",
+        ":ComplexDialect",
         ":IR",
         ":LinalgOps",
         ":MathDialect",
@@ -2448,8 +2449,8 @@ cc_library(
     hdrs = ["include/mlir/Conversion/Passes.h"],
     includes = ["include"],
     deps = [
-        ":AffineToStandard",
         ":AMDGPUToROCDL",
+        ":AffineToStandard",
         ":ArithmeticToLLVM",
         ":ArithmeticToSPIRV",
         ":ArmNeon2dToIntr",
@@ -2487,6 +2488,7 @@ cc_library(
         ":SCFToStandard",
         ":SPIRVToLLVM",
         ":ShapeToStandard",
+        ":TensorToLinalg",
         ":TensorToSPIRV",
         ":TosaToArith",
         ":TosaToLinalg",
@@ -2646,6 +2648,7 @@ cc_library(
     deps = [
         ":Affine",
         ":ArithmeticDialect",
+        ":ComplexDialect",
         ":DialectUtils",
         ":IR",
         ":InferTypeOpInterface",
@@ -3693,12 +3696,12 @@ cc_library(
     ]),
     includes = ["include"],
     deps = [
+        ":AMDGPU",
         ":ConversionPassIncGen",
         ":IR",
         ":LLVMCommonConversion",
-        ":AMDGPU",
-        ":ROCDLDialect",
         ":Pass",
+        ":ROCDLDialect",
         ":Transforms",
         "//llvm:Support",
     ],
@@ -3799,8 +3802,8 @@ cc_library(
     hdrs = ["include/mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"],
     includes = ["include"],
     deps = [
-        ":ArithmeticToLLVM",
         ":AMDGPUToROCDL",
+        ":ArithmeticToLLVM",
         ":ControlFlowToLLVM",
         ":ConversionPassIncGen",
         ":FuncDialect",
@@ -4675,6 +4678,36 @@ cc_library(
         "//llvm:Support",
     ],
 )
+
+cc_library(
+    name = "TensorToLinalg",
+    srcs = glob([
+        "lib/Conversion/TensorToLinalg/*.cpp",
+        "lib/Conversion/TensorToLinalg/*.h",
+    ]) + [":ConversionPassDetail"],
+    hdrs = glob([
+        "include/mlir/Conversion/TensorToLinalg/*.h",
+    ]),
+    includes = [
+        "include",
+        "lib/Conversion/TensorToLinalg",
+    ],
+    deps = [
+        ":ArithmeticDialect",
+        ":ConversionPassIncGen",
+        ":FuncDialect",
+        ":IR",
+        ":LinalgOps",
+        ":LinalgTransforms",
+        ":Pass",
+        ":Support",
+        ":TensorDialect",
+        ":Transforms",
+        ":VectorOps",
+        "//llvm:Support",
+    ],
+)
+
 
 cc_library(
     name = "TensorToSPIRV",
@@ -6133,14 +6166,14 @@ cc_library(
         "include/mlir/InitAllPasses.h",
     ],
     deps = [
+        ":AMDGPU",
+        ":AMDGPUToROCDL",
         ":AMX",
         ":AMXTransforms",
         ":Affine",
         ":AffinePassIncGen",
         ":AffineToStandard",
         ":AffineTransforms",
-        ":AMDGPU",
-        ":AMDGPUToROCDL",
         ":ArithmeticDialect",
         ":ArithmeticToLLVM",
         ":ArithmeticToSPIRV",
@@ -7300,6 +7333,7 @@ cc_library(
         ":ArithmeticDialect",
         ":ArithmeticUtils",
         ":BufferizationDialect",
+        ":ComplexDialect",
         ":ControlFlowInterfaces",
         ":CopyOpInterface",
         ":DialectUtils",

@@ -111,7 +111,7 @@ struct CollapseShapeOpInterface
     auto collapseShapeOp = cast<tensor::CollapseShapeOp>(op);
     RankedTensorType tensorResultType = collapseShapeOp.getResultType();
     OpOperand &srcOperand = collapseShapeOp->getOpOperand(0) /*src*/;
-    auto bufferType = state.getBufferType(srcOperand).cast<MemRefType>();
+    auto bufferType = state.getBufferType(srcOperand.get()).cast<MemRefType>();
 
     if (tensorResultType.getRank() == 0) {
       // 0-d collapses must go through a different op builder.
@@ -445,13 +445,12 @@ struct GenerateOpInterface
 
     // Allocate memory.
     Location loc = op->getLoc();
-    MemRefType memrefType =
-        getContiguousMemRefType(generateOp.getType().cast<RankedTensorType>());
     FailureOr<Value> maybeResult =
         state.createAlloc(rewriter, loc, generateOp.result());
     if (failed(maybeResult))
       return failure();
     Value result = *maybeResult;
+    MemRefType memrefType = result.getType().cast<MemRefType>();
 
     // Collect loop bounds.
     int64_t rank = memrefType.getRank();

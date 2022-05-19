@@ -709,6 +709,20 @@ def ConvertSPIRVToLLVM : Pass<"convert-spirv-to-llvm", "ModuleOp"> {
 }
 
 //===----------------------------------------------------------------------===//
+// TensorToLinalg
+//===----------------------------------------------------------------------===//
+
+def ConvertTensorToLinalg : Pass<"convert-tensor-to-linalg", "ModuleOp"> {
+  let summary = "Convert some Tensor dialect ops to Linalg dialect";
+  let constructor = "mlir::createConvertTensorToLinalgPass()";
+  let dependentDialects = [
+    "arith::ArithmeticDialect",
+    "linalg::LinalgDialect",
+  ];
+}
+
+
+//===----------------------------------------------------------------------===//
 // TensorToSPIRV
 //===----------------------------------------------------------------------===//
 
@@ -742,7 +756,10 @@ def TosaToArith : Pass<"tosa-to-arith"> {
   let options = [
     Option<"includeApplyRescale", "include-apply-rescale",
            "bool", /*default=*/"false",
-           "Whether to include the lowering for tosa.apply_rescale to arith">
+           "Whether to include the lowering for tosa.apply_rescale to arith">,
+    Option<"use32Bit", "use-32-bit",
+           "bool", /*default=*/"false",
+           "Whether to prioritze lowering to 32-bit operations">
   ];
 
   let constructor = "tosa::createTosaToArith()";

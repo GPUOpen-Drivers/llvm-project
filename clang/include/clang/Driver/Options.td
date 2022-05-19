@@ -917,6 +917,7 @@ def offload_arch_EQ : Joined<["--"], "offload-arch=">, Flags<[NoXarchOption]>,
            "specified more than once.">;
 def cuda_gpu_arch_EQ : Joined<["--"], "cuda-gpu-arch=">, Flags<[NoXarchOption]>,
   Alias<offload_arch_EQ>;
+def cuda_feature_EQ : Joined<["--"], "cuda-feature=">, HelpText<"Manually specify the CUDA feature to use">;
 def hip_link : Flag<["--"], "hip-link">,
   HelpText<"Link clang-offload-bundler bundles for HIP">;
 def no_hip_rt: Flag<["-"], "no-hip-rt">,
@@ -3451,6 +3452,20 @@ def mfix_cmse_cve_2021_35465 : Flag<["-"], "mfix-cmse-cve-2021-35465">,
 def mno_fix_cmse_cve_2021_35465 : Flag<["-"], "mno-fix-cmse-cve-2021-35465">,
   Group<m_arm_Features_Group>,
   HelpText<"Don't work around VLLDM erratum CVE-2021-35465 (ARM only)">;
+def mfix_cortex_a57_aes_1742098 : Flag<["-"], "mfix-cortex-a57-aes-1742098">,
+  Group<m_arm_Features_Group>,
+  HelpText<"Work around Cortex-A57 Erratum 1742098 (ARM only)">;
+def mno_fix_cortex_a57_aes_1742098 : Flag<["-"], "mno-fix-cortex-a57-aes-1742098">,
+  Group<m_arm_Features_Group>,
+  HelpText<"Don't work around Cortex-A57 Erratum 1742098 (ARM only)">;
+def mfix_cortex_a72_aes_1655431 : Flag<["-"], "mfix-cortex-a72-aes-1655431">,
+  Group<m_arm_Features_Group>,
+  HelpText<"Work around Cortex-A72 Erratum 1655431 (ARM only)">,
+  Alias<mfix_cortex_a57_aes_1742098>;
+def mno_fix_cortex_a72_aes_1655431 : Flag<["-"], "mno-fix-cortex-a72-aes-1655431">,
+  Group<m_arm_Features_Group>,
+  HelpText<"Don't work around Cortex-A72 Erratum 1655431 (ARM only)">,
+  Alias<mno_fix_cortex_a57_aes_1742098>;
 def mfix_cortex_a53_835769 : Flag<["-"], "mfix-cortex-a53-835769">,
   Group<m_aarch64_Features_Group>,
   HelpText<"Workaround Cortex-A53 erratum 835769 (AArch64 only)">;
@@ -3896,10 +3911,11 @@ def nogpuinc : Flag<["-"], "nogpuinc">, HelpText<"Do not add include paths for C
 def nohipwrapperinc : Flag<["-"], "nohipwrapperinc">,
   HelpText<"Do not include the default HIP wrapper headers and include paths">;
 def : Flag<["-"], "nocudainc">, Alias<nogpuinc>;
-def nogpulib : Flag<["-"], "nogpulib">,
-  HelpText<"Do not link device library for CUDA/HIP device compilation">;
+def nogpulib : Flag<["-"], "nogpulib">, MarshallingInfoFlag<LangOpts<"NoGPULib">>,
+  Flags<[CC1Option]>, HelpText<"Do not link device library for CUDA/HIP device compilation">;
 def : Flag<["-"], "nocudalib">, Alias<nogpulib>;
 def nodefaultlibs : Flag<["-"], "nodefaultlibs">;
+def nodriverkitlib : Flag<["-"], "nodriverkitlib">;
 def nofixprebinding : Flag<["-"], "nofixprebinding">;
 def nolibc : Flag<["-"], "nolibc">;
 def nomultidefs : Flag<["-"], "nomultidefs">;
@@ -5619,6 +5635,10 @@ def fmodule_map_file_home_is_cwd : Flag<["-"], "fmodule-map-file-home-is-cwd">,
   HelpText<"Use the current working directory as the home directory of "
            "module maps specified by -fmodule-map-file=<FILE>">,
   MarshallingInfoFlag<HeaderSearchOpts<"ModuleMapFileHomeIsCwd">>;
+def fmodule_file_home_is_cwd : Flag<["-"], "fmodule-file-home-is-cwd">,
+  HelpText<"Use the current working directory as the base directory of "
+           "compiled module files.">,
+  MarshallingInfoFlag<HeaderSearchOpts<"ModuleFileHomeIsCwd">>;
 def fmodule_feature : Separate<["-"], "fmodule-feature">,
   MetaVarName<"<feature>">,
   HelpText<"Enable <feature> in module map requires declarations">,
@@ -6467,6 +6487,10 @@ def _SLASH_Zc_twoPhase : CLFlag<"Zc:twoPhase">,
 def _SLASH_Zc_twoPhase_ : CLFlag<"Zc:twoPhase-">,
   HelpText<"Disable two-phase name lookup in templates (default)">,
   Alias<fdelayed_template_parsing>;
+def _SLASH_Zc_wchar_t : CLFlag<"Zc:wchar_t">,
+  HelpText<"Enable C++ builtin type wchar_t (default)">;
+def _SLASH_Zc_wchar_t_ : CLFlag<"Zc:wchar_t-">,
+  HelpText<"Disable C++ builtin type wchar_t">;
 def _SLASH_Z7 : CLFlag<"Z7">,
   HelpText<"Enable CodeView debug information in object files">;
 def _SLASH_Zi : CLFlag<"Zi">, Alias<_SLASH_Z7>,
@@ -6654,7 +6678,6 @@ def _SLASH_Zc_forScope : CLIgnoredFlag<"Zc:forScope">;
 def _SLASH_Zc_inline : CLIgnoredFlag<"Zc:inline">;
 def _SLASH_Zc_rvalueCast : CLIgnoredFlag<"Zc:rvalueCast">;
 def _SLASH_Zc_ternary : CLIgnoredFlag<"Zc:ternary">;
-def _SLASH_Zc_wchar_t : CLIgnoredFlag<"Zc:wchar_t">;
 def _SLASH_ZH_MD5 : CLIgnoredFlag<"ZH:MD5">;
 def _SLASH_ZH_SHA1 : CLIgnoredFlag<"ZH:SHA1">;
 def _SLASH_ZH_SHA_256 : CLIgnoredFlag<"ZH:SHA_256">;

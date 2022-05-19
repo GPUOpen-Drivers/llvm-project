@@ -144,6 +144,7 @@ extern const bar *B2;
 // test various configurations of const
 const bar &B3 = B1;
 const bar *const B4 = B2;
+bar *B5 = &B;
 
 TEST(CastingTest, isa) {
   EXPECT_TRUE(isa<foo>(B1));
@@ -174,6 +175,17 @@ TEST(CastingTest, cast) {
   // EXPECT_EQ(F7, null_foo);
   foo *F8 = B1.baz();
   EXPECT_NE(F8, null_foo);
+
+  // Ensure cast-to-self works (with the type in the template verbatim
+  // equivalent to the type in the input).
+  auto B9 = cast<bar *>(B5);
+  static_assert(std::is_same<bar *, decltype(B9)>::value,
+                "Inccorrect return type!");
+  EXPECT_EQ(B9, B5);
+  auto B10 = cast<const bar *>(B2);
+  static_assert(std::is_same<const bar *, decltype(B10)>::value,
+                "Inccorrect return type!");
+  EXPECT_EQ(B10, B2);
 
   std::unique_ptr<const bar> BP(B2);
   auto FP = cast<foo>(std::move(BP));
@@ -212,6 +224,17 @@ TEST(CastingTest, dyn_cast) {
   // EXPECT_EQ(F4, null_foo);
   foo *F5 = B1.daz();
   EXPECT_NE(F5, null_foo);
+
+  // Ensure cast-to-self works (with the type in the template verbatim
+  // equivalent to the type in the input).
+  auto B9 = dyn_cast<bar *>(B5);
+  static_assert(std::is_same<bar *, decltype(B9)>::value,
+                "Inccorrect return type!");
+  EXPECT_EQ(B9, B5);
+  auto B10 = dyn_cast<const bar *>(B2);
+  static_assert(std::is_same<const bar *, decltype(B10)>::value,
+                "Inccorrect return type!");
+  EXPECT_EQ(B10, B2);
 }
 
 // All these tests forward to dyn_cast_if_present, so they also provde an
@@ -298,11 +321,9 @@ TEST(CastingTest, unique_dyn_cast) {
   ASSERT_EQ(OrigD, D.get());
   ASSERT_EQ(nullptr, NewB);
 
-  // Converting between unrelated types should fail.  The original value should
-  // remain unchanged and it should return nullptr.
-  //
-  // Note that this is a very contrived test - most of the time we want a cast
-  // like this to emit a compiler error.
+  // This is a very contrived test, casting between completely unrelated types
+  // should generally fail to compile. See the classof shenanigans we have in
+  // the definition of `foo` above.
   auto F = unique_dyn_cast<foo>(D);
   ASSERT_EQ(nullptr, F);
   ASSERT_EQ(OrigD, D.get());
@@ -317,6 +338,9 @@ TEST(CastingTest, unique_dyn_cast) {
   auto B3 = unique_dyn_cast<base>(newb());
   EXPECT_NE(nullptr, B3);
 
+  // This is a very contrived test, casting between completely unrelated types
+  // should generally fail to compile. See the classof shenanigans we have in
+  // the definition of `foo` above.
   auto F2 = unique_dyn_cast<foo>(newb());
   EXPECT_EQ(nullptr, F2);
 }
