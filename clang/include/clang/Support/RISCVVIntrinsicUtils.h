@@ -156,7 +156,6 @@ struct LMULType {
   std::string str() const;
   llvm::Optional<unsigned> getScale(unsigned ElementBitwidth) const;
   void MulLog2LMUL(int Log2LMUL);
-  LMULType &operator*=(uint32_t RHS);
 };
 
 class RVVType;
@@ -341,9 +340,9 @@ public:
   // Return the type string for a BUILTIN() macro in Builtins.def.
   std::string getBuiltinTypeStr() const;
 
-  static std::string getSuffixStr(
-      BasicType Type, int Log2LMUL,
-      const llvm::SmallVector<PrototypeDescriptor> &PrototypeDescriptors);
+  static std::string
+  getSuffixStr(BasicType Type, int Log2LMUL,
+               llvm::ArrayRef<PrototypeDescriptor> PrototypeDescriptors);
 };
 
 } // end namespace RISCV

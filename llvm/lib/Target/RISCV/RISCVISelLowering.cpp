@@ -4269,10 +4269,6 @@ RISCVTargetLowering::lowerVectorFPExtendOrRoundLike(SDValue Op,
 
   bool IsDirectConv = IsDirectExtend || IsDirectTrunc;
 
-  // For FP_ROUND/FP_EXTEND of scalable vectors, leave it to the pattern.
-  if (!VT.isFixedLengthVector() && !IsVP && IsDirectConv)
-    return Op;
-
   // Prepare any fixed-length vector operands.
   MVT ContainerVT = VT;
   SDValue Mask, VL;
@@ -6055,11 +6051,11 @@ SDValue RISCVTargetLowering::lowerVPOp(SDValue Op, SelectionDAG &DAG,
   }
 
   if (!VT.isFixedLengthVector())
-    return DAG.getNode(RISCVISDOpc, DL, VT, Ops);
+    return DAG.getNode(RISCVISDOpc, DL, VT, Ops, Op->getFlags());
 
   MVT ContainerVT = getContainerForFixedLengthVector(VT);
 
-  SDValue VPOp = DAG.getNode(RISCVISDOpc, DL, ContainerVT, Ops);
+  SDValue VPOp = DAG.getNode(RISCVISDOpc, DL, ContainerVT, Ops, Op->getFlags());
 
   return convertFromScalableVector(VT, VPOp, DAG, Subtarget);
 }
@@ -8616,7 +8612,7 @@ SDValue RISCVTargetLowering::PerformDAGCombine(SDNode *N,
       break;
     SDValue NewFMV = DAG.getNode(N->getOpcode(), DL, VT, Op0.getOperand(0));
     unsigned FPBits = N->getOpcode() == RISCVISD::FMV_X_ANYEXTW_RV64 ? 32 : 16;
-    APInt SignBit = APInt::getSignMask(FPBits).sextOrSelf(VT.getSizeInBits());
+    APInt SignBit = APInt::getSignMask(FPBits).sext(VT.getSizeInBits());
     if (Op0.getOpcode() == ISD::FNEG)
       return DAG.getNode(ISD::XOR, DL, VT, NewFMV,
                          DAG.getConstant(SignBit, DL, VT));
@@ -11656,7 +11652,8 @@ Value *RISCVTargetLowering::emitMaskedAtomicCmpXchgIntrinsic(
   return Result;
 }
 
-bool RISCVTargetLowering::shouldRemoveExtendFromGSIndex(EVT VT) const {
+bool RISCVTargetLowering::shouldRemoveExtendFromGSIndex(EVT IndexVT,
+                                                        EVT DataVT) const {
   return false;
 }
 

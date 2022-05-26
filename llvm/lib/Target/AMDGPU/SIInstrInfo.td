@@ -1291,6 +1291,9 @@ def exp_tgt : NamedOperandU32<"ExpTgt", NamedMatchClass<"ExpTgt", 0>> {
 
 }
 
+def wait_vdst : NamedOperandU8<"WaitVDST", NamedMatchClass<"WaitVDST">>;
+def wait_exp : NamedOperandU8<"WaitEXP", NamedMatchClass<"WaitEXP">>;
+
 } // End OperandType = "OPERAND_IMMEDIATE"
 
 class KImmMatchClass<int size> : AsmOperandClass {
@@ -1473,6 +1476,9 @@ def VOP3OpSel  : ComplexPattern<untyped, 2, "SelectVOP3OpSel">;
 def VOP3OpSelMods  : ComplexPattern<untyped, 2, "SelectVOP3OpSelMods">;
 
 def VOP3PMadMixMods  : ComplexPattern<untyped, 2, "SelectVOP3PMadMixMods">;
+
+def VINTERPMods  : ComplexPattern<untyped, 2, "SelectVINTERPMods">;
+def VINTERPModsHi  : ComplexPattern<untyped, 2, "SelectVINTERPModsHi">;
 
 //===----------------------------------------------------------------------===//
 // SI assembler operands
@@ -2516,10 +2522,11 @@ multiclass VINTRP_m <bits <2> op, dag outs, dag ins, string asm,
 
   def _vi : VINTRP_Real_vi <op, NAME, outs, ins, asm>;
 
-  let AssemblerPredicate = isGFX10Plus, DecoderNamespace = "GFX10" in {
+  let AssemblerPredicate = isGFX10Only, DecoderNamespace = "GFX10" in {
     def _gfx10 : VINTRP_Real_si<op, NAME, outs, ins, asm, SIEncodingFamily.GFX10>;
-  } // End AssemblerPredicate = isGFX10Plus, DecoderNamespace = "GFX10"
+  } // End AssemblerPredicate = isGFX10Only, DecoderNamespace = "GFX10"
 }
+
 //===----------------------------------------------------------------------===//
 // Vector instruction mappings
 //===----------------------------------------------------------------------===//
@@ -2633,14 +2640,6 @@ def getIfAddr64Inst : InstrMapping {
   let ColFields = ["IsAddr64"];
   let KeyCol = ["1"];
   let ValueCols = [["1"]];
-}
-
-def getMUBUFNoLdsInst : InstrMapping {
-  let FilterClass = "MUBUFLdsTable";
-  let RowFields = ["OpName"];
-  let ColFields = ["IsLds"];
-  let KeyCol = ["1"];
-  let ValueCols = [["0"]];
 }
 
 // Maps an atomic opcode to its returnless version.

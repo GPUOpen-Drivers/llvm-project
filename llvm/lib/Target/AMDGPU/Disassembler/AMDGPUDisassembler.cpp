@@ -82,7 +82,7 @@ static DecodeStatus decodeSoppBrTarget(MCInst &Inst, unsigned Imm,
   APInt SignedOffset(18, Imm * 4, true);
   int64_t Offset = (SignedOffset.sext(64) + 4 + Addr).getSExtValue();
 
-  if (DAsm->tryAddingSymbolicOperand(Inst, Offset, Addr, true, 2, 2))
+  if (DAsm->tryAddingSymbolicOperand(Inst, Offset, Addr, true, 2, 2, 0))
     return MCDisassembler::Success;
   return addOperand(Inst, MCOperand::createImm(Imm));
 }
@@ -148,7 +148,8 @@ DECODE_OPERAND_REG(AReg_1024)
 DECODE_OPERAND_REG(AV_32)
 DECODE_OPERAND_REG(AV_64)
 DECODE_OPERAND_REG(AV_128)
-DECODE_OPERAND_REG(AV_512)
+DECODE_OPERAND_REG(AVDst_128)
+DECODE_OPERAND_REG(AVDst_512)
 
 static DecodeStatus decodeOperand_VSrc16(MCInst &Inst, unsigned Imm,
                                          uint64_t Addr,
@@ -603,6 +604,12 @@ DecodeStatus AMDGPUDisassembler::getInstruction(MCInst &MI, uint64_t &Size,
       Res = convertMIMGInst(MI);
   }
 
+  if (Res && (MCII->get(MI.getOpcode()).TSFlags & SIInstrFlags::EXP))
+    Res = convertEXPInst(MI);
+
+  if (Res && (MCII->get(MI.getOpcode()).TSFlags & SIInstrFlags::VINTERP))
+    Res = convertVINTERPInst(MI);
+
   if (Res && IsSDWA)
     Res = convertSDWAInst(MI);
 
@@ -632,6 +639,28 @@ DecodeStatus AMDGPUDisassembler::getInstruction(MCInst &MI, uint64_t &Size,
   Size = Res ? (MaxInstBytesNum - Bytes.size())
              : std::min((size_t)4, Bytes_.size());
   return Res;
+}
+
+DecodeStatus AMDGPUDisassembler::convertEXPInst(MCInst &MI) const {
+  if (STI.getFeatureBits()[AMDGPU::FeatureGFX11]) {
+    // The MCInst still has these fields even though they are no longer encoded
+    // in the GFX11 instruction.
+    insertNamedMCOperand(MI, MCOperand::createImm(0), AMDGPU::OpName::vm);
+    insertNamedMCOperand(MI, MCOperand::createImm(0), AMDGPU::OpName::compr);
+  }
+  return MCDisassembler::Success;
+}
+
+DecodeStatus AMDGPUDisassembler::convertVINTERPInst(MCInst &MI) const {
+  if (MI.getOpcode() == AMDGPU::V_INTERP_P10_F16_F32_inreg_gfx11 ||
+      MI.getOpcode() == AMDGPU::V_INTERP_P10_RTZ_F16_F32_inreg_gfx11 ||
+      MI.getOpcode() == AMDGPU::V_INTERP_P2_F16_F32_inreg_gfx11 ||
+      MI.getOpcode() == AMDGPU::V_INTERP_P2_RTZ_F16_F32_inreg_gfx11) {
+    // The MCInst has this field that is not directly encoded in the
+    // instruction.
+    insertNamedMCOperand(MI, MCOperand::createImm(0), AMDGPU::OpName::op_sel);
+  }
+  return MCDisassembler::Success;
 }
 
 DecodeStatus AMDGPUDisassembler::convertSDWAInst(MCInst &MI) const {
@@ -972,8 +1001,16 @@ MCOperand AMDGPUDisassembler::decodeOperand_AV_128(unsigned Val) const {
   return decodeSrcOp(OPW128, Val);
 }
 
-MCOperand AMDGPUDisassembler::decodeOperand_AV_512(unsigned Val) const {
-  return decodeSrcOp(OPW512, Val);
+MCOperand AMDGPUDisassembler::decodeOperand_AVDst_128(unsigned Val) const {
+  using namespace AMDGPU::EncValues;
+  assert((Val & IS_VGPR) == 0); // Val{8} is not encoded but assumed to be 1.
+  return decodeSrcOp(OPW128, Val | IS_VGPR);
+}
+
+MCOperand AMDGPUDisassembler::decodeOperand_AVDst_512(unsigned Val) const {
+  using namespace AMDGPU::EncValues;
+  assert((Val & IS_VGPR) == 0); // Val{8} is not encoded but assumed to be 1.
+  return decodeSrcOp(OPW512, Val | IS_VGPR);
 }
 
 MCOperand AMDGPUDisassembler::decodeOperand_VReg_64(unsigned Val) const {
@@ -1881,10 +1918,10 @@ AMDGPUDisassembler::onSymbolStart(SymbolInfoTy &Symbol, uint64_t &Size,
 //===----------------------------------------------------------------------===//
 
 // Try to find symbol name for specified label
-bool AMDGPUSymbolizer::tryAddingSymbolicOperand(MCInst &Inst,
-                                raw_ostream &/*cStream*/, int64_t Value,
-                                uint64_t /*Address*/, bool IsBranch,
-                                uint64_t /*Offset*/, uint64_t /*InstSize*/) {
+bool AMDGPUSymbolizer::tryAddingSymbolicOperand(
+    MCInst &Inst, raw_ostream & /*cStream*/, int64_t Value,
+    uint64_t /*Address*/, bool IsBranch, uint64_t /*Offset*/,
+    uint64_t /*OpSize*/, uint64_t /*InstSize*/) {
 
   if (!IsBranch) {
     return false;

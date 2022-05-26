@@ -1,5 +1,6 @@
 include "config/public_api.td"
 
+include "spec/bsd_ext.td"
 include "spec/gnu_ext.td"
 include "spec/linux.td"
 include "spec/llvm_libc_ext.td"
@@ -240,6 +241,7 @@ def ThreadsAPI : PublicAPI<"threads.h"> {
 def PThreadAPI : PublicAPI<"pthread.h"> {
   let Types = [
       "pthread_attr_t",
+      "pthread_mutex_t",
       "pthread_mutexattr_t"
   ];
 }

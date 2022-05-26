@@ -216,7 +216,12 @@ Environment::Environment(DataflowAnalysisContext &DACtx,
   }
 
   if (const auto *MethodDecl = dyn_cast<CXXMethodDecl>(&DeclCtx)) {
-    if (!MethodDecl->isStatic()) {
+    auto *Parent = MethodDecl->getParent();
+    assert(Parent != nullptr);
+    if (Parent->isLambda())
+      MethodDecl = dyn_cast<CXXMethodDecl>(Parent->getDeclContext());
+
+    if (MethodDecl && !MethodDecl->isStatic()) {
       QualType ThisPointeeType = MethodDecl->getThisObjectType();
       // FIXME: Add support for union types.
       if (!ThisPointeeType->isUnionType()) {
@@ -237,9 +242,6 @@ bool Environment::equivalentTo(const Environment &Other,
     return false;
 
   if (ExprToLoc != Other.ExprToLoc)
-    return false;
-
-  if (MemberLocToStruct != Other.MemberLocToStruct)
     return false;
 
   // Compare the contents for the intersection of their domains.

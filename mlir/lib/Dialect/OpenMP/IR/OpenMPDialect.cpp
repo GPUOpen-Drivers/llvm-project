@@ -838,6 +838,9 @@ LogicalResult AtomicWriteOp::verify() {
           "memory-order must not be acq_rel or acquire for atomic writes");
     }
   }
+  if (address().getType().cast<PointerLikeType>().getElementType() !=
+      value().getType())
+    return emitError("address must dereference to value type");
   return verifySynchronizationHint(*this, hint_val());
 }
 
@@ -978,15 +981,15 @@ LogicalResult CancelOp::verify() {
     if (!isa<WsLoopOp>(parentOp)) {
       return emitOpError() << "cancel loop must appear "
                            << "inside a worksharing-loop region";
-    } else {
-      if (cast<WsLoopOp>(parentOp).nowaitAttr()) {
-        return emitError() << "A worksharing construct that is canceled "
-                           << "must not have a nowait clause";
-      } else if (cast<WsLoopOp>(parentOp).ordered_valAttr()) {
-        return emitError() << "A worksharing construct that is canceled "
-                           << "must not have an ordered clause";
-      }
     }
+    if (cast<WsLoopOp>(parentOp).nowaitAttr()) {
+      return emitError() << "A worksharing construct that is canceled "
+                         << "must not have a nowait clause";
+    } else if (cast<WsLoopOp>(parentOp).ordered_valAttr()) {
+      return emitError() << "A worksharing construct that is canceled "
+                         << "must not have an ordered clause";
+    }
+
   } else if (cct == ClauseCancellationConstructType::Sections) {
     if (!(isa<SectionsOp>(parentOp) || isa<SectionOp>(parentOp))) {
       return emitOpError() << "cancel sections must appear "
@@ -1023,8 +1026,9 @@ LogicalResult CancellationPointOp::verify() {
       !isa<WsLoopOp>(parentOp)) {
     return emitOpError() << "cancellation point loop must appear "
                          << "inside a worksharing-loop region";
-  } else if ((cct == ClauseCancellationConstructType::Sections) &&
-             !(isa<SectionsOp>(parentOp) || isa<SectionOp>(parentOp))) {
+  }
+  if ((cct == ClauseCancellationConstructType::Sections) &&
+      !(isa<SectionsOp>(parentOp) || isa<SectionOp>(parentOp))) {
     return emitOpError() << "cancellation point sections must appear "
                          << "inside a sections region";
   }

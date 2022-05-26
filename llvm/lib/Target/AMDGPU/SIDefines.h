@@ -63,6 +63,12 @@ enum : uint64_t {
   VGPRSpill = 1 << 24,
   SGPRSpill = 1 << 25,
 
+  // LDSDIR instruction format.
+  LDSDIR = 1 << 26,
+
+  // VINTERP instruction format.
+  VINTERP = 1 << 27,
+
   // High bits - other information.
   VM_CNT = UINT64_C(1) << 32,
   EXP_CNT = UINT64_C(1) << 33,
@@ -280,7 +286,8 @@ enum : unsigned {
   INLINE_FLOATING_C_MAX = 248,
   LITERAL_CONST = 255,
   VGPR_MIN = 256,
-  VGPR_MAX = 511
+  VGPR_MAX = 511,
+  IS_VGPR = 256  // Indicates VGPR or AGPR
 };
 
 } // namespace EncValues
@@ -848,20 +855,23 @@ enum Target : unsigned {
   ET_MRT0 = 0,
   ET_MRT7 = 7,
   ET_MRTZ = 8,
-  ET_NULL = 9,
+  ET_NULL = 9,             // Pre-GFX11
   ET_POS0 = 12,
   ET_POS3 = 15,
-  ET_POS4 = 16,          // GFX10+
-  ET_POS_LAST = ET_POS4, // Highest pos used on any subtarget
-  ET_PRIM = 20,          // GFX10+
-  ET_PARAM0 = 32,
-  ET_PARAM31 = 63,
+  ET_POS4 = 16,            // GFX10+
+  ET_POS_LAST = ET_POS4,   // Highest pos used on any subtarget
+  ET_PRIM = 20,            // GFX10+
+  ET_DUAL_SRC_BLEND0 = 21, // GFX11+
+  ET_DUAL_SRC_BLEND1 = 22, // GFX11+
+  ET_PARAM0 = 32,          // Pre-GFX11
+  ET_PARAM31 = 63,         // Pre-GFX11
 
   ET_NULL_MAX_IDX = 0,
   ET_MRTZ_MAX_IDX = 0,
   ET_PRIM_MAX_IDX = 0,
   ET_MRT_MAX_IDX = 7,
   ET_POS_MAX_IDX = 4,
+  ET_DUAL_SRC_BLEND_MAX_IDX = 1,
   ET_PARAM_MAX_IDX = 31,
 
   ET_INVALID = 255,

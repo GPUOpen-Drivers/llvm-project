@@ -237,6 +237,28 @@ private:
 };
 } // namespace
 
+namespace {
+struct BufferizationBufferizePass
+    : public BufferizationBufferizeBase<BufferizationBufferizePass> {
+  void runOnOperation() override {
+    BufferizationOptions options = getPartialBufferizationOptions();
+    options.allowDialectInFilter<BufferizationDialect>();
+
+    if (failed(bufferizeOp(getOperation(), options)))
+      signalPassFailure();
+  }
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry
+        .insert<bufferization::BufferizationDialect, memref::MemRefDialect>();
+  }
+};
+} // namespace
+
+std::unique_ptr<Pass> mlir::bufferization::createBufferizationBufferizePass() {
+  return std::make_unique<BufferizationBufferizePass>();
+}
+
 std::unique_ptr<Pass> mlir::bufferization::createOneShotBufferizePass() {
   return std::make_unique<OneShotBufferizePass>();
 }
@@ -273,10 +295,6 @@ static bool hasTensorSemantics(Operation *op) {
 LogicalResult
 bufferization::finalizeBuffers(Operation *op,
                                const BufferizationOptions &options) {
-  // Hoist buffers.
-  if (failed(hoistBufferAllocations(op, options)))
-    return failure();
-
   // Create allocation ops for "leaking buffers", i.e., buffer allocations that
   // escape block boundaries. If there are no leaking allocs, `hasLeakingAllocs`
   // is set to `false`.
@@ -285,19 +303,18 @@ bufferization::finalizeBuffers(Operation *op,
                                    &hasLeakingAllocs)))
     return failure();
 
-  if (hasLeakingAllocs) {
-    // Promote returned buffers to "out" parameters.
-    // TODO: Pass options to support custom dealloc ops.
-    if (options.promoteBufferResultsToOutParams && isa<ModuleOp>(op) &&
-        failed(promoteBufferResultsToOutParams(cast<ModuleOp>(op))))
-      return failure();
+  // Promote returned buffers to "out" parameters.
+  // TODO: Pass options to support custom dealloc ops.
+  if (options.promoteBufferResultsToOutParams && isa<ModuleOp>(op) &&
+      failed(promoteBufferResultsToOutParams(cast<ModuleOp>(op))))
+    return failure();
 
-    // Create deallocation ops for all "leaking buffers" and all buffer
-    // allocations that were added during the above promotion process.
-    // TODO: Pass options to support custom dealloc ops.
-    if (options.createDeallocs && failed(deallocateBuffers(op)))
-      return failure();
-  }
+  // Create deallocation ops for all "leaking buffers" and all buffer
+  // allocations that were added during the above promotion process.
+  // TODO: Pass options to support custom dealloc ops.
+  if (hasLeakingAllocs && options.createDeallocs &&
+      failed(deallocateBuffers(op)))
+    return failure();
 
   // Deallocate all remaining buffers at the end of their parent blocks.
   if (failed(createAllocDeallocOps(op, options)))
@@ -367,6 +384,8 @@ private:
   DenseSet<Operation *> &toMemrefOps;
 
   /// The bufferization options.
+  /// Used for debug modes.
+  LLVM_ATTRIBUTE_UNUSED
   const BufferizationOptions &options;
 };
 } // namespace
@@ -459,7 +478,12 @@ namespace {
 class AlwaysCopyAnalysisState : public AnalysisState {
 public:
   AlwaysCopyAnalysisState(const BufferizationOptions &options)
-      : AnalysisState(options) {}
+      : AnalysisState(options) {
+    // Note: Allocations must be deallocated with a subsequent run of the buffer
+    // deallocation pass.
+    assert(!options.createDeallocs &&
+           "cannot create deallocs with AlwaysCopyBufferizationState");
+  }
 
   AlwaysCopyAnalysisState(const AlwaysCopyAnalysisState &) = delete;
 
@@ -477,6 +501,19 @@ public:
     // There is no analysis, so we do not know if the values are equivalent. The
     // conservative answer is "false".
     return false;
+  }
+
+  /// Return `true` if the given tensor has undefined contents.
+  bool hasUndefinedContents(OpOperand *opOperand) const override {
+    // There is no analysis, so the conservative answer is "false".
+    return false;
+  }
+
+  /// Return true if the given tensor (or an aliasing tensor) is yielded from
+  /// the containing block. Also include all aliasing tensors in the same block.
+  bool isTensorYielded(Value tensor) const override {
+    // There is no analysis, so conservatively answer "true".
+    return true;
   }
 };
 } // namespace

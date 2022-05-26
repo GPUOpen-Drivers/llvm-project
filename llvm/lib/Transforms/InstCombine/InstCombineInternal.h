@@ -344,8 +344,8 @@ private:
                                             const CastInst *CI2);
   Value *simplifyIntToPtrRoundTripCast(Value *Val);
 
-  Value *foldAndOrOfICmps(ICmpInst *LHS, ICmpInst *RHS, BinaryOperator &BO,
-                          bool IsAnd);
+  Value *foldAndOrOfICmps(ICmpInst *LHS, ICmpInst *RHS, Instruction &I,
+                          bool IsAnd, bool IsLogical = false);
   Value *foldXorOfICmps(ICmpInst *LHS, ICmpInst *RHS, BinaryOperator &Xor);
 
   Value *foldEqOfParts(ICmpInst *Cmp0, ICmpInst *Cmp1, bool IsAnd);
@@ -674,6 +674,8 @@ public:
   Instruction *foldICmpWithConstant(ICmpInst &Cmp);
   Instruction *foldICmpInstWithConstant(ICmpInst &Cmp);
   Instruction *foldICmpInstWithConstantNotInt(ICmpInst &Cmp);
+  Instruction *foldICmpInstWithConstantAllowUndef(ICmpInst &Cmp,
+                                                  const APInt &C);
   Instruction *foldICmpBinOp(ICmpInst &Cmp, const SimplifyQuery &SQ);
   Instruction *foldICmpEquality(ICmpInst &Cmp);
   Instruction *foldIRemByPowerOfTwoToBitTest(ICmpInst &I);
