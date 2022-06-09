@@ -9,6 +9,9 @@
 /* The following are DRs which do not require tests to demonstrate
  * conformance or nonconformance.
  *
+ * WG14 DR001: yes
+ * Do functions return values by copying?
+ *
  * WG14 DR005: yes
  * May a conforming implementation define and recognize a pragma which would
  * change the semantics of the language?
@@ -231,13 +234,13 @@ int dr032 = (1, 2); /* expected-warning {{left operand of comma operator has no 
 /* WG14 DR035: partial
  * Questions about definition of functions without a prototype
  */
-void dr035_1(a, b) /* expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}} */
+void dr035_1(a, b) /* expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}} */
   int a(enum b {x, y}); /* expected-warning {{declaration of 'enum b' will not be visible outside of this function}} */
   int b; {
   int test = x; /* expected-error {{use of undeclared identifier 'x'}} */
 }
 
-void dr035_2(c) /* expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}} */
+void dr035_2(c) /* expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}} */
   enum m{q, r} c; { /* expected-warning {{declaration of 'enum m' will not be visible outside of this function}} */
   /* FIXME: This should be accepted because the scope of m, q, and r ends at
    * the closing brace of the function per C89 6.1.2.1.
@@ -391,7 +394,7 @@ void dr068(void) {
  * a prototype causes implicit conversions rather than relying on default
  * argument promotion and warm thoughts.
  */
-void dr070_1(c) /* expected-warning {{a function declaration without a prototype is deprecated in all versions of C and is not supported in C2x}} */
+void dr070_1(c) /* expected-warning {{a function definition without a prototype is deprecated in all versions of C and is not supported in C2x}} */
   int c; {
 }
 

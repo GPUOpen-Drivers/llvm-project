@@ -19,10 +19,6 @@
 // The Windows headers don't appear to be compatible with modules
 // UNSUPPORTED: windows
 
-// TODO: Some headers produce errors when we include them and the library has been
-//       configured without support for them, which breaks the modules build.
-// UNSUPPORTED: libcpp-has-no-localization, libcpp-has-no-filesystem-library, libcpp-has-no-threads, libcpp-has-no-wide-characters
-
 // Prevent <ext/hash_map> from generating deprecated warnings for this test.
 #if defined(__DEPRECATED)
 #    undef __DEPRECATED

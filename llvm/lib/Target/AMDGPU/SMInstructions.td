@@ -87,18 +87,21 @@ class SM_Real <SM_Pseudo ps, string opName = ps.Mnemonic>
   bits<5> cpol;
 }
 
-class SM_Probe_Pseudo <string opName, dag ins, bit isImm>
-  : SM_Pseudo<opName, (outs), ins,
-              " $sdata, $sbase, " # !if(isImm, "$offset", "$soffset")> {
+class SM_Probe_Pseudo <string opName, string variant, RegisterClass baseClass,
+                       dag offsets, string asmOffsets,
+                       bit hasOffset, bit hasSOffset>
+  : SM_Pseudo<opName, (outs),
+              !con((ins i8imm:$sdata, baseClass:$sbase), offsets),
+              " $sdata, $sbase, " # asmOffsets> {
   let mayLoad = 0;
   let mayStore = 0;
   let has_glc = 0;
   let LGKM_CNT = 0;
   let ScalarStore = 0;
   let hasSideEffects = 1;
-  let has_offset = isImm;
-  let has_soffset = !not(isImm);
-  let PseudoInstr = opName # !if(isImm, "_IMM", "_SGPR");
+  let has_offset = hasOffset;
+  let has_soffset = hasSOffset;
+  let PseudoInstr = opName # variant;
 }
 
 class SM_Load_Pseudo <string opName, dag outs, dag ins, string asmOps, list<dag> pattern=[]>
@@ -122,18 +125,19 @@ class SM_Store_Pseudo <string opName, RegisterClass baseClass,
   let ScalarStore = 1;
 }
 
-class SM_Discard_Pseudo <string opName, dag ins, bit isImm>
-  : SM_Pseudo<opName, (outs), ins,
-              " $sbase, " # !if(isImm, "$offset", "$soffset")> {
+class SM_Discard_Pseudo <string opName, string variant, dag offsets,
+                         string asmOffsets, bit hasOffset, bit hasSOffset>
+  : SM_Pseudo<opName, (outs), !con((ins SReg_64:$sbase), offsets),
+              " $sbase, " # asmOffsets> {
   let mayLoad = 0;
   let mayStore = 0;
   let has_glc = 0;
   let has_sdst = 0;
   let ScalarStore = 0;
   let hasSideEffects = 1;
-  let has_offset = isImm;
-  let has_soffset = !not(isImm);
-  let PseudoInstr = opName # !if(isImm, "_IMM", "_SGPR");
+  let has_offset = hasOffset;
+  let has_soffset = hasSOffset;
+  let PseudoInstr = opName # variant;
 }
 
 multiclass SM_Pseudo_Loads<string opName,
@@ -203,8 +207,12 @@ multiclass SM_Pseudo_Stores<string opName,
 }
 
 multiclass SM_Pseudo_Discards<string opName> {
-  def _IMM  : SM_Discard_Pseudo <opName, (ins SReg_64:$sbase, smem_offset:$offset), 1>;
-  def _SGPR : SM_Discard_Pseudo <opName, (ins SReg_64:$sbase, SReg_32:$soffset), 0>;
+  def _IMM  : SM_Discard_Pseudo <opName, "_IMM",
+    (ins smem_offset:$offset), "$offset", 1, 0>;
+  def _SGPR : SM_Discard_Pseudo <opName, "_SGPR",
+    (ins SReg_32:$soffset), "$soffset", 0, 1>;
+  def _SGPR_IMM : SM_Discard_Pseudo <opName, "_SGPR_IMM",
+    (ins SReg_32:$soffset, smem_offset_mod:$offset), "$soffset$offset", 1, 1>;
 }
 
 class SM_Time_Pseudo<string opName, SDPatternOperator node = null_frag> : SM_Pseudo<
@@ -227,8 +235,12 @@ class SM_Inval_Pseudo <string opName, SDPatternOperator node = null_frag> : SM_P
 }
 
 multiclass SM_Pseudo_Probe<string opName, RegisterClass baseClass> {
-  def _IMM  : SM_Probe_Pseudo <opName, (ins i8imm:$sdata, baseClass:$sbase, smem_offset:$offset), 1>;
-  def _SGPR : SM_Probe_Pseudo <opName, (ins i8imm:$sdata, baseClass:$sbase, SReg_32:$soffset), 0>;
+  def _IMM  : SM_Probe_Pseudo <opName, "_IMM", baseClass,
+    (ins smem_offset:$offset), "$offset", 1, 0>;
+  def _SGPR : SM_Probe_Pseudo <opName, "_SGPR", baseClass,
+    (ins SReg_32:$soffset), "$soffset", 0, 1>;
+  def _SGPR_IMM : SM_Probe_Pseudo <opName, "_SGPR_IMM", baseClass,
+    (ins SReg_32:$soffset, smem_offset_mod:$offset), "$soffset$offset", 1, 1>;
 }
 
 class SM_WaveId_Pseudo<string opName, SDPatternOperator node> : SM_Pseudo<
@@ -522,42 +534,82 @@ def S_DCACHE_INV_si : SMRD_Real_si <0x1f, S_DCACHE_INV>;
 
 
 //===----------------------------------------------------------------------===//
-// VI
+// VI and GFX9.
 //===----------------------------------------------------------------------===//
 
 class SMEM_Real_vi <bits<8> op, SM_Pseudo ps>
   : SM_Real<ps>
   , SIMCInstr<ps.PseudoInstr, SIEncodingFamily.VI>
   , Enc64 {
-  let AssemblerPredicate = isGFX8GFX9;
+  field bit IsGFX9SpecificEncoding = false;
+  let AssemblerPredicate = !if(IsGFX9SpecificEncoding, isGFX9Only, isGFX8GFX9);
   let DecoderNamespace = "GFX8";
 
   let Inst{5-0}   = !if(ps.has_sbase, sbase{6-1}, ?);
   let Inst{12-6}  = !if(ps.has_sdst, sdst{6-0}, ?);
 
+  // Note that for GFX9 instructions with immediate offsets, soffset_en
+  // must be defined, whereas in GFX8 it's undefined in all cases,
+  // meaning GFX9 is not perfectly backward-compatible with GFX8, despite
+  // documentation suggesting otherwise.
+  field bit SOffsetEn = !if(IsGFX9SpecificEncoding,
+    !if(ps.has_offset, ps.has_soffset, !if(ps.has_soffset, 0, ?)),
+    ?);
+  let Inst{14} = SOffsetEn;
+
   let Inst{16} = !if(ps.has_glc, cpol{CPolBit.GLC}, ?);
+
+  // imm
+  // TODO: Shall not be defined if the instruction has no offset nor
+  // soffset.
   let Inst{17} = ps.has_offset;
+
   let Inst{25-18} = op;
   let Inst{31-26} = 0x30; //encoding
 
   // VI supports 20-bit unsigned offsets while GFX9+ supports 21-bit signed.
   // Offset value is corrected accordingly when offset is encoded/decoded.
-  let Inst{38-32} = !if(ps.has_offset, offset{6-0}, !if(ps.has_soffset, soffset{6-0}, ?));
-  let Inst{52-39} = !if(ps.has_offset, offset{20-7}, ?);
+  // TODO: Forbid non-M0 register offsets for GFX8 stores and atomics.
+  field bits<21> Offset;
+  let Offset{6-0} = !if(ps.has_offset, offset{6-0},
+                                       !if(ps.has_soffset, soffset{6-0}, ?));
+  let Offset{20-7} = !if(ps.has_offset, offset{20-7}, ?);
+  let Inst{52-32} = Offset;
+
+  // soffset
+  let Inst{63-57} = !if(!and(IsGFX9SpecificEncoding, ps.has_soffset),
+                        soffset{6-0}, ?);
 }
 
-multiclass SM_Real_Loads_vi<bits<8> op, string ps,
-                            SM_Load_Pseudo immPs = !cast<SM_Load_Pseudo>(ps#_IMM),
-                            SM_Load_Pseudo sgprPs = !cast<SM_Load_Pseudo>(ps#_SGPR)> {
-  def _IMM_vi : SMEM_Real_vi <op, immPs> {
-    let InOperandList = (ins immPs.BaseClass:$sbase, smem_offset:$offset, CPol:$cpol);
-  }
-  def _SGPR_vi : SMEM_Real_vi <op, sgprPs> {
-    let InOperandList = (ins sgprPs.BaseClass:$sbase, SReg_32:$soffset, CPol:$cpol);
-  }
+class SMEM_Real_Load_vi<bits<8> op, string ps, dag offsets>
+    : SMEM_Real_vi<op, !cast<SM_Pseudo>(ps)> {
+  RegisterClass BaseClass = !cast<SM_Load_Pseudo>(ps).BaseClass;
+  let InOperandList = !con((ins BaseClass:$sbase), offsets, (ins CPol:$cpol));
 }
 
-class SMEM_Real_Store_vi <bits<8> op, SM_Pseudo ps> : SMEM_Real_vi <op, ps> {
+// The alternative GFX9 SGPR encoding using soffset to encode the
+// offset register. Not available in assembler and goes to the GFX9
+// encoding family to avoid conflicts with the primary SGPR variant.
+class SMEM_Real_SGPR_alt_gfx9 {
+  bit IsGFX9SpecificEncoding = true;
+  bit SOffsetEn = 1;
+  bit Offset = ?;
+  int Subtarget = SIEncodingFamily.GFX9;
+  string AsmVariantName = "NonParsable";
+}
+
+multiclass SM_Real_Loads_vi<bits<8> op, string ps> {
+  def _IMM_vi : SMEM_Real_Load_vi <op, ps#"_IMM", (ins smem_offset:$offset)>;
+  def _SGPR_vi : SMEM_Real_Load_vi <op, ps#"_SGPR", (ins SReg_32:$soffset)>;
+  def _SGPR_alt_gfx9 : SMEM_Real_Load_vi <op, ps#"_SGPR",
+                                          (ins SReg_32:$soffset)>,
+                       SMEM_Real_SGPR_alt_gfx9;
+  let IsGFX9SpecificEncoding = true in
+  def _SGPR_IMM_gfx9 : SMEM_Real_Load_vi <
+    op, ps#"_SGPR_IMM", (ins SReg_32:$soffset, smem_offset_mod:$offset)>;
+}
+
+class SMEM_Real_Store_Base_vi <bits<8> op, SM_Pseudo ps> : SMEM_Real_vi <op, ps> {
   // encoding
   bits<7> sdata;
 
@@ -565,21 +617,34 @@ class SMEM_Real_Store_vi <bits<8> op, SM_Pseudo ps> : SMEM_Real_vi <op, ps> {
   let Inst{12-6}  = !if(ps.has_sdst, sdata{6-0}, ?);
 }
 
-multiclass SM_Real_Stores_vi<bits<8> op, string ps,
-                            SM_Store_Pseudo immPs = !cast<SM_Store_Pseudo>(ps#_IMM),
-                            SM_Store_Pseudo sgprPs = !cast<SM_Store_Pseudo>(ps#_SGPR)> {
-  def _IMM_vi : SMEM_Real_Store_vi <op, immPs> {
-    let InOperandList = (ins immPs.SrcClass:$sdata, immPs.BaseClass:$sbase, smem_offset:$offset, CPol:$cpol);
-  }
+class SMEM_Real_Store_vi <bits<8> op, string ps, dag offsets>
+    : SMEM_Real_Store_Base_vi <op, !cast<SM_Pseudo>(ps)> {
+  RegisterClass SrcClass = !cast<SM_Store_Pseudo>(ps).SrcClass;
+  RegisterClass BaseClass = !cast<SM_Store_Pseudo>(ps).BaseClass;
+  let InOperandList = !con((ins SrcClass:$sdata, BaseClass:$sbase),
+                           offsets, (ins CPol:$cpol));
+}
 
-  def _SGPR_vi : SMEM_Real_Store_vi <op, sgprPs> {
-    let InOperandList = (ins sgprPs.SrcClass:$sdata, sgprPs.BaseClass:$sbase, SReg_32:$soffset, CPol:$cpol);
-  }
+multiclass SM_Real_Stores_vi<bits<8> op, string ps> {
+  def _IMM_vi : SMEM_Real_Store_vi <op, ps#_IMM, (ins smem_offset:$offset)>;
+  def _SGPR_vi : SMEM_Real_Store_vi <op, ps#_SGPR, (ins SReg_32:$soffset)>;
+  def _SGPR_alt_gfx9 : SMEM_Real_Store_vi <op, ps#"_SGPR",
+                                           (ins SReg_32:$soffset)>,
+                       SMEM_Real_SGPR_alt_gfx9;
+  let IsGFX9SpecificEncoding = true in
+  def _SGPR_IMM_gfx9 : SMEM_Real_Store_vi <
+    op, ps#"_SGPR_IMM", (ins SReg_32:$soffset, smem_offset_mod:$offset)>;
 }
 
 multiclass SM_Real_Probe_vi<bits<8> op, string ps> {
-  def _IMM_vi  : SMEM_Real_Store_vi <op, !cast<SM_Probe_Pseudo>(ps#_IMM)>;
-  def _SGPR_vi : SMEM_Real_Store_vi <op, !cast<SM_Probe_Pseudo>(ps#_SGPR)>;
+  def _IMM_vi  : SMEM_Real_Store_Base_vi <op, !cast<SM_Probe_Pseudo>(ps#_IMM)>;
+  def _SGPR_vi : SMEM_Real_Store_Base_vi <op, !cast<SM_Probe_Pseudo>(ps#_SGPR)>;
+  def _SGPR_alt_gfx9
+    : SMEM_Real_Store_Base_vi <op, !cast<SM_Probe_Pseudo>(ps#_SGPR)>,
+      SMEM_Real_SGPR_alt_gfx9;
+  let IsGFX9SpecificEncoding = true in
+  def _SGPR_IMM_gfx9
+    : SMEM_Real_Store_Base_vi <op, !cast<SM_Probe_Pseudo>(ps#_SGPR_IMM)>;
 }
 
 defm S_LOAD_DWORD           : SM_Real_Loads_vi <0x00, "S_LOAD_DWORD">;
@@ -703,6 +768,10 @@ defm S_ATOMIC_DEC_X2              : SM_Real_Atomics_vi <0xac, "S_ATOMIC_DEC_X2">
 multiclass SM_Real_Discard_vi<bits<8> op, string ps> {
   def _IMM_vi  : SMEM_Real_vi <op, !cast<SM_Discard_Pseudo>(ps#_IMM)>;
   def _SGPR_vi : SMEM_Real_vi <op, !cast<SM_Discard_Pseudo>(ps#_SGPR)>;
+  def _SGPR_alt_gfx9 : SMEM_Real_vi <op, !cast<SM_Discard_Pseudo>(ps#_SGPR)>,
+                       SMEM_Real_SGPR_alt_gfx9;
+  let IsGFX9SpecificEncoding = true in
+  def _SGPR_IMM_gfx9 : SMEM_Real_vi <op, !cast<SM_Discard_Pseudo>(ps#_SGPR_IMM)>;
 }
 
 defm S_DCACHE_DISCARD    : SM_Real_Discard_vi <0x28, "S_DCACHE_DISCARD">;
@@ -902,7 +971,8 @@ def : GCNPat <
 // GFX10.
 //===----------------------------------------------------------------------===//
 
-class SMEM_Real_10Plus_common<bits<8> op, SM_Pseudo ps, string opName, int subtarget> :
+class SMEM_Real_10Plus_common<bits<8> op, SM_Pseudo ps, string opName,
+                              int subtarget, RegisterWithSubRegs sgpr_null> :
     SM_Real<ps, opName>, SIMCInstr<ps.PseudoInstr, subtarget>, Enc64 {
   let Inst{5-0}   = !if(ps.has_sbase, sbase{6-1}, ?);
   let Inst{12-6}  = !if(ps.has_sdst, sdst{6-0}, ?);
@@ -911,18 +981,17 @@ class SMEM_Real_10Plus_common<bits<8> op, SM_Pseudo ps, string opName, int subta
   // There are SMEM instructions that do not employ any of the offset
   // fields, in which case we need them to remain undefined.
   let Inst{52-32} = !if(ps.has_offset, offset{20-0}, !if(ps.has_soffset, 0, ?));
+  let Inst{63-57} = !if(ps.has_soffset, soffset{6-0},
+                        !if(ps.has_offset, sgpr_null.HWEncoding{6-0}, ?));
 }
 
 class SMEM_Real_gfx10<bits<8> op, SM_Pseudo ps>
-    : SMEM_Real_10Plus_common<op, ps, ps.Mnemonic, SIEncodingFamily.GFX10> {
+    : SMEM_Real_10Plus_common<op, ps, ps.Mnemonic, SIEncodingFamily.GFX10,
+                              SGPR_NULL_gfxpre11> {
   let AssemblerPredicate = isGFX10Only;
   let DecoderNamespace = "GFX10";
   let Inst{14}    = !if(ps.has_dlc, cpol{CPolBit.DLC}, ?);
   let Inst{16}    = !if(ps.has_glc, cpol{CPolBit.GLC}, ?);
-  // There are SMEM instructions that do not employ any of the offset
-  // fields, in which case we need them to remain undefined.
-  let Inst{63-57} = !if(ps.has_soffset, soffset{6-0},
-                        !if(ps.has_offset, !cast<int>(SGPR_NULL_gfxpre11.HWEncoding), ?));
 }
 
 multiclass SM_Real_Loads_gfx10<bits<8> op, string ps,
@@ -1009,6 +1078,8 @@ def S_DCACHE_WB_gfx10                : SMEM_Real_gfx10<0x021, S_DCACHE_WB>;
 multiclass SM_Real_Probe_gfx10<bits<8> op, string ps> {
   def _IMM_gfx10  : SMEM_Real_Store_gfx10 <op, !cast<SM_Pseudo>(ps#_IMM)>;
   def _SGPR_gfx10 : SMEM_Real_Store_gfx10 <op, !cast<SM_Pseudo>(ps#_SGPR)>;
+  def _SGPR_IMM_gfx10
+    : SMEM_Real_Store_gfx10 <op, !cast<SM_Pseudo>(ps#_SGPR_IMM)>;
 }
 
 defm S_ATC_PROBE        : SM_Real_Probe_gfx10 <0x26, "S_ATC_PROBE">;
@@ -1097,6 +1168,7 @@ defm S_ATOMIC_DEC_X2              : SM_Real_Atomics_gfx10 <0xac, "S_ATOMIC_DEC_X
 multiclass SM_Real_Discard_gfx10<bits<8> op, string ps> {
   def _IMM_gfx10  : SMEM_Real_gfx10 <op, !cast<SM_Pseudo>(ps#_IMM)>;
   def _SGPR_gfx10 : SMEM_Real_gfx10 <op, !cast<SM_Pseudo>(ps#_SGPR)>;
+  def _SGPR_IMM_gfx10 : SMEM_Real_gfx10 <op, !cast<SM_Pseudo>(ps#_SGPR_IMM)>;
 }
 
 defm S_DCACHE_DISCARD    : SM_Real_Discard_gfx10 <0x28, "S_DCACHE_DISCARD">;
@@ -1118,15 +1190,12 @@ def SMInfoTable : GenericTable {
 //===----------------------------------------------------------------------===//
 
 class SMEM_Real_gfx11<bits<8> op, SM_Pseudo ps, string opName = ps.Mnemonic> :
-    SMEM_Real_10Plus_common<op, ps, opName, SIEncodingFamily.GFX11> {
+    SMEM_Real_10Plus_common<op, ps, opName, SIEncodingFamily.GFX11,
+                            SGPR_NULL_gfx11plus> {
   let AssemblerPredicate = isGFX11Plus;
   let DecoderNamespace = "GFX11";
   let Inst{13}    = !if(ps.has_dlc, cpol{CPolBit.DLC}, 0);
   let Inst{14}    = !if(ps.has_glc, cpol{CPolBit.GLC}, 0);
-  // There are SMEM instructions that do not employ any of the offset
-  // fields, in which case we need them to remain undefined.
-  let Inst{63-57} = !if(ps.has_soffset, soffset{6-0},
-                        !if(ps.has_offset, !cast<int>(SGPR_NULL_gfx11plus.HWEncoding), ?));
 }
 
 class SMEM_Real_Load_gfx11<bits<8> op, string ps, string opName, dag offsets> :
@@ -1170,6 +1239,8 @@ class SMEM_Real_Store_gfx11 <bits<8> op, SM_Pseudo ps> : SMEM_Real_gfx11<op, ps>
 multiclass SM_Real_Probe_gfx11<bits<8> op, string ps> {
   def _IMM_gfx11  : SMEM_Real_Store_gfx11 <op, !cast<SM_Probe_Pseudo>(ps#_IMM)>;
   def _SGPR_gfx11 : SMEM_Real_Store_gfx11 <op, !cast<SM_Probe_Pseudo>(ps#_SGPR)>;
+  def _SGPR_IMM_gfx11
+    : SMEM_Real_Store_gfx11 <op, !cast<SM_Probe_Pseudo>(ps#_SGPR_IMM)>;
 }
 
 defm S_ATC_PROBE        : SM_Real_Probe_gfx11 <0x22, "S_ATC_PROBE">;

@@ -43,7 +43,13 @@ DeclarationMatcher optionalClass() {
       hasTemplateArgument(0, refersToType(type().bind("T"))));
 }
 
-auto hasOptionalType() { return hasType(optionalClass()); }
+auto optionalOrAliasType() {
+  return hasUnqualifiedDesugaredType(
+      recordType(hasDeclaration(optionalClass())));
+}
+
+/// Matches any of the spellings of the optional types and sugar, aliases, etc.
+auto hasOptionalType() { return hasType(optionalOrAliasType()); }
 
 auto isOptionalMemberCallWithName(
     llvm::StringRef MemberName,
@@ -158,6 +164,11 @@ auto isValueOrNotEqX() {
                                ComparesToSame(integerLiteral(equals(0)))));
 }
 
+auto isCallReturningOptional() {
+  return callExpr(callee(functionDecl(returns(anyOf(
+      optionalOrAliasType(), referenceType(pointee(optionalOrAliasType())))))));
+}
+
 /// Creates a symbolic value for an `optional` value using `HasValueVal` as the
 /// symbolic value of its "has_value" property.
 StructValue &createOptionalValue(Environment &Env, BoolValue &HasValueVal) {
@@ -167,9 +178,9 @@ StructValue &createOptionalValue(Environment &Env, BoolValue &HasValueVal) {
 }
 
 /// Returns the symbolic value that represents the "has_value" property of the
-/// optional value `Val`. Returns null if `Val` is null.
-BoolValue *getHasValue(Value *Val) {
-  if (auto *OptionalVal = cast_or_null<StructValue>(Val)) {
+/// optional value `OptionalVal`. Returns null if `OptionalVal` is null.
+BoolValue *getHasValue(Value *OptionalVal) {
+  if (OptionalVal) {
     return cast<BoolValue>(OptionalVal->getProperty("has_value"));
   }
   return nullptr;
@@ -210,8 +221,8 @@ int countOptionalWrappers(const ASTContext &ASTCtx, QualType Type) {
 void initializeOptionalReference(const Expr *OptionalExpr,
                                  const MatchFinder::MatchResult &,
                                  LatticeTransferState &State) {
-  if (auto *OptionalVal = cast_or_null<StructValue>(
-          State.Env.getValue(*OptionalExpr, SkipPast::Reference))) {
+  if (auto *OptionalVal =
+          State.Env.getValue(*OptionalExpr, SkipPast::Reference)) {
     if (OptionalVal->getProperty("has_value") == nullptr) {
       OptionalVal->setProperty("has_value", State.Env.makeAtomicBoolValue());
     }
@@ -220,8 +231,8 @@ void initializeOptionalReference(const Expr *OptionalExpr,
 
 void transferUnwrapCall(const Expr *UnwrapExpr, const Expr *ObjectExpr,
                         LatticeTransferState &State) {
-  if (auto *OptionalVal = cast_or_null<StructValue>(
-          State.Env.getValue(*ObjectExpr, SkipPast::ReferenceThenPointer))) {
+  if (auto *OptionalVal =
+          State.Env.getValue(*ObjectExpr, SkipPast::ReferenceThenPointer)) {
     auto *HasValueVal = getHasValue(OptionalVal);
     assert(HasValueVal != nullptr);
 
@@ -320,6 +331,18 @@ void transferValueOrNotEqX(const Expr *ComparisonExpr,
                         // details about the contents of `opt`.
                         return Env.makeImplication(ExprVal, HasValueVal);
                       });
+}
+
+void transferCallReturningOptional(const CallExpr *E,
+                                   const MatchFinder::MatchResult &Result,
+                                   LatticeTransferState &State) {
+  if (State.Env.getStorageLocation(*E, SkipPast::None) != nullptr)
+    return;
+
+  auto &Loc = State.Env.createStorageLocation(*E);
+  State.Env.setStorageLocation(*E, Loc);
+  State.Env.setValue(
+      Loc, createOptionalValue(State.Env, State.Env.makeAtomicBoolValue()));
 }
 
 void assignOptionalValue(const Expr &E, LatticeTransferState &State,
@@ -462,8 +485,9 @@ auto buildTransferMatchSwitch(
   return MatchSwitchBuilder<LatticeTransferState>()
       // Attach a symbolic "has_value" state to optional values that we see for
       // the first time.
-      .CaseOf<Expr>(expr(anyOf(declRefExpr(), memberExpr()), hasOptionalType()),
-                    initializeOptionalReference)
+      .CaseOf<Expr>(
+          expr(anyOf(declRefExpr(), memberExpr()), hasOptionalType()),
+          initializeOptionalReference)
 
       // make_optional
       .CaseOf<CallExpr>(isMakeOptionalCall(), transferMakeOptionalCall)
@@ -546,6 +570,10 @@ auto buildTransferMatchSwitch(
 
       // opt.value_or(X) != X
       .CaseOf<Expr>(isValueOrNotEqX(), transferValueOrNotEqX)
+
+      // returns optional
+      .CaseOf<CallExpr>(isCallReturningOptional(),
+                        transferCallReturningOptional)
 
       .Build();
 }

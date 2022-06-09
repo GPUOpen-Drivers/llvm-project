@@ -2718,9 +2718,7 @@ bool SelectionDAG::isSplatValue(SDValue V, const APInt &DemandedElts,
         SubDemandedElts &= ScaledDemandedElts;
         if (!isSplatValue(Src, SubDemandedElts, SubUndefElts, Depth + 1))
           return false;
-        // TODO: Add support for merging sub undef elements.
-        if (SubDemandedElts.isSubsetOf(SubUndefElts))
-          return false;
+        UndefElts |= APIntOps::ScaleBitMask(SubUndefElts, NumElts);
       }
       return true;
     }
@@ -3175,6 +3173,14 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
       SelfMultiply &= isGuaranteedNotToBeUndefOrPoison(
           Op.getOperand(0), DemandedElts, false, Depth + 1);
     Known = KnownBits::mul(Known, Known2, SelfMultiply);
+
+    // If the multiplication is known not to overflow, the product of a number
+    // with itself is non-negative. Only do this if we didn't already computed
+    // the opposite value for the sign bit.
+    if (Op->getFlags().hasNoSignedWrap() &&
+        Op.getOperand(0) == Op.getOperand(1) &&
+        !Known.isNegative())
+      Known.makeNonNegative();
     break;
   }
   case ISD::MULHU: {
@@ -3704,6 +3710,19 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
       Known = KnownBits::smax(Known, Known2);
     else
       Known = KnownBits::smin(Known, Known2);
+
+    // For SMAX, if CstLow is non-negative we know the result will be
+    // non-negative and thus all sign bits are 0.
+    // TODO: There's an equivalent of this for smin with negative constant for
+    // known ones.
+    if (IsMax && CstLow) {
+      const APInt &ValueLow = CstLow->getAPIntValue();
+      if (ValueLow.isNonNegative()) {
+        unsigned SignBits = ComputeNumSignBits(Op.getOperand(0), Depth + 1);
+        Known.Zero.setHighBits(std::min(SignBits, ValueLow.getNumSignBits()));
+      }
+    }
+
     break;
   }
   case ISD::FP_TO_UINT_SAT: {
@@ -8863,6 +8882,11 @@ SDValue SelectionDAG::getNode(unsigned Opcode, const SDLoc &DL, EVT VT,
     // If it is VP_MUL mask operation then turn it to VP_AND
     if (VT.isVector() && VT.getVectorElementType() == MVT::i1)
       Opcode = ISD::VP_AND;
+    break;
+  case ISD::VP_REDUCE_MUL:
+    // If it is VP_REDUCE_MUL mask operation then turn it to VP_REDUCE_AND
+    if (VT == MVT::i1)
+      Opcode = ISD::VP_REDUCE_AND;
     break;
   case ISD::VP_REDUCE_ADD:
     // If it is VP_REDUCE_ADD mask operation then turn it to VP_REDUCE_XOR

@@ -198,8 +198,7 @@ Driver::Driver(StringRef ClangExecutable, StringRef TargetTriple,
       CCPrintOptions(false), CCPrintHeaders(false), CCLogDiagnostics(false),
       CCGenDiagnostics(false), CCPrintProcessStats(false),
       TargetTriple(TargetTriple), Saver(Alloc), CheckInputsExist(true),
-      ProbePrecompiled(true), GenReproducer(false),
-      SuppressMissingInputWarning(false) {
+      ProbePrecompiled(true), SuppressMissingInputWarning(false) {
   // Provide a sane fallback if no VFS is specified.
   if (!this->VFS)
     this->VFS = llvm::vfs::getRealFileSystem();
@@ -974,7 +973,7 @@ bool Driver::loadConfigFile() {
         if (llvm::sys::fs::make_absolute(CfgDir).value() != 0)
           SystemConfigDir.clear();
         else
-          SystemConfigDir = std::string(CfgDir.begin(), CfgDir.end());
+          SystemConfigDir = static_cast<std::string>(CfgDir);
       }
     }
     if (CLOptions->hasArg(options::OPT_config_user_dir_EQ)) {
@@ -985,7 +984,7 @@ bool Driver::loadConfigFile() {
         if (llvm::sys::fs::make_absolute(CfgDir).value() != 0)
           UserConfigDir.clear();
         else
-          UserConfigDir = std::string(CfgDir.begin(), CfgDir.end());
+          UserConfigDir = static_cast<std::string>(CfgDir);
       }
     }
   }
@@ -1217,9 +1216,6 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   CCCPrintBindings = Args.hasArg(options::OPT_ccc_print_bindings);
   if (const Arg *A = Args.getLastArg(options::OPT_ccc_gcc_name))
     CCCGenericGCCName = A->getValue();
-  GenReproducer = Args.hasFlag(options::OPT_gen_reproducer,
-                               options::OPT_fno_crash_diagnostics,
-                               !!::getenv("FORCE_CLANG_DIAGNOSTICS_CRASH"));
 
   // Process -fproc-stat-report options.
   if (const Arg *A = Args.getLastArg(options::OPT_fproc_stat_report_EQ)) {
@@ -1240,11 +1236,19 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
     T.setObjectFormat(llvm::Triple::COFF);
     TargetTriple = T.str();
   } else if (IsDXCMode()) {
-    // clang-dxc target is build from target_profile option.
-    // Just set OS to shader model to select HLSLToolChain.
-    llvm::Triple T(TargetTriple);
-    T.setOS(llvm::Triple::ShaderModel);
-    TargetTriple = T.str();
+    // Build TargetTriple from target_profile option for clang-dxc.
+    if (const Arg *A = Args.getLastArg(options::OPT_target_profile)) {
+      StringRef TargetProfile = A->getValue();
+      if (auto Triple =
+              toolchains::HLSLToolChain::parseTargetProfile(TargetProfile))
+        TargetTriple = Triple.getValue();
+      else
+        Diag(diag::err_drv_invalid_directx_shader_module) << TargetProfile;
+
+      A->claim();
+    } else {
+      Diag(diag::err_drv_dxc_missing_target_profile);
+    }
   }
 
   if (const Arg *A = Args.getLastArg(options::OPT_target))
@@ -2003,6 +2007,13 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
       llvm::outs() << RuntimePath << '\n';
     else
       llvm::outs() << TC.getCompilerRTPath() << '\n';
+    return false;
+  }
+
+  if (C.getArgs().hasArg(options::OPT_print_diagnostic_options)) {
+    std::vector<std::string> Flags = DiagnosticIDs::getDiagnosticFlags();
+    for (std::size_t I = 0; I != Flags.size(); I += 2)
+      llvm::outs() << "  " << Flags[I] << "\n  " << Flags[I + 1] << "\n\n";
     return false;
   }
 

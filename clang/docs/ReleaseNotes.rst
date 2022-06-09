@@ -158,6 +158,18 @@ Bug Fixes
 - Implement `CWG 2394 <https://wg21.link/cwg2394>`_: Const class members
   may be initialized with a defaulted default constructor under the same
   conditions it would be allowed for a const object elsewhere.
+- ``__has_unique_object_representations`` no longer reports that ``_BitInt`` types
+  have unique object representations if they have padding bits.
+- Unscoped and scoped enumeration types can no longer be initialized from a
+  brace-init-list containing a single element of a different scoped enumeration
+  type.
+- Allow use of an elaborated type specifier as a ``_Generic`` selection
+  association in C++ mode. This fixes
+  `Issue 55562 <https://github.com/llvm/llvm-project/issues/55562>`_.
+- Clang will allow calling a ``consteval`` function in a default argument. This
+  fixes `Issue 48230 <https://github.com/llvm/llvm-project/issues/48230>`_.
+- Fixed memory leak due to ``VarTemplateSpecializationDecl`` using
+  ``TemplateArgumentListInfo`` instead of ``ASTTemplateArgumentListInfo``.
 
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -241,6 +253,9 @@ Improvements to Clang's diagnostics
   suggest ``#else`` as an alternative. ``#elifdef`` and ``#elifndef`` are only
   suggested when in C2x or C++2b mode. Fixes
   `Issue 51598 <https://github.com/llvm/llvm-project/issues/51598>`_.
+- The ``-Wdeprecated`` diagnostic will now warn on out-of-line ``constexpr``
+  declarations downgraded to definitions in C++1z, in addition to the
+  existing warning on out-of-line ``const`` declarations.
 
 Non-comprehensive list of changes in this release
 -------------------------------------------------
@@ -328,6 +343,9 @@ Attribute Changes in Clang
   builtins (corresponding to the specific names listed in the attribute) in the
   body of the function the attribute is on.
 
+- When the ``weak`` attribute is applied to a const qualified variable clang no longer
+  tells the backend it is allowed to optimize based on initializer value.
+
 Windows Support
 ---------------
 
@@ -336,6 +354,11 @@ Windows Support
   turned on. With this addition, clang-cl can be used in Visual Studio for the
   JustMyCode feature. Note, you may need to manually add ``/JMC`` as additional
   compile options in the Visual Studio since it currently assumes clang-cl does not support ``/JMC``.
+
+- Implemented generation of SEH unwind information on ARM. (C++ exception
+  handling in MSVC mode is still unimplemented though.)
+
+- Switched MinGW mode on ARM to use SEH instead of DWARF for unwind information.
 
 AIX Support
 -----------
@@ -350,11 +373,6 @@ AIX Support
 
 C Language Changes in Clang
 ---------------------------
-- Finished implementing support for DR423. We already correctly handled
-  stripping qualifiers from cast expressions, but we did not strip qualifiers
-  on function return types. We now properly treat the function as though it
-  were declarated with an unqualified, non-atomic return type. Fixes
-  `Issue 39595 <https://github.com/llvm/llvm-project/issues/39595>`_.
 
 C2x Feature Support
 -------------------
@@ -448,6 +466,9 @@ CUDA Support in Clang
 
 X86 Support in Clang
 --------------------
+
+- Support ``-mharden-sls=[none|all|return|indirect-jmp]`` for straight-line
+  speculation hardening.
 
 DWARF Support in Clang
 ----------------------

@@ -145,7 +145,7 @@ void WinException::endFunction(const MachineFunction *MF) {
     return;
 
   if (shouldEmitPersonality || shouldEmitLSDA) {
-    Asm->OutStreamer->PushSection();
+    Asm->OutStreamer->pushSection();
 
     // Just switch sections to the right xdata section.
     MCSection *XData = Asm->OutStreamer->getAssociatedXDataSection(
@@ -165,7 +165,7 @@ void WinException::endFunction(const MachineFunction *MF) {
     else
       emitExceptionTable();
 
-    Asm->OutStreamer->PopSection();
+    Asm->OutStreamer->popSection();
   }
 
   if (!MF->getCatchretTargets().empty()) {
@@ -205,11 +205,11 @@ void WinException::beginFunclet(const MachineBasicBlock &MBB,
     Sym = getMCSymbolForMBB(Asm, &MBB);
 
     // Describe our funclet symbol as a function with internal linkage.
-    Asm->OutStreamer->BeginCOFFSymbolDef(Sym);
+    Asm->OutStreamer->beginCOFFSymbolDef(Sym);
     Asm->OutStreamer->emitCOFFSymbolStorageClass(COFF::IMAGE_SYM_CLASS_STATIC);
     Asm->OutStreamer->emitCOFFSymbolType(COFF::IMAGE_SYM_DTYPE_FUNCTION
                                          << COFF::SCT_COMPLEX_TYPE_SHIFT);
-    Asm->OutStreamer->EndCOFFSymbolDef();
+    Asm->OutStreamer->endCOFFSymbolDef();
 
     // We want our funclet's entry point to be aligned such that no nops will be
     // present after the label.
@@ -693,7 +693,12 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
   }
 
   int UnwindHelpOffset = 0;
-  if (Asm->MAI->usesWindowsCFI())
+  // TODO: The check for UnwindHelpFrameIdx against max() below (and the
+  // second check further below) can be removed if MS C++ unwinding is
+  // implemented for ARM, when test/CodeGen/ARM/Windows/wineh-basic.ll
+  // passes without the check.
+  if (Asm->MAI->usesWindowsCFI() &&
+      FuncInfo.UnwindHelpFrameIdx != std::numeric_limits<int>::max())
     UnwindHelpOffset =
         getFrameIndexOffset(FuncInfo.UnwindHelpFrameIdx, FuncInfo);
 
@@ -755,7 +760,8 @@ void WinException::emitCXXFrameHandler3Table(const MachineFunction *MF) {
   AddComment("IPToStateXData");
   OS.emitValue(create32bitRef(IPToStateXData), 4);
 
-  if (Asm->MAI->usesWindowsCFI()) {
+  if (Asm->MAI->usesWindowsCFI() &&
+      FuncInfo.UnwindHelpFrameIdx != std::numeric_limits<int>::max()) {
     AddComment("UnwindHelp");
     OS.emitInt32(UnwindHelpOffset);
   }

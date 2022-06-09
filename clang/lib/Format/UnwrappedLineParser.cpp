@@ -395,7 +395,7 @@ void UnwrappedLineParser::parseFile() {
   if (Style.Language == FormatStyle::LK_TextProto)
     parseBracedList();
   else
-    parseLevel(/*OpeningBrace=*/nullptr, /*CanContainBracedList=*/true);
+    parseLevel();
   // Make sure to format the remaining tokens.
   //
   // LK_TextProto is special since its top-level is parsed as the body of a
@@ -469,20 +469,26 @@ bool UnwrappedLineParser::precededByCommentOrPPDirective() const {
 /// \param CanContainBracedList If the content can contain (at any level) a
 /// braced list.
 /// \param NextLBracesType The type for left brace found in this level.
+/// \param IfKind The \p if statement kind in the level.
+/// \param IfLeftBrace The left brace of the \p if block in the level.
 /// \returns true if a simple block of if/else/for/while, or false otherwise.
 /// (A simple block has a single statement.)
 bool UnwrappedLineParser::parseLevel(const FormatToken *OpeningBrace,
                                      bool CanContainBracedList,
+                                     TokenType NextLBracesType,
                                      IfStmtKind *IfKind,
-                                     TokenType NextLBracesType) {
+                                     FormatToken **IfLeftBrace) {
   auto NextLevelLBracesType = NextLBracesType == TT_CompoundRequirementLBrace
                                   ? TT_BracedListLBrace
                                   : TT_Unknown;
   const bool IsPrecededByCommentOrPPDirective =
       !Style.RemoveBracesLLVM || precededByCommentOrPPDirective();
+  FormatToken *IfLBrace = nullptr;
+  bool HasDoWhile = false;
   bool HasLabel = false;
   unsigned StatementCount = 0;
   bool SwitchLabelEncountered = false;
+
   do {
     if (FormatTok->getType() == TT_AttributeMacro) {
       nextToken();
@@ -494,9 +500,10 @@ bool UnwrappedLineParser::parseLevel(const FormatToken *OpeningBrace,
     else if (FormatTok->getType() == TT_MacroBlockEnd)
       kind = tok::r_brace;
 
-    auto ParseDefault = [this, OpeningBrace, IfKind, NextLevelLBracesType,
-                         &HasLabel, &StatementCount] {
-      parseStructuralElement(IfKind, !OpeningBrace, NextLevelLBracesType,
+    auto ParseDefault = [this, OpeningBrace, NextLevelLBracesType, IfKind,
+                         &IfLBrace, &HasDoWhile, &HasLabel, &StatementCount] {
+      parseStructuralElement(!OpeningBrace, NextLevelLBracesType, IfKind,
+                             &IfLBrace, HasDoWhile ? nullptr : &HasDoWhile,
                              HasLabel ? nullptr : &HasLabel);
       ++StatementCount;
       assert(StatementCount > 0 && "StatementCount overflow!");
@@ -522,7 +529,7 @@ bool UnwrappedLineParser::parseLevel(const FormatToken *OpeningBrace,
         continue;
       }
       parseBlock(/*MustBeDeclaration=*/false, /*AddLevels=*/1u,
-                 /*MunchSemi=*/true, /*KeepBraces=*/true,
+                 /*MunchSemi=*/true, /*KeepBraces=*/true, /*IfKind=*/nullptr,
                  /*UnindentWhitesmithsBraces=*/false, CanContainBracedList,
                  NextLBracesType);
       ++StatementCount;
@@ -536,12 +543,16 @@ bool UnwrappedLineParser::parseLevel(const FormatToken *OpeningBrace,
           return false;
         }
         if (FormatTok->isNot(tok::r_brace) || StatementCount != 1 || HasLabel ||
-            IsPrecededByCommentOrPPDirective ||
+            HasDoWhile || IsPrecededByCommentOrPPDirective ||
             precededByCommentOrPPDirective()) {
           return false;
         }
         const FormatToken *Next = Tokens->peekNextToken();
-        return Next->isNot(tok::comment) || Next->NewlinesBefore > 0;
+        if (Next->is(tok::comment) && Next->NewlinesBefore == 0)
+          return false;
+        if (IfLeftBrace)
+          *IfLeftBrace = IfLBrace;
+        return true;
       }
       nextToken();
       addUnwrappedLine();
@@ -591,6 +602,7 @@ bool UnwrappedLineParser::parseLevel(const FormatToken *OpeningBrace,
       break;
     }
   } while (!eof());
+
   return false;
 }
 
@@ -813,10 +825,10 @@ bool UnwrappedLineParser::mightFitOnOneLine(
   return Line.Level * Style.IndentWidth + Length <= ColumnLimit;
 }
 
-UnwrappedLineParser::IfStmtKind UnwrappedLineParser::parseBlock(
+FormatToken *UnwrappedLineParser::parseBlock(
     bool MustBeDeclaration, unsigned AddLevels, bool MunchSemi, bool KeepBraces,
-    bool UnindentWhitesmithsBraces, bool CanContainBracedList,
-    TokenType NextLBracesType) {
+    IfStmtKind *IfKind, bool UnindentWhitesmithsBraces,
+    bool CanContainBracedList, TokenType NextLBracesType) {
   assert(FormatTok->isOneOf(tok::l_brace, TT_MacroBlockBegin) &&
          "'{' or macro block token expected");
   FormatToken *Tok = FormatTok;
@@ -834,6 +846,10 @@ UnwrappedLineParser::IfStmtKind UnwrappedLineParser::parseBlock(
 
   unsigned InitialLevel = Line->Level;
   nextToken(/*LevelDifference=*/AddLevels);
+
+  // Bail out if there are too many levels. Otherwise, the stack might overflow.
+  if (Line->Level > 300)
+    return nullptr;
 
   if (MacroBlock && FormatTok->is(tok::l_paren))
     parseParens();
@@ -857,44 +873,52 @@ UnwrappedLineParser::IfStmtKind UnwrappedLineParser::parseBlock(
   if (AddLevels > 0u && Style.BreakBeforeBraces != FormatStyle::BS_Whitesmiths)
     Line->Level += AddLevels;
 
-  IfStmtKind IfKind = IfStmtKind::NotIf;
+  FormatToken *IfLBrace = nullptr;
   const bool SimpleBlock =
-      parseLevel(Tok, CanContainBracedList, &IfKind, NextLBracesType);
+      parseLevel(Tok, CanContainBracedList, NextLBracesType, IfKind, &IfLBrace);
 
   if (eof())
-    return IfKind;
+    return IfLBrace;
 
   if (MacroBlock ? !FormatTok->is(TT_MacroBlockEnd)
                  : !FormatTok->is(tok::r_brace)) {
     Line->Level = InitialLevel;
     FormatTok->setBlockKind(BK_Block);
-    return IfKind;
+    return IfLBrace;
   }
 
-  if (SimpleBlock && !KeepBraces) {
+  auto RemoveBraces = [=]() mutable {
+    if (!SimpleBlock)
+      return false;
     assert(Tok->isOneOf(TT_ControlStatementLBrace, TT_ElseLBrace));
     assert(FormatTok->is(tok::r_brace));
-    const FormatToken *Previous = Tokens->getPreviousToken();
-    assert(Previous);
-    if (Previous->isNot(tok::r_brace) || Previous->Optional) {
-      assert(!CurrentLines->empty());
-      const FormatToken *OpeningBrace = Tok;
-      if (!Tok->Previous) { // Wrapped l_brace.
-        if (FollowedByComment) {
-          KeepBraces = true;
-        } else {
-          assert(Index > 0);
-          --Index; // The line above the wrapped l_brace.
-          OpeningBrace = nullptr;
-        }
-      }
-      if (!KeepBraces && mightFitOnOneLine(CurrentLines->back()) &&
-          (Tok->is(TT_ElseLBrace) ||
-           mightFitOnOneLine((*CurrentLines)[Index], OpeningBrace))) {
-        Tok->MatchingParen = FormatTok;
-        FormatTok->MatchingParen = Tok;
-      }
+    const bool WrappedOpeningBrace = !Tok->Previous;
+    if (WrappedOpeningBrace && FollowedByComment)
+      return false;
+    const bool HasRequiredIfBraces = IfLBrace && !IfLBrace->Optional;
+    if (KeepBraces && !HasRequiredIfBraces)
+      return false;
+    if (Tok->isNot(TT_ElseLBrace) || !HasRequiredIfBraces) {
+      const FormatToken *Previous = Tokens->getPreviousToken();
+      assert(Previous);
+      if (Previous->is(tok::r_brace) && !Previous->Optional)
+        return false;
     }
+    assert(!CurrentLines->empty());
+    if (!mightFitOnOneLine(CurrentLines->back()))
+      return false;
+    if (Tok->is(TT_ElseLBrace))
+      return true;
+    if (WrappedOpeningBrace) {
+      assert(Index > 0);
+      --Index; // The line above the wrapped l_brace.
+      Tok = nullptr;
+    }
+    return mightFitOnOneLine((*CurrentLines)[Index], Tok);
+  };
+  if (RemoveBraces()) {
+    Tok->MatchingParen = FormatTok;
+    FormatTok->MatchingParen = Tok;
   }
 
   size_t PPEndHash = computePPHash();
@@ -931,7 +955,7 @@ UnwrappedLineParser::IfStmtKind UnwrappedLineParser::parseBlock(
     }
   }
 
-  return IfKind;
+  return IfLBrace;
 }
 
 static bool isGoogScope(const UnwrappedLine &Line) {
@@ -1005,8 +1029,7 @@ void UnwrappedLineParser::parseChildBlock(
     ScopedDeclarationState DeclarationState(*Line, DeclarationScopeStack,
                                             /*MustBeDeclaration=*/false);
     Line->Level += SkipIndent ? 0 : 1;
-    parseLevel(OpeningBrace, CanContainBracedList, /*IfKind=*/nullptr,
-               NextLBracesType);
+    parseLevel(OpeningBrace, CanContainBracedList, NextLBracesType);
     flushComments(isOnNewLine(*FormatTok));
     Line->Level -= SkipIndent ? 0 : 1;
   }
@@ -1409,10 +1432,9 @@ void UnwrappedLineParser::readTokenWithJavaScriptASI() {
   }
 }
 
-void UnwrappedLineParser::parseStructuralElement(IfStmtKind *IfKind,
-                                                 bool IsTopLevel,
-                                                 TokenType NextLBracesType,
-                                                 bool *HasLabel) {
+void UnwrappedLineParser::parseStructuralElement(
+    bool IsTopLevel, TokenType NextLBracesType, IfStmtKind *IfKind,
+    FormatToken **IfLeftBrace, bool *HasDoWhile, bool *HasLabel) {
   if (Style.Language == FormatStyle::LK_TableGen &&
       FormatTok->is(tok::pp_include)) {
     nextToken();
@@ -1452,13 +1474,16 @@ void UnwrappedLineParser::parseStructuralElement(IfStmtKind *IfKind,
       parseAccessSpecifier();
     }
     return;
-  case tok::kw_if:
+  case tok::kw_if: {
     if (Style.isJavaScript() && Line->MustBeDeclaration) {
       // field/method declaration.
       break;
     }
-    parseIfThenElse(IfKind);
+    FormatToken *Tok = parseIfThenElse(IfKind);
+    if (IfLeftBrace)
+      *IfLeftBrace = Tok;
     return;
+  }
   case tok::kw_for:
   case tok::kw_while:
     if (Style.isJavaScript() && Line->MustBeDeclaration) {
@@ -1473,6 +1498,8 @@ void UnwrappedLineParser::parseStructuralElement(IfStmtKind *IfKind,
       break;
     }
     parseDoWhile();
+    if (HasDoWhile)
+      *HasDoWhile = true;
     return;
   case tok::kw_switch:
     if (Style.isJavaScript() && Line->MustBeDeclaration) {
@@ -2535,8 +2562,7 @@ FormatToken *UnwrappedLineParser::parseIfThenElse(IfStmtKind *IfKind,
   if (FormatTok->is(tok::kw_consteval)) {
     nextToken();
   } else {
-    if (Style.RemoveBracesLLVM)
-      KeepIfBraces = KeepBraces;
+    KeepIfBraces = !Style.RemoveBracesLLVM || KeepBraces;
     if (FormatTok->isOneOf(tok::kw_constexpr, tok::identifier))
       nextToken();
     if (FormatTok->is(tok::l_paren))
@@ -2554,8 +2580,8 @@ FormatToken *UnwrappedLineParser::parseIfThenElse(IfStmtKind *IfKind,
     FormatTok->setFinalizedType(TT_ControlStatementLBrace);
     IfLeftBrace = FormatTok;
     CompoundStatementIndenter Indenter(this, Style, Line->Level);
-    IfBlockKind = parseBlock(/*MustBeDeclaration=*/false, /*AddLevels=*/1u,
-                             /*MunchSemi=*/true, KeepIfBraces);
+    parseBlock(/*MustBeDeclaration=*/false, /*AddLevels=*/1u,
+               /*MunchSemi=*/true, KeepIfBraces, &IfBlockKind);
     if (Style.BraceWrapping.BeforeElse)
       addUnwrappedLine();
     else
@@ -2587,10 +2613,18 @@ FormatToken *UnwrappedLineParser::parseIfThenElse(IfStmtKind *IfKind,
       FormatTok->setFinalizedType(TT_ElseLBrace);
       ElseLeftBrace = FormatTok;
       CompoundStatementIndenter Indenter(this, Style, Line->Level);
-      if (parseBlock(/*MustBeDeclaration=*/false, /*AddLevels=*/1u,
-                     /*MunchSemi=*/true,
-                     KeepElseBraces) == IfStmtKind::IfOnly) {
-        Kind = IfStmtKind::IfElseIf;
+      IfStmtKind ElseBlockKind = IfStmtKind::NotIf;
+      FormatToken *IfLBrace =
+          parseBlock(/*MustBeDeclaration=*/false, /*AddLevels=*/1u,
+                     /*MunchSemi=*/true, KeepElseBraces, &ElseBlockKind);
+      if (FormatTok->is(tok::kw_else)) {
+        KeepElseBraces = KeepElseBraces ||
+                         ElseBlockKind == IfStmtKind::IfOnly ||
+                         ElseBlockKind == IfStmtKind::IfElseIf;
+      } else if (IfLBrace && !IfLBrace->Optional) {
+        KeepElseBraces = true;
+        assert(ElseLeftBrace->MatchingParen);
+        markOptionalBraces(ElseLeftBrace);
       }
       addUnwrappedLine();
     } else if (FormatTok->is(tok::kw_if)) {
@@ -2615,8 +2649,7 @@ FormatToken *UnwrappedLineParser::parseIfThenElse(IfStmtKind *IfKind,
       parseUnbracedBody(/*CheckEOF=*/true);
     }
   } else {
-    if (Style.RemoveBracesLLVM)
-      KeepIfBraces = KeepIfBraces || IfBlockKind == IfStmtKind::IfElse;
+    KeepIfBraces = KeepIfBraces || IfBlockKind == IfStmtKind::IfElse;
     if (NeedsUnwrappedLine)
       addUnwrappedLine();
   }
@@ -2785,7 +2818,8 @@ void UnwrappedLineParser::parseNamespace() {
       ++Line->Level;
 
     parseBlock(/*MustBeDeclaration=*/true, AddLevels, /*MunchSemi=*/true,
-               /*KeepBraces=*/true, ManageWhitesmithsBraces);
+               /*KeepBraces=*/true, /*IfKind=*/nullptr,
+               ManageWhitesmithsBraces);
 
     // Munch the semicolon after a namespace. This is more common than one would
     // think. Putting the semicolon into its own line is very ugly.
@@ -2878,6 +2912,7 @@ void UnwrappedLineParser::parseForOrWhileLoop() {
   if (FormatTok->is(tok::l_paren))
     parseParens();
 
+  handleAttributes();
   parseLoopBody(KeepBraces, /*WrapRightBrace=*/true);
 }
 
@@ -3419,11 +3454,18 @@ bool UnwrappedLineParser::parseEnum() {
 
   while (FormatTok->Tok.getIdentifierInfo() ||
          FormatTok->isOneOf(tok::colon, tok::coloncolon, tok::less,
-                            tok::greater, tok::comma, tok::question)) {
+                            tok::greater, tok::comma, tok::question,
+                            tok::l_square, tok::r_square)) {
     nextToken();
     // We can have macros or attributes in between 'enum' and the enum name.
     if (FormatTok->is(tok::l_paren))
       parseParens();
+    if (FormatTok->is(TT_AttributeSquare)) {
+      parseSquare();
+      // Consume the closing TT_AttributeSquare.
+      if (FormatTok->Next && FormatTok->is(TT_AttributeSquare))
+        nextToken();
+    }
     if (FormatTok->is(tok::identifier)) {
       nextToken();
       // If there are two identifiers in a row, this is likely an elaborate
@@ -3593,7 +3635,7 @@ void UnwrappedLineParser::parseJavaEnumBody() {
   }
 
   // Parse the class body after the enum's ";" if any.
-  parseLevel(OpeningBrace, /*CanContainBracedList=*/true);
+  parseLevel(OpeningBrace);
   nextToken();
   --Line->Level;
   addUnwrappedLine();

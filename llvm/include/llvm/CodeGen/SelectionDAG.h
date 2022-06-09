@@ -58,7 +58,7 @@ class Pass;
 class Type;
 template <class GraphType> struct GraphTraits;
 template <typename T, unsigned int N> class SmallSetVector;
-template <typename T> struct FoldingSetTrait;
+template <typename T, typename Enable> struct FoldingSetTrait;
 class AAResults;
 class BlockAddress;
 class BlockFrequencyInfo;
@@ -452,6 +452,9 @@ public:
   const DataLayout &getDataLayout() const { return MF->getDataLayout(); }
   const TargetMachine &getTarget() const { return TM; }
   const TargetSubtargetInfo &getSubtarget() const { return MF->getSubtarget(); }
+  template <typename STC> const STC &getSubtarget() const {
+    return MF->getSubtarget<STC>();
+  }
   const TargetLowering &getTargetLoweringInfo() const { return *TLI; }
   const TargetLibraryInfo &getLibInfo() const { return *LibInfo; }
   const SelectionDAGTargetInfo &getSelectionDAGInfo() const { return *TSI; }
@@ -2133,11 +2136,6 @@ public:
 
   /// Compute the default alignment value for the given type.
   Align getEVTAlign(EVT MemoryVT) const;
-  /// Compute the default alignment value for the given type.
-  /// FIXME: Remove once transition to Align is over.
-  inline unsigned getEVTAlignment(EVT MemoryVT) const {
-    return getEVTAlign(MemoryVT).value();
-  }
 
   /// Test whether the given value is a constant int or similar node.
   SDNode *isConstantIntBuildVectorOrConstantInt(SDValue N) const;

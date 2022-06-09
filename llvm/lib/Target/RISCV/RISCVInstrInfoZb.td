@@ -218,8 +218,9 @@ def CSImm12MulBy8 : PatLeaf<(imm), [{
   if (!N->hasOneUse())
     return false;
   int64_t C = N->getSExtValue();
-  // Skip if C is simm12 or can be optimized by the PatLeaf AddiPair.
-  return !isInt<13>(C) && isInt<15>(C) && (C & 7) == 0;
+  // Skip if C is simm12 or can be optimized by the PatLeaf AddiPair or
+  // CSImm12MulBy4.
+  return !isInt<14>(C) && isInt<15>(C) && (C & 7) == 0;
 }]>;
 
 def SimmShiftRightBy2XForm : SDNodeXForm<imm, [{
@@ -1174,6 +1175,14 @@ def : Pat<(i64 (add (and (shl GPR:$rs1, (i64 2)), 0x3FFFFFFFF), non_imm12:$rs2))
           (SH2ADD_UW GPR:$rs1, GPR:$rs2)>;
 def : Pat<(i64 (add (and (shl GPR:$rs1, (i64 3)), 0x7FFFFFFFF), non_imm12:$rs2)),
           (SH3ADD_UW GPR:$rs1, GPR:$rs2)>;
+
+// Use SRLI to clear the LSBs and SHXADD_UW to mask and shift.
+def : Pat<(i64 (add (and GPR:$rs1, 0x1FFFFFFFE), non_imm12:$rs2)),
+          (SH1ADD_UW (SRLI GPR:$rs1, 1), GPR:$rs2)>;
+def : Pat<(i64 (add (and GPR:$rs1, 0x3FFFFFFFC), non_imm12:$rs2)),
+          (SH2ADD_UW (SRLI GPR:$rs1, 2), GPR:$rs2)>;
+def : Pat<(i64 (add (and GPR:$rs1, 0x7FFFFFFF8), non_imm12:$rs2)),
+          (SH3ADD_UW (SRLI GPR:$rs1, 3), GPR:$rs2)>;
 } // Predicates = [HasStdExtZba, IsRV64]
 
 let Predicates = [HasStdExtZbcOrZbkc] in {

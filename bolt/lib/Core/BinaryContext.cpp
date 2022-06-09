@@ -47,12 +47,9 @@ using namespace llvm;
 
 namespace opts {
 
-cl::opt<bool>
-NoHugePages("no-huge-pages",
-  cl::desc("use regular size pages for code alignment"),
-  cl::ZeroOrMore,
-  cl::Hidden,
-  cl::cat(BoltCategory));
+cl::opt<bool> NoHugePages("no-huge-pages",
+                          cl::desc("use regular size pages for code alignment"),
+                          cl::Hidden, cl::cat(BoltCategory));
 
 static cl::opt<bool>
 PrintDebugInfo("print-debug-info",
@@ -61,12 +58,10 @@ PrintDebugInfo("print-debug-info",
   cl::ZeroOrMore,
   cl::cat(BoltCategory));
 
-cl::opt<bool>
-PrintRelocations("print-relocations",
-  cl::desc("print relocations when printing functions/objects"),
-  cl::Hidden,
-  cl::ZeroOrMore,
-  cl::cat(BoltCategory));
+cl::opt<bool> PrintRelocations(
+    "print-relocations",
+    cl::desc("print relocations when printing functions/objects"), cl::Hidden,
+    cl::cat(BoltCategory));
 
 static cl::opt<bool>
 PrintMemData("print-mem-data",
@@ -250,6 +245,14 @@ BinaryContext::createBinaryContext(const ObjectFile *File, bool IsPIC,
   BC->setFilename(File->getFileName());
 
   BC->HasFixedLoadAddress = !IsPIC;
+
+  BC->SymbolicDisAsm = std::unique_ptr<MCDisassembler>(
+      BC->TheTarget->createMCDisassembler(*BC->STI, *BC->Ctx));
+
+  if (!BC->SymbolicDisAsm)
+    return createStringError(
+        make_error_code(std::errc::not_supported),
+        Twine("BOLT-ERROR: no disassembler info for target ", TripleName));
 
   return std::move(BC);
 }
@@ -1637,6 +1640,35 @@ void BinaryContext::printCFI(raw_ostream &OS, const MCCFIInstruction &Inst) {
     OS << "Op#" << Operation;
     break;
   }
+}
+
+MarkerSymType BinaryContext::getMarkerType(const SymbolRef &Symbol) const {
+  // For aarch64, the ABI defines mapping symbols so we identify data in the
+  // code section (see IHI0056B). $x identifies a symbol starting code or the
+  // end of a data chunk inside code, $d indentifies start of data.
+  if (!isAArch64() || ELFSymbolRef(Symbol).getSize())
+    return MarkerSymType::NONE;
+
+  Expected<StringRef> NameOrError = Symbol.getName();
+  Expected<object::SymbolRef::Type> TypeOrError = Symbol.getType();
+
+  if (!TypeOrError || !NameOrError)
+    return MarkerSymType::NONE;
+
+  if (*TypeOrError != SymbolRef::ST_Unknown)
+    return MarkerSymType::NONE;
+
+  if (*NameOrError == "$x" || NameOrError->startswith("$x."))
+    return MarkerSymType::CODE;
+
+  if (*NameOrError == "$d" || NameOrError->startswith("$d."))
+    return MarkerSymType::DATA;
+
+  return MarkerSymType::NONE;
+}
+
+bool BinaryContext::isMarker(const SymbolRef &Symbol) const {
+  return getMarkerType(Symbol) != MarkerSymType::NONE;
 }
 
 void BinaryContext::printInstruction(raw_ostream &OS, const MCInst &Instruction,
