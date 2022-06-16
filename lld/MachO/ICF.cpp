@@ -443,7 +443,9 @@ void macho::foldIdenticalSections() {
                               /*relocVA=*/0);
         isec->data = copy;
       }
-    } else {
+    } else if (!isEhFrameSection(isec)) {
+      // EH frames are gathered as hashables from unwindEntry above; give a
+      // unique ID to everything else.
       isec->icfEqClass[0] = ++icfUniqueID;
     }
   }

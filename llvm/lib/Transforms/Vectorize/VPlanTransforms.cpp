@@ -49,8 +49,8 @@ void VPlanTransforms::VPInstructionsToVPRecipes(
           VPValue *Start = Plan->getOrAddVPValue(II->getStartValue());
           VPValue *Step =
               vputils::getOrCreateVPValueForSCEVExpr(*Plan, II->getStep(), SE);
-          NewRecipe = new VPWidenIntOrFpInductionRecipe(Phi, Start, Step, *II,
-                                                        false, true);
+          NewRecipe =
+              new VPWidenIntOrFpInductionRecipe(Phi, Start, Step, *II, true);
         } else {
           Plan->addVPValue(Phi, VPPhi);
           continue;
@@ -361,7 +361,7 @@ void VPlanTransforms::removeRedundantCanonicalIVs(VPlan &Plan) {
   }
 }
 
-void VPlanTransforms::removeDeadRecipes(VPlan &Plan, Loop &OrigLoop) {
+void VPlanTransforms::removeDeadRecipes(VPlan &Plan) {
   VPBasicBlock *Header = Plan.getVectorLoopRegion()->getEntryBasicBlock();
   // Remove dead recipes in header block. The recipes in the block are processed
   // in reverse order, to catch chains of dead recipes.
@@ -380,7 +380,8 @@ void VPlanTransforms::optimizeInductions(VPlan &Plan, ScalarEvolution &SE) {
   VPBasicBlock *HeaderVPBB = Plan.getVectorLoopRegion()->getEntryBasicBlock();
   for (VPRecipeBase &Phi : HeaderVPBB->phis()) {
     auto *IV = dyn_cast<VPWidenIntOrFpInductionRecipe>(&Phi);
-    if (!IV || !IV->needsScalarIV())
+    if (!IV ||
+        all_of(IV->users(), [IV](VPUser *U) { return !U->usesScalars(IV); }))
       continue;
 
     const InductionDescriptor &ID = IV->getInductionDescriptor();

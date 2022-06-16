@@ -2406,7 +2406,8 @@ void Clang::DumpCompilationDatabase(Compilation &C, StringRef Filename,
   if (!CompilationDatabase) {
     std::error_code EC;
     auto File = std::make_unique<llvm::raw_fd_ostream>(
-        Filename, EC, llvm::sys::fs::OF_TextWithCRLF);
+        Filename, EC,
+        llvm::sys::fs::OF_TextWithCRLF | llvm::sys::fs::OF_Append);
     if (EC) {
       D.Diag(clang::diag::err_drv_compilationdatabase) << Filename
                                                        << EC.message();
@@ -2432,6 +2433,7 @@ void Clang::DumpCompilationDatabase(Compilation &C, StringRef Filename,
     CDB << ", \"" << escape(Buf) << "\"";
   }
   CDB << ", \"" << escape(Input.getFilename()) << "\"";
+  CDB << ", \"-o\", \"" << escape(Output.getFilename()) << "\"";
   for (auto &A: Args) {
     auto &O = A->getOption();
     // Skip language selection, which is positional.
@@ -2444,6 +2446,9 @@ void Clang::DumpCompilationDatabase(Compilation &C, StringRef Filename,
       continue;
     // Skip inputs.
     if (O.getKind() == Option::InputClass)
+      continue;
+    // Skip output.
+    if (O.getID() == options::OPT_o)
       continue;
     // All other arguments are quoted and appended.
     ArgStringList ASL;
@@ -2517,6 +2522,8 @@ static void CollectArgsForIntegratedAssembler(Compilation &C,
                    options::OPT_mno_incremental_linker_compatible,
                    DefaultIncrementalLinkerCompatible))
     CmdArgs.push_back("-mincremental-linker-compatible");
+
+  Args.AddLastArg(CmdArgs, options::OPT_femit_dwarf_unwind_EQ);
 
   // If you add more args here, also add them to the block below that
   // starts with "// If CollectArgsForIntegratedAssembler() isn't called below".
@@ -3600,6 +3607,11 @@ static void RenderBuiltinOptions(const ToolChain &TC, const llvm::Triple &T,
 }
 
 bool Driver::getDefaultModuleCachePath(SmallVectorImpl<char> &Result) {
+  if (const char *Str = std::getenv("CLANG_MODULE_CACHE_PATH")) {
+    Twine Path{Str};
+    Path.toVector(Result);
+    return Path.getSingleStringRef() != "";
+  }
   if (llvm::sys::path::cache_directory(Result)) {
     llvm::sys::path::append(Result, "clang");
     llvm::sys::path::append(Result, "ModuleCache");
@@ -4617,6 +4629,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
     Args.ClaimAllArgs(options::OPT_Wa_COMMA);
     Args.ClaimAllArgs(options::OPT_Xassembler);
+    Args.ClaimAllArgs(options::OPT_femit_dwarf_unwind_EQ);
   }
 
   if (isa<AnalyzeJobAction>(JA)) {

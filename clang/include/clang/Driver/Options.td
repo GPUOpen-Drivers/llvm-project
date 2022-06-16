@@ -2751,6 +2751,8 @@ defm strict_vtable_pointers : BoolFOption<"strict-vtable-pointers",
             " overwriting polymorphic C++ objects">,
   NegFlag<SetFalse>>;
 def fstrict_overflow : Flag<["-"], "fstrict-overflow">, Group<f_Group>;
+def fdriver_only : Flag<["-"], "fdriver-only">, Flags<[NoXarchOption, CoreOption]>,
+  Group<Action_Group>, HelpText<"Only run the driver.">;
 def fsyntax_only : Flag<["-"], "fsyntax-only">,
   Flags<[NoXarchOption,CoreOption,CC1Option,FC1Option]>, Group<Action_Group>;
 def ftabstop_EQ : Joined<["-"], "ftabstop=">, Group<f_Group>;
@@ -3044,6 +3046,13 @@ def fmacro_prefix_map_EQ
 defm force_dwarf_frame : BoolFOption<"force-dwarf-frame",
   CodeGenOpts<"ForceDwarfFrameSection">, DefaultFalse,
   PosFlag<SetTrue, [CC1Option], "Always emit a debug frame section">, NegFlag<SetFalse>>;
+def femit_dwarf_unwind_EQ : Joined<["-"], "femit-dwarf-unwind=">,
+  Group<f_Group>, Flags<[CC1Option, CC1AsOption]>,
+  HelpText<"When to emit DWARF unwind (EH frame) info">,
+  Values<"always,no-compact-unwind,default">,
+  NormalizedValues<["Always", "NoCompactUnwind", "Default"]>,
+  NormalizedValuesScope<"llvm::EmitDwarfUnwindType">,
+  MarshallingInfoEnum<CodeGenOpts<"EmitDwarfUnwind">, "Default">;
 def g_Flag : Flag<["-"], "g">, Group<g_Group>,
   HelpText<"Generate source-level debug information">;
 def gline_tables_only : Flag<["-"], "gline-tables-only">, Group<gN_Group>,
@@ -4166,7 +4175,8 @@ def why_load : Flag<["-"], "why_load">;
 def whyload : Flag<["-"], "whyload">, Alias<why_load>;
 def w : Flag<["-"], "w">, HelpText<"Suppress all warnings">, Flags<[CC1Option]>,
   MarshallingInfoFlag<DiagnosticOpts<"IgnoreWarnings">>;
-def x : JoinedOrSeparate<["-"], "x">, Flags<[NoXarchOption,CC1Option]>,
+def x : JoinedOrSeparate<["-"], "x">,
+Flags<[NoXarchOption,CC1Option,FlangOption,FC1Option]>,
   HelpText<"Treat subsequent input files as having type <language>">,
   MetaVarName<"<language>">;
 def y : Joined<["-"], "y">;
@@ -6092,6 +6102,12 @@ def fobjc_gc_only : Flag<["-"], "fobjc-gc-only">, Group<f_Group>,
   HelpText<"Use GC exclusively for Objective-C related memory management">;
 def fobjc_gc : Flag<["-"], "fobjc-gc">, Group<f_Group>,
   HelpText<"Enable Objective-C garbage collection">;
+
+def fexperimental_max_bitint_width_EQ:
+  Joined<["-"], "fexperimental-max-bitint-width=">, Group<f_Group>,
+  MetaVarName<"<N>">,
+  HelpText<"Set the maximum bitwidth for _BitInt (this option is expected to be removed in the future)">,
+  MarshallingInfoInt<LangOpts<"MaxBitIntWidth">>;
 
 } // let Flags = [CC1Option, NoDriverOption]
 

@@ -25439,8 +25439,7 @@ TEST_F(FormatTest, RemoveBraces) {
   verifyFormat("do {\n"
                "  ++I;\n"
                "} while (hasMore() && Filter(*I));",
-               "do { ++I; } while (hasMore() && Filter(*I));",
-               Style);
+               "do { ++I; } while (hasMore() && Filter(*I));", Style);
 
   verifyFormat("if (a)\n"
                "  if (b)\n"
@@ -25575,6 +25574,17 @@ TEST_F(FormatTest, RemoveBraces) {
                "  }\n"
                "else\n"
                "  g;",
+               Style);
+
+  verifyFormat("if (a) {\n"
+               "  b;\n"
+               "  c;\n"
+               "} else { // comment\n"
+               "  if (d) {\n"
+               "    e;\n"
+               "    f;\n"
+               "  }\n"
+               "}",
                Style);
 
   verifyFormat("if (a)\n"
