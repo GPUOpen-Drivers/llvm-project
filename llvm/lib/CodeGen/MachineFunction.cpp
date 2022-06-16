@@ -44,7 +44,6 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
@@ -61,7 +60,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/DOTGraphTraits.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/raw_ostream.h"
@@ -107,6 +105,27 @@ static const char *getPropertyName(MachineFunctionProperties::Property Prop) {
   }
   // clang-format on
   llvm_unreachable("Invalid machine function property");
+}
+
+void setUnsafeStackSize(const Function &F, MachineFrameInfo &FrameInfo) {
+  if (!F.hasFnAttribute(Attribute::SafeStack))
+    return;
+
+  auto *Existing =
+      dyn_cast_or_null<MDTuple>(F.getMetadata(LLVMContext::MD_annotation));
+
+  if (!Existing || Existing->getNumOperands() != 2)
+    return;
+
+  auto *MetadataName = "unsafe-stack-size";
+  if (auto &N = Existing->getOperand(0)) {
+    if (cast<MDString>(N.get())->getString() == MetadataName) {
+      if (auto &Op = Existing->getOperand(1)) {
+        auto Val = mdconst::extract<ConstantInt>(Op)->getZExtValue();
+        FrameInfo.setUnsafeStackSize(Val);
+      }
+    }
+  }
 }
 
 // Pin the vtable to this file.
@@ -177,6 +196,8 @@ void MachineFunction::init() {
       /*ForcedRealign=*/CanRealignSP &&
           F.hasFnAttribute(Attribute::StackAlignment));
 
+  setUnsafeStackSize(F, *FrameInfo);
+
   if (F.hasFnAttribute(Attribute::StackAlignment))
     FrameInfo->ensureMaxAlignment(*F.getFnStackAlign());
 
@@ -208,9 +229,7 @@ void MachineFunction::init() {
          "Can't create a MachineFunction using a Module with a "
          "Target-incompatible DataLayout attached\n");
 
-  PSVManager =
-    std::make_unique<PseudoSourceValueManager>(*(getSubtarget().
-                                                  getInstrInfo()));
+  PSVManager = std::make_unique<PseudoSourceValueManager>(getTarget());
 }
 
 MachineFunction::~MachineFunction() {
@@ -1012,7 +1031,32 @@ void MachineFunction::substituteDebugValuesForInst(const MachineInstr &Old,
   }
 }
 
-auto MachineFunction::salvageCopySSA(MachineInstr &MI)
+auto MachineFunction::salvageCopySSA(
+    MachineInstr &MI, DenseMap<Register, DebugInstrOperandPair> &DbgPHICache)
+    -> DebugInstrOperandPair {
+  const TargetInstrInfo &TII = *getSubtarget().getInstrInfo();
+
+  // Check whether this copy-like instruction has already been salvaged into
+  // an operand pair.
+  Register Dest;
+  if (auto CopyDstSrc = TII.isCopyInstr(MI)) {
+    Dest = CopyDstSrc->Destination->getReg();
+  } else {
+    assert(MI.isSubregToReg());
+    Dest = MI.getOperand(0).getReg();
+  }
+
+  auto CacheIt = DbgPHICache.find(Dest);
+  if (CacheIt != DbgPHICache.end())
+    return CacheIt->second;
+
+  // Calculate the instruction number to use, or install a DBG_PHI.
+  auto OperandPair = salvageCopySSAImpl(MI);
+  DbgPHICache.insert({Dest, OperandPair});
+  return OperandPair;
+}
+
+auto MachineFunction::salvageCopySSAImpl(MachineInstr &MI)
     -> DebugInstrOperandPair {
   MachineRegisterInfo &MRI = getRegInfo();
   const TargetRegisterInfo &TRI = *MRI.getTargetRegisterInfo();
@@ -1168,9 +1212,7 @@ void MachineFunction::finalizeDebugInstrRefs() {
     MI.getOperand(1).ChangeToRegister(0, false);
   };
 
-  if (!useDebugInstrRef())
-    return;
-
+  DenseMap<Register, DebugInstrOperandPair> ArgDbgPHIs;
   for (auto &MBB : *this) {
     for (auto &MI : MBB) {
       if (!MI.isDebugRef() || !MI.getOperand(0).isReg())
@@ -1193,7 +1235,7 @@ void MachineFunction::finalizeDebugInstrRefs() {
       // instruction that defines the source value, see salvageCopySSA docs
       // for why this is important.
       if (DefMI.isCopyLike() || TII->isCopyInstr(DefMI)) {
-        auto Result = salvageCopySSA(DefMI);
+        auto Result = salvageCopySSA(DefMI, ArgDbgPHIs);
         MI.getOperand(0).ChangeToImmediate(Result.first);
         MI.getOperand(1).setImm(Result.second);
       } else {

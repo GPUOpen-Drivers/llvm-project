@@ -90,8 +90,7 @@ function(builtin_default_target compiler_rt_path)
                                       -DCMAKE_ASM_COMPILER_WORKS=ON
                                       ${COMMON_CMAKE_ARGS}
                                       ${BUILTINS_CMAKE_ARGS}
-                           PASSTHROUGH_PREFIXES CMAKE_OSX
-                                                COMPILER_RT
+                           PASSTHROUGH_PREFIXES COMPILER_RT
                                                 DARWIN
                                                 SANITIZER
                            USE_TOOLCHAIN
@@ -223,9 +222,9 @@ function(runtime_default_target)
     include(${LLVM_BINARY_DIR}/runtimes/Tests.cmake OPTIONAL RESULT_VARIABLE have_tests)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LLVM_BINARY_DIR}/runtimes/Tests.cmake)
     if(have_tests)
-      set_property(GLOBAL APPEND PROPERTY LLVM_LIT_TESTSUITES ${RUNTIMES_LIT_TESTSUITES})
-      set_property(GLOBAL APPEND PROPERTY LLVM_LIT_PARAMS ${RUNTIMES_LIT_PARAMS})
-      set_property(GLOBAL APPEND PROPERTY LLVM_LIT_EXTRA_ARGS ${RUNTIMES_LIT_EXTRA_ARGS})
+      set_property(GLOBAL APPEND PROPERTY LLVM_ALL_LIT_TESTSUITES ${SUB_LIT_TESTSUITES})
+      set_property(GLOBAL APPEND PROPERTY LLVM_ALL_LIT_PARAMS ${SUB_LIT_PARAMS})
+      set_property(GLOBAL APPEND PROPERTY LLVM_ALL_LIT_EXTRA_ARGS ${SUB_LIT_EXTRA_ARGS})
     endif()
     list(APPEND test_targets runtimes-test-depends check-runtimes)
   endif()
@@ -251,8 +250,7 @@ function(runtime_default_target)
                                       -DCMAKE_ASM_COMPILER_WORKS=ON
                                       ${COMMON_CMAKE_ARGS}
                                       ${RUNTIMES_CMAKE_ARGS}
-                           PASSTHROUGH_PREFIXES CMAKE_OSX
-                                                LLVM_ENABLE_RUNTIMES
+                           PASSTHROUGH_PREFIXES LLVM_ENABLE_RUNTIMES
                                                 LLVM_USE_LINKER
                                                 ${ARG_PREFIXES}
                            EXTRA_TARGETS ${extra_targets}
@@ -306,9 +304,9 @@ function(runtime_register_target name target)
     include(${LLVM_BINARY_DIR}/runtimes/${name}/Tests.cmake OPTIONAL RESULT_VARIABLE have_tests)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LLVM_BINARY_DIR}/runtimes/${name}/Tests.cmake)
     if(have_tests)
-      set_property(GLOBAL APPEND PROPERTY LLVM_LIT_TESTSUITES ${RUNTIMES_LIT_TESTSUITES})
-      set_property(GLOBAL APPEND PROPERTY LLVM_LIT_PARAMS ${RUNTIMES_LIT_PARAMS})
-      set_property(GLOBAL APPEND PROPERTY LLVM_LIT_EXTRA_ARGS ${RUNTIMES_LIT_EXTRA_ARGS})
+      set_property(GLOBAL APPEND PROPERTY LLVM_ALL_LIT_TESTSUITES ${SUB_LIT_TESTSUITES})
+      set_property(GLOBAL APPEND PROPERTY LLVM_ALL_LIT_PARAMS ${SUB_LIT_PARAMS})
+      set_property(GLOBAL APPEND PROPERTY LLVM_ALL_LIT_EXTRA_ARGS ${SUB_LIT_EXTRA_ARGS})
     endif()
     set(runtimes-test-depends-${name} runtimes-test-depends)
     set(check-runtimes-${name} check-runtimes)
@@ -481,7 +479,7 @@ if(runtimes)
   endif()
 
   if(LLVM_INCLUDE_TESTS)
-    set_property(GLOBAL APPEND PROPERTY LLVM_ADDITIONAL_TEST_DEPENDS runtimes-test-depends)
+    set_property(GLOBAL APPEND PROPERTY LLVM_ALL_ADDITIONAL_TEST_DEPENDS runtimes-test-depends)
 
     set(RUNTIMES_TEST_DEPENDS
         FileCheck

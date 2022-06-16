@@ -55,6 +55,8 @@ enum NodeType : unsigned {
   // x29, x29` marker instruction.
   CALL_RVMARKER,
 
+  CALL_BTI, // Function call followed by a BTI instruction.
+
   // Produces the full sequence of instructions for getting the thread pointer
   // offset of a variable into X0, using the TLSDesc model.
   TLSDESC_CALLSEQ,
@@ -230,6 +232,8 @@ enum NodeType : unsigned {
   SADDV,
   UADDV,
 
+  // Add Pairwise of two vectors
+  ADDP,
   // Add Long Pairwise
   SADDLP,
   UADDLP,
@@ -453,23 +457,6 @@ enum NodeType : unsigned {
 
 } // end namespace AArch64ISD
 
-namespace {
-
-// Any instruction that defines a 32-bit result zeros out the high half of the
-// register. Truncate can be lowered to EXTRACT_SUBREG. CopyFromReg may
-// be copying from a truncate. But any other 32-bit operation will zero-extend
-// up to 64 bits. AssertSext/AssertZext aren't saying anything about the upper
-// 32 bits, they're probably just qualifying a CopyFromReg.
-static inline bool isDef32(const SDNode &N) {
-  unsigned Opc = N.getOpcode();
-  return Opc != ISD::TRUNCATE && Opc != TargetOpcode::EXTRACT_SUBREG &&
-         Opc != ISD::CopyFromReg && Opc != ISD::AssertSext &&
-         Opc != ISD::AssertZext && Opc != ISD::AssertAlign &&
-         Opc != ISD::FREEZE;
-}
-
-} // end anonymous namespace
-
 namespace AArch64 {
 /// Possible values of current rounding mode, which is specified in bits
 /// 23:22 of FPCR.
@@ -491,6 +478,11 @@ class AArch64TargetLowering : public TargetLowering {
 public:
   explicit AArch64TargetLowering(const TargetMachine &TM,
                                  const AArch64Subtarget &STI);
+
+  /// Control the following reassociation of operands: (op (op x, c1), y) -> (op
+  /// (op x, y), c1) where N0 is (op x, c1) and N1 is y.
+  bool isReassocProfitable(SelectionDAG &DAG, SDValue N0,
+                           SDValue N1) const override;
 
   /// Selects the correct CCAssignFn for a given CallingConvention value.
   CCAssignFn *CCAssignFnForCall(CallingConv::ID CC, bool IsVarArg) const;
@@ -642,6 +634,10 @@ public:
   bool isDesirableToCommuteWithShift(const SDNode *N,
                                      CombineLevel Level) const override;
 
+  /// Return true if it is profitable to fold a pair of shifts into a mask.
+  bool shouldFoldConstantShiftPairToMask(const SDNode *N,
+                                         CombineLevel Level) const override;
+
   /// Returns true if it is beneficial to convert a load of a constant
   /// to just the constant itself.
   bool shouldConvertConstantLoadToIntImm(const APInt &Imm,
@@ -671,7 +667,8 @@ public:
 
   TargetLoweringBase::AtomicExpansionKind
   shouldExpandAtomicLoadInIR(LoadInst *LI) const override;
-  bool shouldExpandAtomicStoreInIR(StoreInst *SI) const override;
+  TargetLoweringBase::AtomicExpansionKind
+  shouldExpandAtomicStoreInIR(StoreInst *SI) const override;
   TargetLoweringBase::AtomicExpansionKind
   shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override;
 
@@ -1040,6 +1037,8 @@ private:
 
   SDValue BuildSDIVPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
                         SmallVectorImpl<SDNode *> &Created) const override;
+  SDValue BuildSREMPow2(SDNode *N, const APInt &Divisor, SelectionDAG &DAG,
+                        SmallVectorImpl<SDNode *> &Created) const override;
   SDValue getSqrtEstimate(SDValue Operand, SelectionDAG &DAG, int Enabled,
                           int &ExtraSteps, bool &UseOneConst,
                           bool Reciprocal) const override;
@@ -1081,7 +1080,7 @@ private:
   }
 
   bool shouldExtendGSIndex(EVT VT, EVT &EltTy) const override;
-  bool shouldRemoveExtendFromGSIndex(EVT VT) const override;
+  bool shouldRemoveExtendFromGSIndex(EVT IndexVT, EVT DataVT) const override;
   bool isVectorLoadExtDesirable(SDValue ExtVal) const override;
   bool isUsedByReturnOnly(SDNode *N, SDValue &Chain) const override;
   bool mayBeEmittedAsTailCall(const CallInst *CI) const override;

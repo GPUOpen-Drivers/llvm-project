@@ -41,16 +41,16 @@ using AliasedResourceMap =
 
 /// Collects all aliased resources in the given SPIR-V `moduleOp`.
 static AliasedResourceMap collectAliasedResources(spirv::ModuleOp moduleOp) {
-  AliasedResourceMap aliasedResoruces;
-  moduleOp->walk([&aliasedResoruces](spirv::GlobalVariableOp varOp) {
+  AliasedResourceMap aliasedResources;
+  moduleOp->walk([&aliasedResources](spirv::GlobalVariableOp varOp) {
     if (varOp->getAttrOfType<UnitAttr>("aliased")) {
       Optional<uint32_t> set = varOp.descriptor_set();
       Optional<uint32_t> binding = varOp.binding();
       if (set && binding)
-        aliasedResoruces[{*set, *binding}].push_back(varOp);
+        aliasedResources[{*set, *binding}].push_back(varOp);
     }
   });
-  return aliasedResoruces;
+  return aliasedResources;
 }
 
 /// Returns the element type if the given `type` is a runtime array resource:
@@ -103,6 +103,8 @@ namespace {
 /// inside the struct.
 class ResourceAliasAnalysis {
 public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ResourceAliasAnalysis)
+
   explicit ResourceAliasAnalysis(Operation *);
 
   /// Returns true if the given `op` can be rewritten to use a canonical
@@ -144,13 +146,13 @@ private:
 ResourceAliasAnalysis::ResourceAliasAnalysis(Operation *root) {
   // Collect all aliased resources first and put them into different sets
   // according to the descriptor.
-  AliasedResourceMap aliasedResoruces =
+  AliasedResourceMap aliasedResources =
       collectAliasedResources(cast<spirv::ModuleOp>(root));
 
   // For each resource set, analyze whether we can unify; if so, try to identify
   // a canonical resource, whose element type has the largest bitwidth.
-  for (const auto &descriptorResoruce : aliasedResoruces) {
-    recordIfUnifiable(descriptorResoruce.first, descriptorResoruce.second);
+  for (const auto &descriptorResource : aliasedResources) {
+    recordIfUnifiable(descriptorResource.first, descriptorResource.second);
   }
 }
 
@@ -257,9 +259,9 @@ void ResourceAliasAnalysis::recordIfUnifiable(
 //===----------------------------------------------------------------------===//
 
 template <typename OpTy>
-class ConvertAliasResoruce : public OpConversionPattern<OpTy> {
+class ConvertAliasResource : public OpConversionPattern<OpTy> {
 public:
-  ConvertAliasResoruce(const ResourceAliasAnalysis &analysis,
+  ConvertAliasResource(const ResourceAliasAnalysis &analysis,
                        MLIRContext *context, PatternBenefit benefit = 1)
       : OpConversionPattern<OpTy>(context, benefit), analysis(analysis) {}
 
@@ -267,8 +269,8 @@ protected:
   const ResourceAliasAnalysis &analysis;
 };
 
-struct ConvertVariable : public ConvertAliasResoruce<spirv::GlobalVariableOp> {
-  using ConvertAliasResoruce::ConvertAliasResoruce;
+struct ConvertVariable : public ConvertAliasResource<spirv::GlobalVariableOp> {
+  using ConvertAliasResource::ConvertAliasResource;
 
   LogicalResult
   matchAndRewrite(spirv::GlobalVariableOp varOp, OpAdaptor adaptor,
@@ -280,8 +282,8 @@ struct ConvertVariable : public ConvertAliasResoruce<spirv::GlobalVariableOp> {
   }
 };
 
-struct ConvertAddressOf : public ConvertAliasResoruce<spirv::AddressOfOp> {
-  using ConvertAliasResoruce::ConvertAliasResoruce;
+struct ConvertAddressOf : public ConvertAliasResource<spirv::AddressOfOp> {
+  using ConvertAliasResource::ConvertAliasResource;
 
   LogicalResult
   matchAndRewrite(spirv::AddressOfOp addressOp, OpAdaptor adaptor,
@@ -296,8 +298,8 @@ struct ConvertAddressOf : public ConvertAliasResoruce<spirv::AddressOfOp> {
   }
 };
 
-struct ConvertAccessChain : public ConvertAliasResoruce<spirv::AccessChainOp> {
-  using ConvertAliasResoruce::ConvertAliasResoruce;
+struct ConvertAccessChain : public ConvertAliasResource<spirv::AccessChainOp> {
+  using ConvertAliasResource::ConvertAliasResource;
 
   LogicalResult
   matchAndRewrite(spirv::AccessChainOp acOp, OpAdaptor adaptor,
@@ -351,8 +353,8 @@ struct ConvertAccessChain : public ConvertAliasResoruce<spirv::AccessChainOp> {
   }
 };
 
-struct ConvertLoad : public ConvertAliasResoruce<spirv::LoadOp> {
-  using ConvertAliasResoruce::ConvertAliasResoruce;
+struct ConvertLoad : public ConvertAliasResource<spirv::LoadOp> {
+  using ConvertAliasResource::ConvertAliasResource;
 
   LogicalResult
   matchAndRewrite(spirv::LoadOp loadOp, OpAdaptor adaptor,
@@ -378,8 +380,8 @@ struct ConvertLoad : public ConvertAliasResoruce<spirv::LoadOp> {
   }
 };
 
-struct ConvertStore : public ConvertAliasResoruce<spirv::StoreOp> {
-  using ConvertAliasResoruce::ConvertAliasResoruce;
+struct ConvertStore : public ConvertAliasResource<spirv::StoreOp> {
+  using ConvertAliasResource::ConvertAliasResource;
 
   LogicalResult
   matchAndRewrite(spirv::StoreOp storeOp, OpAdaptor adaptor,

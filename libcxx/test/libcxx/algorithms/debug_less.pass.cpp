@@ -12,16 +12,16 @@
 
 // __debug_less checks that a comparator actually provides a strict-weak ordering.
 
-// UNSUPPORTED: libcxx-no-debug-mode
-
-// ADDITIONAL_COMPILE_FLAGS: -D_LIBCPP_DEBUG=1
+// REQUIRES: has-unix-headers
+// UNSUPPORTED: !libcpp-has-debug-mode, c++03
 
 #include <algorithm>
-#include <iterator>
 #include <cassert>
+#include <functional>
+#include <iterator>
 
 #include "test_macros.h"
-#include "debug_macros.h"
+#include "check_assertion.h"
 
 template <int ID>
 struct MyType {
@@ -48,14 +48,6 @@ struct GoodComparator : public CompareBase {
     bool operator()(ValueType const& lhs, ValueType const& rhs) const {
         ++CompareBase::called;
         return lhs < rhs;
-    }
-};
-
-template <class ValueType>
-struct BadComparator : public CompareBase {
-    bool operator()(ValueType const&, ValueType const&) const {
-        ++CompareBase::called;
-        return true;
     }
 };
 
@@ -135,20 +127,6 @@ void test_passing() {
         assert(d(one, three) == true);
         assert(called == 1);
         called = 0;
-    }
-}
-
-void test_failing() {
-    MT0 one(1);
-    MT0 two(2);
-
-    {
-        typedef BadComparator<MT0> C;
-        typedef __debug_less<C> D;
-        C c;
-        D d(c);
-
-        TEST_LIBCPP_ASSERT_FAILURE(d(one, two), "Comparator does not induce a strict weak ordering");
     }
 }
 
@@ -271,7 +249,6 @@ constexpr bool test_constexpr() {
 
 int main(int, char**) {
     test_passing();
-    test_failing();
     test_upper_and_lower_bound();
     test_non_const_arg_cmp();
     test_value_iterator();

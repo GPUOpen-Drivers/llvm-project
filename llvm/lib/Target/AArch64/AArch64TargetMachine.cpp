@@ -14,6 +14,7 @@
 #include "AArch64TargetMachine.h"
 #include "AArch64.h"
 #include "AArch64MachineFunctionInfo.h"
+#include "AArch64MachineScheduler.h"
 #include "AArch64MacroFusion.h"
 #include "AArch64Subtarget.h"
 #include "AArch64TargetObjectFile.h"
@@ -23,6 +24,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/CodeGen/CFIFixup.h"
 #include "llvm/CodeGen/CSEConfigBase.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
@@ -357,6 +359,10 @@ AArch64TargetMachine::AArch64TargetMachine(const Target &T, const Triple &TT,
 
   // AArch64 supports the debug entry values.
   setSupportsDebugEntryValues(true);
+
+  // AArch64 supports fixing up the DWARF unwind information.
+  if (!getMCAsmInfo()->usesWindowsCFI())
+    setCFIFixup(true);
 }
 
 AArch64TargetMachine::~AArch64TargetMachine() = default;
@@ -471,15 +477,17 @@ public:
   ScheduleDAGInstrs *
   createPostMachineScheduler(MachineSchedContext *C) const override {
     const AArch64Subtarget &ST = C->MF->getSubtarget<AArch64Subtarget>();
+    ScheduleDAGMI *DAG =
+        new ScheduleDAGMI(C, std::make_unique<AArch64PostRASchedStrategy>(C),
+                          /* RemoveKillFlags=*/true);
     if (ST.hasFusion()) {
       // Run the Macro Fusion after RA again since literals are expanded from
       // pseudos then (v. addPreSched2()).
-      ScheduleDAGMI *DAG = createGenericSchedPostRA(C);
       DAG->addMutation(createAArch64MacroFusionDAGMutation());
       return DAG;
     }
 
-    return nullptr;
+    return DAG;
   }
 
   void addIRPasses()  override;
@@ -810,8 +818,7 @@ AArch64TargetMachine::convertFuncInfoToYAML(const MachineFunction &MF) const {
 bool AArch64TargetMachine::parseMachineFunctionInfo(
     const yaml::MachineFunctionInfo &MFI, PerFunctionMIParsingState &PFS,
     SMDiagnostic &Error, SMRange &SourceRange) const {
-  const auto &YamlMFI =
-      reinterpret_cast<const yaml::AArch64FunctionInfo &>(MFI);
+  const auto &YamlMFI = static_cast<const yaml::AArch64FunctionInfo &>(MFI);
   MachineFunction &MF = PFS.MF;
   MF.getInfo<AArch64FunctionInfo>()->initializeBaseYamlFields(YamlMFI);
   return false;

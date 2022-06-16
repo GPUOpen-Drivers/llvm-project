@@ -289,7 +289,7 @@ public:
       return true;
 
     if (VD->hasExternalStorage() || VD->isStaticDataMember()) {
-      if (!cross_tu::containsConst(VD, *Ctx))
+      if (!cross_tu::shouldImport(VD, *Ctx))
         return true;
     } else {
       // Cannot be initialized in another TU.
@@ -475,6 +475,18 @@ void AnalysisConsumer::HandleDeclsCallGraph(const unsigned LocalTUDeclsSize) {
     // inlined.
     if (shouldSkipFunction(D, Visited, VisitedAsTopLevel))
       continue;
+
+    // The CallGraph might have declarations as callees. However, during CTU
+    // the declaration might form a declaration chain with the newly imported
+    // definition from another TU. In this case we don't want to analyze the
+    // function definition as toplevel.
+    if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
+      // Calling 'hasBody' replaces 'FD' in place with the FunctionDecl
+      // that has the body.
+      FD->hasBody(FD);
+      if (CTU.isImportedAsNew(FD))
+        continue;
+    }
 
     // Analyze the function.
     SetOfConstDecls VisitedCallees;

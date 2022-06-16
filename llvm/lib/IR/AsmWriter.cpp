@@ -223,9 +223,7 @@ predictValueUseListOrder(const Value *V, unsigned ID, const OrderMap &OM) {
     return LU->getOperandNo() > RU->getOperandNo();
   });
 
-  if (llvm::is_sorted(List, [](const Entry &L, const Entry &R) {
-        return L.second < R.second;
-      }))
+  if (llvm::is_sorted(List, llvm::less_second()))
     // Order is already correct.
     return {};
 
@@ -612,6 +610,11 @@ void TypePrinting::print(Type *Ty, raw_ostream &OS) {
     OS << '>';
     return;
   }
+  case Type::DXILPointerTyID:
+    // DXIL pointer types are only handled by the DirectX backend. To avoid
+    // extra dependencies we just print the pointer's address here.
+    OS << "dxil-ptr (" << Ty << ")";
+    return;
   }
   llvm_unreachable("Invalid TypeID");
 }
@@ -2131,6 +2134,7 @@ static void writeDISubprogram(raw_ostream &Out, const DISubprogram *N,
   Printer.printMetadata("retainedNodes", N->getRawRetainedNodes());
   Printer.printMetadata("thrownTypes", N->getRawThrownTypes());
   Printer.printMetadata("annotations", N->getRawAnnotations());
+  Printer.printString("targetFuncName", N->getTargetFuncName());
   Out << ")";
 }
 

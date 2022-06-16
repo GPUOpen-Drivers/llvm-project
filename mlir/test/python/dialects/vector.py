@@ -17,7 +17,7 @@ def testPrintOp():
   module = Module.create()
   with InsertionPoint(module.body):
 
-    @builtin.FuncOp.from_py_func(VectorType.get((12, 5), F32Type.get()))
+    @func.FuncOp.from_py_func(VectorType.get((12, 5), F32Type.get()))
     def print_vector(arg):
       return vector.PrintOp(arg)
 
@@ -40,15 +40,15 @@ def testTransferReadOp():
     mask_type = VectorType.get(vector_type.shape, IntegerType.get_signless(1))
     identity_map = AffineMap.get_identity(vector_type.rank)
     identity_map_attr = AffineMapAttr.get(identity_map)
-    f = builtin.FuncOp("transfer_read",
+    f = func.FuncOp("transfer_read",
                           ([memref_type, index_type,
                             F32Type.get(), mask_type], []))
     with InsertionPoint(f.add_entry_block()):
       A, zero, padding, mask = f.arguments
       vector.TransferReadOp(vector_type, A, [zero, zero], identity_map_attr,
-                            padding, mask, None)
+                            padding, mask=mask)
       vector.TransferReadOp(vector_type, A, [zero, zero], identity_map_attr,
-                            padding, None, None)
+                            padding)
       func.ReturnOp([])
 
   # CHECK: @transfer_read(%[[MEM:.*]]: memref<?x?xf32>, %[[IDX:.*]]: index,

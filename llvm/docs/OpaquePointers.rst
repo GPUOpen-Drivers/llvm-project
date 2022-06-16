@@ -62,10 +62,12 @@ Opaque Pointers Mode
 ====================
 
 During the transition phase, LLVM can be used in two modes: In typed pointer
-mode (currently still the default) all pointer types have a pointee type and
-opaque pointers cannot be used. In opaque pointers mode, all pointers are
-opaque. The opaque pointer mode can be enabled using ``-opaque-pointers`` in
-LLVM tools like ``opt``, or ``-mllvm -opaque-pointers`` in clang.
+mode all pointer types have a pointee type and opaque pointers cannot be used.
+In opaque pointers mode (the default), all pointers are opaque. The opaque
+pointer mode can be disabled using ``-opaque-pointers=0`` in
+LLVM tools like ``opt``, or ``-Xclang -no-opaque-pointers`` in clang.
+Additionally, opaque pointer mode is automatically disabled for IR and bitcode
+files that explicitly mention ``i8*`` style typed pointers.
 
 In opaque pointer mode, all typed pointers used in IR, bitcode, or created
 using ``PointerType::get()`` and similar APIs are automatically converted into
@@ -189,26 +191,43 @@ opaque pointer transition::
 Additionally, it will no longer be possible to call ``LLVMGetElementType()``
 on a pointer type.
 
+It is possible to control whether opaque pointers are used (if you want to
+override the default) using ``LLVMContext::setOpaquePointers`` or
+``LLVMContextSetOpaquePointers()``.
+
 Transition State
 ================
 
-As of March 2022 most parts of LLVM support opaque pointers. It is possible
-to build most C and C++ code in opaque pointer mode, both with and without
-optimization, and produce working binaries. However, thes are still some major
-open problems:
+As of April 2022 both LLVM and Clang have complete support for opaque pointers,
+and opaque pointers are enabled by default in LLVM and Clang.
 
-* While clang has limited support for opaque pointers (sufficient to compile
-  most C/C++ code on Linux), a major effort will be needed to systematically
-  remove all uses of ``getPointerElementType()`` and the deprecated
-  ``Address::deprecated()`` constructor.
+For users of the clang driver interface, it is possible to temporarily restore
+the old default using the ``-DCLANG_ENABLE_OPAQUE_POINTERS=OFF`` cmake option,
+or by passing ``-Xclang -no-opaque-pointers`` to a single clang invocation.
 
-* We do not yet have a firm strategy for enabling opaque pointers. A large
-  number of tests will have to be migrated to use opaque pointers.
+For users of the clang cc1 interface, ``-no-opaque-pointers`` can be passed.
+Note that the ``CLANG_ENABLE_OPAQUE_POINTERS`` cmake option has no effect on
+the cc1 interface.
 
-* Some pointer element type uses remain in LLVM.
+Usage for LTO can be disabled by passing ``-Wl,-plugin-opt=no-opaque-pointers``
+to the clang driver.
 
-* Some pointer element type uses remain in LLDB.
+For users of LLVM as a library, opaque pointers can be disabled by calling
+``setOpaquePointers(false)`` on the ``LLVMContext``.
 
-* Some pointer element type uses remain in MLIR.
+For users of LLVM tools like opt, opaque pointers can be disabled by passing
+``-opaque-pointers=0``.
 
-* Some pointer element type uses remain in Polly.
+The next steps for the opaque pointer migration are:
+
+* Migrate Clang/LLVM tests to use opaque pointers.
+* Remove support for typed pointers after the LLVM 15 branch has been created.
+
+Version Support
+===============
+
+**LLVM 14:** Supports all necessary APIs for migrating to opaque pointers and deprecates/removes incompatible APIs. However, using opaque pointers in the optimization pipeline is **not** fully supported. This release can be used to make out-of-tree code compatible with opaque pointers, but opaque pointers should **not** be enabled in production.
+
+**LLVM 15:** Opaque pointers are enabled by default. Typed pointers are still available, but only supported on a best-effort basis and may be untested.
+
+**LLVM 16:** Only opaque pointers will be supported. Typed pointers will not be supported.

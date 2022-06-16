@@ -135,7 +135,7 @@ bool matchAArch64MulConstCombine(
   if (!Const)
     return false;
 
-  const APInt ConstValue = Const->Value.sextOrSelf(Ty.getSizeInBits());
+  APInt ConstValue = Const->Value.sext(Ty.getSizeInBits());
   // The following code is ported from AArch64ISelLowering.
   // Multiplication of a power of two plus/minus one can be done more
   // cheaply as as shift+add/sub. For now, this is true unilaterally. If
@@ -260,7 +260,7 @@ void applyFoldMergeToZext(MachineInstr &MI, MachineRegisterInfo &MRI,
   // %d(s64) = G_ZEXT %a(s32)
   Observer.changingInstr(MI);
   MI.setDesc(B.getTII().get(TargetOpcode::G_ZEXT));
-  MI.RemoveOperand(2);
+  MI.removeOperand(2);
   Observer.changedInstr(MI);
 }
 

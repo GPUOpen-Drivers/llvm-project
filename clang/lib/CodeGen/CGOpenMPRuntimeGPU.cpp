@@ -1203,16 +1203,17 @@ CGOpenMPRuntimeGPU::CGOpenMPRuntimeGPU(CodeGenModule &CGM)
     llvm_unreachable("OpenMP can only handle device code.");
 
   llvm::OpenMPIRBuilder &OMPBuilder = getOMPBuilder();
-  if (!CGM.getLangOpts().OMPHostIRFile.empty()) {
-    OMPBuilder.createGlobalFlag(CGM.getLangOpts().OpenMPTargetDebug,
-                                "__omp_rtl_debug_kind");
-    OMPBuilder.createGlobalFlag(CGM.getLangOpts().OpenMPTeamSubscription,
-                                "__omp_rtl_assume_teams_oversubscription");
-    OMPBuilder.createGlobalFlag(CGM.getLangOpts().OpenMPThreadSubscription,
-                                "__omp_rtl_assume_threads_oversubscription");
-    OMPBuilder.createGlobalFlag(CGM.getLangOpts().OpenMPNoThreadState,
-                                "__omp_rtl_assume_no_thread_state");
-  }
+  if (CGM.getLangOpts().NoGPULib || CGM.getLangOpts().OMPHostIRFile.empty())
+    return;
+
+  OMPBuilder.createGlobalFlag(CGM.getLangOpts().OpenMPTargetDebug,
+                              "__omp_rtl_debug_kind");
+  OMPBuilder.createGlobalFlag(CGM.getLangOpts().OpenMPTeamSubscription,
+                              "__omp_rtl_assume_teams_oversubscription");
+  OMPBuilder.createGlobalFlag(CGM.getLangOpts().OpenMPThreadSubscription,
+                              "__omp_rtl_assume_threads_oversubscription");
+  OMPBuilder.createGlobalFlag(CGM.getLangOpts().OpenMPNoThreadState,
+                              "__omp_rtl_assume_no_thread_state");
 }
 
 void CGOpenMPRuntimeGPU::emitProcBindClause(CodeGenFunction &CGF,
@@ -1899,14 +1900,17 @@ static void emitReductionListCopy(
     // new element.
     bool IncrScratchpadSrc = false;
     bool IncrScratchpadDest = false;
+    QualType PrivatePtrType = C.getPointerType(Private->getType());
+    llvm::Type *PrivateLlvmPtrType = CGF.ConvertType(PrivatePtrType);
 
     switch (Action) {
     case RemoteLaneToThread: {
       // Step 1.1: Get the address for the src element in the Reduce list.
       Address SrcElementPtrAddr = Bld.CreateConstArrayGEP(SrcBase, Idx);
-      SrcElementAddr = CGF.EmitLoadOfPointer(
-          SrcElementPtrAddr,
-          C.getPointerType(Private->getType())->castAs<PointerType>());
+      SrcElementAddr =
+          CGF.EmitLoadOfPointer(CGF.Builder.CreateElementBitCast(
+                                    SrcElementPtrAddr, PrivateLlvmPtrType),
+                                PrivatePtrType->castAs<PointerType>());
 
       // Step 1.2: Create a temporary to store the element in the destination
       // Reduce list.
@@ -1920,24 +1924,27 @@ static void emitReductionListCopy(
     case ThreadCopy: {
       // Step 1.1: Get the address for the src element in the Reduce list.
       Address SrcElementPtrAddr = Bld.CreateConstArrayGEP(SrcBase, Idx);
-      SrcElementAddr = CGF.EmitLoadOfPointer(
-          SrcElementPtrAddr,
-          C.getPointerType(Private->getType())->castAs<PointerType>());
+      SrcElementAddr =
+          CGF.EmitLoadOfPointer(CGF.Builder.CreateElementBitCast(
+                                    SrcElementPtrAddr, PrivateLlvmPtrType),
+                                PrivatePtrType->castAs<PointerType>());
 
       // Step 1.2: Get the address for dest element.  The destination
       // element has already been created on the thread's stack.
       DestElementPtrAddr = Bld.CreateConstArrayGEP(DestBase, Idx);
-      DestElementAddr = CGF.EmitLoadOfPointer(
-          DestElementPtrAddr,
-          C.getPointerType(Private->getType())->castAs<PointerType>());
+      DestElementAddr =
+          CGF.EmitLoadOfPointer(CGF.Builder.CreateElementBitCast(
+                                    DestElementPtrAddr, PrivateLlvmPtrType),
+                                PrivatePtrType->castAs<PointerType>());
       break;
     }
     case ThreadToScratchpad: {
       // Step 1.1: Get the address for the src element in the Reduce list.
       Address SrcElementPtrAddr = Bld.CreateConstArrayGEP(SrcBase, Idx);
-      SrcElementAddr = CGF.EmitLoadOfPointer(
-          SrcElementPtrAddr,
-          C.getPointerType(Private->getType())->castAs<PointerType>());
+      SrcElementAddr =
+          CGF.EmitLoadOfPointer(CGF.Builder.CreateElementBitCast(
+                                    SrcElementPtrAddr, PrivateLlvmPtrType),
+                                PrivatePtrType->castAs<PointerType>());
 
       // Step 1.2: Get the address for dest element:
       // address = base + index * ElementSizeInChars.
@@ -2036,6 +2043,8 @@ static void emitReductionListCopy(
     // address of the next element in scratchpad memory, unless we're currently
     // processing the last one.  Memory alignment is also taken care of here.
     if ((IncrScratchpadDest || IncrScratchpadSrc) && (Idx + 1 < Size)) {
+      // FIXME: This code doesn't make any sense, it's trying to perform
+      // integer arithmetic on pointers.
       llvm::Value *ScratchpadBasePtr =
           IncrScratchpadDest ? DestBase.getPointer() : SrcBase.getPointer();
       llvm::Value *ElementSizeInChars = CGF.getTypeSize(Private->getType());
@@ -2057,9 +2066,10 @@ static void emitReductionListCopy(
 
       if (IncrScratchpadDest)
         DestBase =
-            Address::deprecated(ScratchpadBasePtr, CGF.getPointerAlign());
+            Address(ScratchpadBasePtr, CGF.VoidPtrTy, CGF.getPointerAlign());
       else /* IncrScratchpadSrc = true */
-        SrcBase = Address::deprecated(ScratchpadBasePtr, CGF.getPointerAlign());
+        SrcBase =
+            Address(ScratchpadBasePtr, CGF.VoidPtrTy, CGF.getPointerAlign());
     }
 
     ++Idx;
@@ -2208,7 +2218,7 @@ static llvm::Value *emitInterWarpCopyFunction(CodeGenModule &CGM,
       llvm::Value *ElemPtrPtr = CGF.EmitLoadOfScalar(
           ElemPtrPtrAddr, /*Volatile=*/false, C.VoidPtrTy, SourceLocation());
       // elemptr = ((CopyType*)(elemptrptr)) + I
-      Address ElemPtr = Address::deprecated(ElemPtrPtr, Align);
+      Address ElemPtr(ElemPtrPtr, CGF.Int8Ty, Align);
       ElemPtr = Bld.CreateElementBitCast(ElemPtr, CopyType);
       if (NumIters > 1)
         ElemPtr = Bld.CreateGEP(ElemPtr, Cnt);
@@ -2218,10 +2228,14 @@ static llvm::Value *emitInterWarpCopyFunction(CodeGenModule &CGM,
       llvm::Value *MediumPtrVal = Bld.CreateInBoundsGEP(
           TransferMedium->getValueType(), TransferMedium,
           {llvm::Constant::getNullValue(CGM.Int64Ty), WarpID});
-      Address MediumPtr = Address::deprecated(MediumPtrVal, Align);
       // Casting to actual data type.
       // MediumPtr = (CopyType*)MediumPtrAddr;
-      MediumPtr = Bld.CreateElementBitCast(MediumPtr, CopyType);
+      Address MediumPtr(
+          Bld.CreateBitCast(
+              MediumPtrVal,
+              CopyType->getPointerTo(
+                  MediumPtrVal->getType()->getPointerAddressSpace())),
+          CopyType, Align);
 
       // elem = *elemptr
       //*MediumPtr = elem
@@ -2267,15 +2281,19 @@ static llvm::Value *emitInterWarpCopyFunction(CodeGenModule &CGM,
       llvm::Value *SrcMediumPtrVal = Bld.CreateInBoundsGEP(
           TransferMedium->getValueType(), TransferMedium,
           {llvm::Constant::getNullValue(CGM.Int64Ty), ThreadID});
-      Address SrcMediumPtr = Address::deprecated(SrcMediumPtrVal, Align);
       // SrcMediumVal = *SrcMediumPtr;
-      SrcMediumPtr = Bld.CreateElementBitCast(SrcMediumPtr, CopyType);
+      Address SrcMediumPtr(
+          Bld.CreateBitCast(
+              SrcMediumPtrVal,
+              CopyType->getPointerTo(
+                  SrcMediumPtrVal->getType()->getPointerAddressSpace())),
+          CopyType, Align);
 
       // TargetElemPtr = (CopyType*)(SrcDataAddr[i]) + I
       Address TargetElemPtrPtr = Bld.CreateConstArrayGEP(LocalReduceList, Idx);
       llvm::Value *TargetElemPtrVal = CGF.EmitLoadOfScalar(
           TargetElemPtrPtr, /*Volatile=*/false, C.VoidPtrTy, Loc);
-      Address TargetElemPtr = Address::deprecated(TargetElemPtrVal, Align);
+      Address TargetElemPtr(TargetElemPtrVal, CGF.Int8Ty, Align);
       TargetElemPtr = Bld.CreateElementBitCast(TargetElemPtr, CopyType);
       if (NumIters > 1)
         TargetElemPtr = Bld.CreateGEP(TargetElemPtr, Cnt);
@@ -2603,10 +2621,11 @@ static llvm::Value *emitListToGlobalCopyFunction(
     LValue GlobLVal = CGF.EmitLValueForField(
         CGF.MakeNaturalAlignAddrLValue(BufferArrPtr, StaticTy), FD);
     Address GlobAddr = GlobLVal.getAddress(CGF);
-    llvm::Value *BufferPtr = Bld.CreateInBoundsGEP(
-        GlobAddr.getElementType(), GlobAddr.getPointer(), Idxs);
-    GlobLVal.setAddress(
-        Address::deprecated(BufferPtr, GlobAddr.getAlignment()));
+    llvm::Value *BufferPtr = Bld.CreateInBoundsGEP(GlobAddr.getElementType(),
+                                                   GlobAddr.getPointer(), Idxs);
+    GlobLVal.setAddress(Address(BufferPtr,
+                                CGF.ConvertTypeForMem(Private->getType()),
+                                GlobAddr.getAlignment()));
     switch (CGF.getEvaluationKind(Private->getType())) {
     case TEK_Scalar: {
       llvm::Value *V = CGF.EmitLoadOfScalar(
@@ -2812,10 +2831,11 @@ static llvm::Value *emitGlobalToListCopyFunction(
     LValue GlobLVal = CGF.EmitLValueForField(
         CGF.MakeNaturalAlignAddrLValue(BufferArrPtr, StaticTy), FD);
     Address GlobAddr = GlobLVal.getAddress(CGF);
-    llvm::Value *BufferPtr = Bld.CreateInBoundsGEP(
-        GlobAddr.getElementType(), GlobAddr.getPointer(), Idxs);
-    GlobLVal.setAddress(
-        Address::deprecated(BufferPtr, GlobAddr.getAlignment()));
+    llvm::Value *BufferPtr = Bld.CreateInBoundsGEP(GlobAddr.getElementType(),
+                                                   GlobAddr.getPointer(), Idxs);
+    GlobLVal.setAddress(Address(BufferPtr,
+                                CGF.ConvertTypeForMem(Private->getType()),
+                                GlobAddr.getAlignment()));
     switch (CGF.getEvaluationKind(Private->getType())) {
     case TEK_Scalar: {
       llvm::Value *V = CGF.EmitLoadOfScalar(GlobLVal, Loc);
@@ -3255,9 +3275,9 @@ void CGOpenMPRuntimeGPU::emitReduction(
 
   llvm::Value *RL = CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
       ReductionList.getPointer(), CGF.VoidPtrTy);
-  llvm::Function *ReductionFn = emitReductionFunction(
-      Loc, CGF.ConvertTypeForMem(ReductionArrayTy)->getPointerTo(), Privates,
-      LHSExprs, RHSExprs, ReductionOps);
+  llvm::Function *ReductionFn =
+      emitReductionFunction(Loc, CGF.ConvertTypeForMem(ReductionArrayTy),
+                            Privates, LHSExprs, RHSExprs, ReductionOps);
   llvm::Value *ReductionArrayTySize = CGF.getTypeSize(ReductionArrayTy);
   llvm::Function *ShuffleAndReduceFn = emitShuffleAndReduceFunction(
       CGM, Privates, ReductionArrayTy, ReductionFn, Loc);
@@ -3297,7 +3317,7 @@ void CGOpenMPRuntimeGPU::emitReduction(
           "_openmp_teams_reductions_buffer_$_$ptr");
     }
     llvm::Value *GlobalBufferPtr = CGF.EmitLoadOfScalar(
-        Address::deprecated(KernelTeamsReductionPtr, CGM.getPointerAlign()),
+        Address(KernelTeamsReductionPtr, CGF.VoidPtrTy, CGM.getPointerAlign()),
         /*Volatile=*/false, C.getPointerType(C.VoidPtrTy), Loc);
     llvm::Value *GlobalToBufferCpyFn = ::emitListToGlobalCopyFunction(
         CGM, Privates, ReductionArrayTy, Loc, TeamReductionRec, VarFieldMap);
@@ -3539,8 +3559,7 @@ llvm::Function *CGOpenMPRuntimeGPU::createParallelDataSharingWrapper(
       isOpenMPLoopBoundSharingDirective(D.getDirectiveKind())) {
     SharedArgListAddress = CGF.EmitLoadOfPointer(
         GlobalArgs, CGF.getContext()
-                        .getPointerType(CGF.getContext().getPointerType(
-                            CGF.getContext().VoidPtrTy))
+                        .getPointerType(CGF.getContext().VoidPtrTy)
                         .castAs<PointerType>());
   }
   unsigned Idx = 0;
@@ -3928,6 +3947,10 @@ void CGOpenMPRuntimeGPU::processRequiresDirective(
       case CudaArch::GFX1034:
       case CudaArch::GFX1035:
       case CudaArch::GFX1036:
+      case CudaArch::GFX1100:
+      case CudaArch::GFX1101:
+      case CudaArch::GFX1102:
+      case CudaArch::GFX1103:
       case CudaArch::Generic:
       case CudaArch::UNUSED:
       case CudaArch::UNKNOWN:

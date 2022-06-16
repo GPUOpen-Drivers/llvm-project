@@ -753,7 +753,7 @@ RegisterInfoEmitter::emitComposeSubRegIndices(raw_ostream &OS,
   }
   OS << "  };\n\n";
 
-  OS << "  --IdxA; assert(IdxA < " << SubRegIndicesSize << ");\n"
+  OS << "  --IdxA; assert(IdxA < " << SubRegIndicesSize << "); (void) IdxA;\n"
      << "  --IdxB; assert(IdxB < " << SubRegIndicesSize << ");\n";
   if (Rows.size() > 1)
     OS << "  return Rows[RowMap[IdxA]][IdxB];\n";
@@ -1187,6 +1187,8 @@ RegisterInfoEmitter::runTargetHeader(raw_ostream &OS, CodeGenTarget &Target,
      << "  bool isGeneralPurposeRegister(const MachineFunction &, "
      << "MCRegister) const override;\n"
      << "  bool isFixedRegister(const MachineFunction &, "
+     << "MCRegister) const override;\n"
+     << "  bool isArgumentRegister(const MachineFunction &, "
      << "MCRegister) const override;\n"
      << "  /// Devirtualized TargetFrameLowering.\n"
      << "  static const " << TargetName << "FrameLowering *getFrameLowering(\n"
@@ -1662,6 +1664,20 @@ RegisterInfoEmitter::runTargetDesc(raw_ostream &OS, CodeGenTarget &Target,
   OS << "      false;\n";
   OS << "}\n\n";
 
+  OS << "bool " << ClassName << "::\n"
+     << "isArgumentRegister(const MachineFunction &MF, "
+     << "MCRegister PhysReg) const {\n"
+     << "  return\n";
+  for (const CodeGenRegisterCategory &Category : RegCategories)
+    if (Category.getName() == "ArgumentRegisters") {
+      for (const CodeGenRegisterClass *RC : Category.getClasses())
+        OS << "      " << RC->getQualifiedName()
+           << "RegClass.contains(PhysReg) ||\n";
+      break;
+    }
+  OS << "      false;\n";
+  OS << "}\n\n";
+
   OS << "ArrayRef<const char *> " << ClassName
      << "::getRegMaskNames() const {\n";
   if (!CSRSets.empty()) {
@@ -1726,6 +1742,7 @@ void RegisterInfoEmitter::debugDump(raw_ostream &OS) {
     OS << "\tHasDisjunctSubRegs: " << RC.HasDisjunctSubRegs << '\n';
     OS << "\tCoveredBySubRegs: " << RC.CoveredBySubRegs << '\n';
     OS << "\tAllocatable: " << RC.Allocatable << '\n';
+    OS << "\tAllocationPriority: " << unsigned(RC.AllocationPriority) << '\n';
     OS << "\tRegs:";
     for (const CodeGenRegister *R : RC.getMembers()) {
       OS << " " << R->getName();

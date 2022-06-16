@@ -82,7 +82,7 @@ DEFAULT_FEATURES = [
   # Check for a Windows UCRT bug (fixed in UCRT/Windows 10.0.20348.0):
   # https://developercommunity.visualstudio.com/t/utf-8-locales-break-ctype-functions-for-wchar-type/1653678
   Feature(name='win32-broken-utf8-wchar-ctype',
-          when=lambda cfg: '_WIN32' in compilerMacros(cfg) and not programSucceeds(cfg, """
+          when=lambda cfg: not '_LIBCPP_HAS_NO_LOCALIZATION' in compilerMacros(cfg) and '_WIN32' in compilerMacros(cfg) and not programSucceeds(cfg, """
             #include <locale.h>
             #include <wctype.h>
             int main(int, char**) {
@@ -94,7 +94,7 @@ DEFAULT_FEATURES = [
   # Check for a Windows UCRT bug (fixed in UCRT/Windows 10.0.19041.0).
   # https://developercommunity.visualstudio.com/t/printf-formatting-with-g-outputs-too/1660837
   Feature(name='win32-broken-printf-g-precision',
-          when=lambda cfg: '_WIN32' in compilerMacros(cfg) and not programSucceeds(cfg, """
+          when=lambda cfg: not '_LIBCPP_HAS_NO_LOCALIZATION' in compilerMacros(cfg) and '_WIN32' in compilerMacros(cfg) and not programSucceeds(cfg, """
             #include <stdio.h>
             #include <string.h>
             int main(int, char**) {
@@ -116,6 +116,15 @@ DEFAULT_FEATURES = [
             }
           """)),
 
+  Feature(name='has-unix-headers',
+          when=lambda cfg: sourceBuilds(cfg, """
+            #include <unistd.h>
+            #include <sys/wait.h>
+            int main(int, char**) {
+              return 0;
+            }
+          """)),
+
   # Whether Bash can run on the executor.
   # This is not always the case, for example when running on embedded systems.
   #
@@ -134,13 +143,21 @@ DEFAULT_FEATURES = [
   Feature(name=lambda cfg: 'apple-clang-{__clang_major__}.{__clang_minor__}'.format(**compilerMacros(cfg)),                        when=_isAppleClang),
   Feature(name=lambda cfg: 'apple-clang-{__clang_major__}.{__clang_minor__}.{__clang_patchlevel__}'.format(**compilerMacros(cfg)), when=_isAppleClang),
 
-  Feature(name='clang',                                                                                                            when=_isClang,
-          actions=[AddCompileFlag('-D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER')]),
+  Feature(name='clang',                                                                                                            when=_isClang),
   Feature(name=lambda cfg: 'clang-{__clang_major__}'.format(**compilerMacros(cfg)),                                                when=_isClang),
   Feature(name=lambda cfg: 'clang-{__clang_major__}.{__clang_minor__}'.format(**compilerMacros(cfg)),                              when=_isClang),
   Feature(name=lambda cfg: 'clang-{__clang_major__}.{__clang_minor__}.{__clang_patchlevel__}'.format(**compilerMacros(cfg)),       when=_isClang),
 
-  Feature(name='gcc',                                                                                                              when=_isGCC),
+  # Note: Due to a GCC bug (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=104760), we must disable deprecation warnings
+  #       on GCC or spurious diagnostics are issued.
+  #
+  # TODO:
+  # - Enable -Wplacement-new with GCC.
+  # - Enable -Wclass-memaccess with GCC.
+  Feature(name='gcc',                                                                                                              when=_isGCC,
+          actions=[AddCompileFlag('-D_LIBCPP_DISABLE_DEPRECATION_WARNINGS'),
+                   AddCompileFlag('-Wno-placement-new'),
+                   AddCompileFlag('-Wno-class-memaccess')]),
   Feature(name=lambda cfg: 'gcc-{__GNUC__}'.format(**compilerMacros(cfg)),                                                         when=_isGCC),
   Feature(name=lambda cfg: 'gcc-{__GNUC__}.{__GNUC_MINOR__}'.format(**compilerMacros(cfg)),                                        when=_isGCC),
   Feature(name=lambda cfg: 'gcc-{__GNUC__}.{__GNUC_MINOR__}.{__GNUC_PATCHLEVEL__}'.format(**compilerMacros(cfg)),                  when=_isGCC),
@@ -157,20 +174,24 @@ DEFAULT_FEATURES = [
 # is defined after including <__config_site>, add a Lit feature called
 # `libcpp-xxx-yyy-zzz`. When a macro is defined to a specific value
 # (e.g. `_LIBCPP_ABI_VERSION=2`), the feature is `libcpp-xxx-yyy-zzz=<value>`.
+#
+# Note that features that are more strongly tied to libc++ are named libcpp-foo,
+# while features that are more general in nature are not prefixed with 'libcpp-'.
 macros = {
-  '_LIBCPP_HAS_NO_MONOTONIC_CLOCK': 'libcpp-has-no-monotonic-clock',
-  '_LIBCPP_HAS_NO_THREADS': 'libcpp-has-no-threads',
+  '_LIBCPP_HAS_NO_MONOTONIC_CLOCK': 'no-monotonic-clock',
+  '_LIBCPP_HAS_NO_THREADS': 'no-threads',
   '_LIBCPP_HAS_THREAD_API_EXTERNAL': 'libcpp-has-thread-api-external',
   '_LIBCPP_HAS_THREAD_API_PTHREAD': 'libcpp-has-thread-api-pthread',
   '_LIBCPP_NO_VCRUNTIME': 'libcpp-no-vcruntime',
   '_LIBCPP_ABI_VERSION': 'libcpp-abi-version',
-  '_LIBCPP_HAS_NO_FILESYSTEM_LIBRARY': 'libcpp-has-no-filesystem-library',
-  '_LIBCPP_HAS_NO_RANDOM_DEVICE': 'libcpp-has-no-random-device',
-  '_LIBCPP_HAS_NO_LOCALIZATION': 'libcpp-has-no-localization',
-  '_LIBCPP_HAS_NO_WIDE_CHARACTERS': 'libcpp-has-no-wide-characters',
+  '_LIBCPP_HAS_NO_FILESYSTEM_LIBRARY': 'no-filesystem',
+  '_LIBCPP_HAS_NO_RANDOM_DEVICE': 'no-random-device',
+  '_LIBCPP_HAS_NO_LOCALIZATION': 'no-localization',
+  '_LIBCPP_HAS_NO_WIDE_CHARACTERS': 'no-wide-characters',
   '_LIBCPP_HAS_NO_INCOMPLETE_FORMAT': 'libcpp-has-no-incomplete-format',
   '_LIBCPP_HAS_NO_INCOMPLETE_RANGES': 'libcpp-has-no-incomplete-ranges',
   '_LIBCPP_HAS_NO_UNICODE': 'libcpp-has-no-unicode',
+  '_LIBCPP_ENABLE_DEBUG_MODE': 'libcpp-has-debug-mode',
 }
 for macro, feature in macros.items():
   DEFAULT_FEATURES.append(
@@ -185,6 +206,7 @@ for macro, feature in macros.items():
 locales = {
   'en_US.UTF-8':     ['en_US.UTF-8', 'en_US.utf8', 'English_United States.1252'],
   'fr_FR.UTF-8':     ['fr_FR.UTF-8', 'fr_FR.utf8', 'French_France.1252'],
+  'ja_JP.UTF-8':     ['ja_JP.UTF-8', 'ja_JP.utf8', 'Japanese_Japan.923'],
   'ru_RU.UTF-8':     ['ru_RU.UTF-8', 'ru_RU.utf8', 'Russian_Russia.1251'],
   'zh_CN.UTF-8':     ['zh_CN.UTF-8', 'zh_CN.utf8', 'Chinese_China.936'],
   'fr_CA.ISO8859-1': ['fr_CA.ISO8859-1', 'French_Canada.1252'],
@@ -201,7 +223,34 @@ for locale, alts in locales.items():
 DEFAULT_FEATURES += [
   Feature(name='darwin', when=lambda cfg: '__APPLE__' in compilerMacros(cfg)),
   Feature(name='windows', when=lambda cfg: '_WIN32' in compilerMacros(cfg)),
-  Feature(name='windows-dll', when=lambda cfg: '_WIN32' in compilerMacros(cfg) and not '_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS' in compilerMacros(cfg)),
+  Feature(name='windows-dll', when=lambda cfg: '_WIN32' in compilerMacros(cfg) and programSucceeds(cfg, """
+            #include <iostream>
+            #include <windows.h>
+            #include <winnt.h>
+            int main(int, char**) {
+              // Get a pointer to a data member that gets linked from the C++
+              // library. This must be a data member (functions can get
+              // thunk inside the calling executable), and must not be
+              // something that is defined inline in headers.
+              void *ptr = &std::cout;
+              // Get a handle to the current main executable.
+              void *exe = GetModuleHandle(NULL);
+              // The handle points at the PE image header. Navigate through
+              // the header structure to find the size of the PE image (the
+              // executable).
+              PIMAGE_DOS_HEADER dosheader = (PIMAGE_DOS_HEADER)exe;
+              PIMAGE_NT_HEADERS ntheader = (PIMAGE_NT_HEADERS)((BYTE *)dosheader + dosheader->e_lfanew);
+              PIMAGE_OPTIONAL_HEADER peheader = &ntheader->OptionalHeader;
+              void *exeend = (BYTE*)exe + peheader->SizeOfImage;
+              // Check if the tested pointer - the data symbol from the
+              // C++ library - is located within the exe.
+              if (ptr >= exe && ptr <= exeend)
+                return 1;
+              // Return success if it was outside of the executable, i.e.
+              // loaded from a DLL.
+              return 0;
+            }
+          """), actions=[AddCompileFlag('-DTEST_WINDOWS_DLL')]),
   Feature(name='linux', when=lambda cfg: '__linux__' in compilerMacros(cfg)),
   Feature(name='netbsd', when=lambda cfg: '__NetBSD__' in compilerMacros(cfg)),
   Feature(name='freebsd', when=lambda cfg: '__FreeBSD__' in compilerMacros(cfg))

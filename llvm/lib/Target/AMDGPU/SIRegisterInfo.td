@@ -211,8 +211,15 @@ defm SRC_SCC : SIRegLoHi16<"src_scc", 253>;
 // Should never be emitted.
 def SCC : SIReg<"scc">;
 
-defm M0 : SIRegLoHi16 <"m0", 124>;
-defm SGPR_NULL : SIRegLoHi16 <"null", 125>;
+// Encoding changes between subtarget generations.
+// See also Utils/AMDGPUBaseInfo.cpp MAP_REG2REG.
+defm M0_gfxpre11 : SIRegLoHi16 <"m0", 124>;
+defm M0_gfx11plus : SIRegLoHi16 <"m0", 125>;
+defm M0 : SIRegLoHi16 <"m0", 0>;
+
+defm SGPR_NULL_gfxpre11 : SIRegLoHi16 <"null", 125>;
+defm SGPR_NULL_gfx11plus : SIRegLoHi16 <"null", 124>;
+defm SGPR_NULL : SIRegLoHi16 <"null", 0>;
 
 defm SRC_SHARED_BASE : SIRegLoHi16<"src_shared_base", 235>;
 defm SRC_SHARED_LIMIT : SIRegLoHi16<"src_shared_limit", 236>;
@@ -887,11 +894,11 @@ defm AV_64 : AVRegClass<2, VReg_64.RegTypes, (add VGPR_64), (add AGPR_64)>;
 defm AV_96 : AVRegClass<3, VReg_96.RegTypes, (add VGPR_96), (add AGPR_96)>;
 defm AV_128 : AVRegClass<4, VReg_128.RegTypes, (add VGPR_128), (add AGPR_128)>;
 defm AV_160 : AVRegClass<5, VReg_160.RegTypes, (add VGPR_160), (add AGPR_160)>;
-defm AV_192 : AVRegClass<6, VReg_160.RegTypes, (add VGPR_192), (add AGPR_192)>;
-defm AV_224 : AVRegClass<7, VReg_160.RegTypes, (add VGPR_224), (add AGPR_224)>;
-defm AV_256 : AVRegClass<8, VReg_160.RegTypes, (add VGPR_256), (add AGPR_256)>;
-defm AV_512 : AVRegClass<16, VReg_160.RegTypes, (add VGPR_512), (add AGPR_512)>;
-defm AV_1024 : AVRegClass<32, VReg_160.RegTypes, (add VGPR_1024), (add AGPR_1024)>;
+defm AV_192 : AVRegClass<6, VReg_192.RegTypes, (add VGPR_192), (add AGPR_192)>;
+defm AV_224 : AVRegClass<7, VReg_224.RegTypes, (add VGPR_224), (add AGPR_224)>;
+defm AV_256 : AVRegClass<8, VReg_256.RegTypes, (add VGPR_256), (add AGPR_256)>;
+defm AV_512 : AVRegClass<16, VReg_512.RegTypes, (add VGPR_512), (add AGPR_512)>;
+defm AV_1024 : AVRegClass<32, VReg_1024.RegTypes, (add VGPR_1024), (add AGPR_1024)>;
 
 //===----------------------------------------------------------------------===//
 //  Register operands
@@ -1062,6 +1069,15 @@ def VRegSrc_32 : RegisterOperand<VGPR_32> {
 }
 
 //===----------------------------------------------------------------------===//
+// VGPRSrc_*
+//===----------------------------------------------------------------------===//
+
+// An 8-bit RegisterOperand wrapper for a VGPR
+def VGPRSrc_32 : RegisterOperand<VGPR_32> {
+  let DecoderMethod = "DecodeVGPR_32RegisterClass";
+}
+
+//===----------------------------------------------------------------------===//
 //  ASrc_* Operands with an AccVGPR
 //===----------------------------------------------------------------------===//
 
@@ -1090,7 +1106,7 @@ defm VISrc_512  : RegInlineOperandAC<"VReg", "VISrc_512",  "_512">;
 defm VISrc_1024 : RegInlineOperandAC<"VReg", "VISrc_1024", "_1024">;
 
 //===----------------------------------------------------------------------===//
-//  AVSrc_* Operands with an AGPR or VGPR
+//  AVSrc_*, AVDst_*, AVLdSt_* Operands with an AGPR or VGPR
 //===----------------------------------------------------------------------===//
 
 def AVSrc_32 : RegisterOperand<AV_32> {
@@ -1100,6 +1116,21 @@ def AVSrc_32 : RegisterOperand<AV_32> {
 
 def AVSrc_64 : RegisterOperand<AV_64> {
   let DecoderMethod = "DecodeAV_64RegisterClass";
+  let EncoderMethod = "getAVOperandEncoding";
+}
+
+def AVSrc_128 : RegisterOperand<AV_128> {
+  let DecoderMethod = "DecodeAV_128RegisterClass";
+  let EncoderMethod = "getAVOperandEncoding";
+}
+
+def AVDst_128 : RegisterOperand<AV_128> {
+  let DecoderMethod = "DecodeAVDst_128RegisterClass";
+  let EncoderMethod = "getAVOperandEncoding";
+}
+
+def AVDst_512 : RegisterOperand<AV_512> {
+  let DecoderMethod = "DecodeAVDst_512RegisterClass";
   let EncoderMethod = "getAVOperandEncoding";
 }
 

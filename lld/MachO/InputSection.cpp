@@ -82,6 +82,8 @@ void ConcatInputSection::foldIdentical(ConcatInputSection *copy) {
   copy->live = false;
   copy->wasCoalesced = true;
   copy->replacement = this;
+  for (auto &copySym : copy->symbols)
+    copySym->wasIdenticalCodeFolded = true;
 
   // Merge the sorted vectors of symbols together.
   auto it = symbols.begin();
@@ -264,6 +266,11 @@ bool macho::isCfStringSection(const InputSection *isec) {
 bool macho::isClassRefsSection(const InputSection *isec) {
   return isec->getName() == section_names::objcClassRefs &&
          isec->getSegName() == segment_names::data;
+}
+
+bool macho::isEhFrameSection(const InputSection *isec) {
+  return isec->getName() == section_names::ehFrame &&
+         isec->getSegName() == segment_names::text;
 }
 
 std::string lld::toString(const InputSection *isec) {

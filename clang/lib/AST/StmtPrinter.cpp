@@ -1005,6 +1005,30 @@ void StmtPrinter::VisitOMPGenericLoopDirective(OMPGenericLoopDirective *Node) {
   PrintOMPExecutableDirective(Node);
 }
 
+void StmtPrinter::VisitOMPTeamsGenericLoopDirective(
+    OMPTeamsGenericLoopDirective *Node) {
+  Indent() << "#pragma omp teams loop";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPTargetTeamsGenericLoopDirective(
+    OMPTargetTeamsGenericLoopDirective *Node) {
+  Indent() << "#pragma omp target teams loop";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPParallelGenericLoopDirective(
+    OMPParallelGenericLoopDirective *Node) {
+  Indent() << "#pragma omp parallel loop";
+  PrintOMPExecutableDirective(Node);
+}
+
+void StmtPrinter::VisitOMPTargetParallelGenericLoopDirective(
+    OMPTargetParallelGenericLoopDirective *Node) {
+  Indent() << "#pragma omp target parallel loop";
+  PrintOMPExecutableDirective(Node);
+}
+
 //===----------------------------------------------------------------------===//
 //  Expr printing methods.
 //===----------------------------------------------------------------------===//
@@ -1152,6 +1176,11 @@ void StmtPrinter::VisitIntegerLiteral(IntegerLiteral *Node) {
     return;
   bool isSigned = Node->getType()->isSignedIntegerType();
   OS << toString(Node->getValue(), 10, isSigned);
+
+  if (isa<BitIntType>(Node->getType())) {
+    OS << (isSigned ? "wb" : "uwb");
+    return;
+  }
 
   // Emit suffixes.  Integer literals are always a builtin integer type.
   switch (Node->getType()->castAs<BuiltinType>()->getKind()) {

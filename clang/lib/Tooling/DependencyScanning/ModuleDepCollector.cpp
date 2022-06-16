@@ -23,9 +23,21 @@ static void optimizeHeaderSearchOpts(HeaderSearchOptions &Opts,
   // Only preserve search paths that were used during the dependency scan.
   std::vector<HeaderSearchOptions::Entry> Entries = Opts.UserEntries;
   Opts.UserEntries.clear();
-  for (unsigned I = 0; I < Entries.size(); ++I)
-    if (MF.SearchPathUsage[I])
-      Opts.UserEntries.push_back(Entries[I]);
+
+  llvm::BitVector SearchPathUsage(Entries.size());
+  llvm::DenseSet<const serialization::ModuleFile *> Visited;
+  std::function<void(const serialization::ModuleFile *)> VisitMF =
+      [&](const serialization::ModuleFile *MF) {
+        SearchPathUsage |= MF->SearchPathUsage;
+        Visited.insert(MF);
+        for (const serialization::ModuleFile *Import : MF->Imports)
+          if (!Visited.contains(Import))
+            VisitMF(Import);
+      };
+  VisitMF(&MF);
+
+  for (auto Idx : SearchPathUsage.set_bits())
+    Opts.UserEntries.push_back(Entries[Idx]);
 }
 
 CompilerInvocation ModuleDepCollector::makeInvocationForModuleBuildWithoutPaths(
@@ -135,7 +147,7 @@ void ModuleDepCollectorPP::FileChanged(SourceLocation Loc,
 
 void ModuleDepCollectorPP::InclusionDirective(
     SourceLocation HashLoc, const Token &IncludeTok, StringRef FileName,
-    bool IsAngled, CharSourceRange FilenameRange, const FileEntry *File,
+    bool IsAngled, CharSourceRange FilenameRange, Optional<FileEntryRef> File,
     StringRef SearchPath, StringRef RelativePath, const Module *Imported,
     SrcMgr::CharacteristicKind FileType) {
   if (!File && !Imported) {
@@ -187,7 +199,7 @@ void ModuleDepCollectorPP::EndOfMainFile() {
   MDC.Consumer.handleDependencyOutputOpts(*MDC.Opts);
 
   for (auto &&I : MDC.ModularDeps)
-    MDC.Consumer.handleModuleDependency(I.second);
+    MDC.Consumer.handleModuleDependency(*I.second);
 
   for (auto &&I : MDC.FileDeps)
     MDC.Consumer.handleFileDependency(I);
@@ -200,11 +212,12 @@ ModuleID ModuleDepCollectorPP::handleTopLevelModule(const Module *M) {
   assert(M == M->getTopLevelModule() && "Expected top level module!");
 
   // If this module has been handled already, just return its ID.
-  auto ModI = MDC.ModularDeps.insert({M, ModuleDeps{}});
+  auto ModI = MDC.ModularDeps.insert({M, nullptr});
   if (!ModI.second)
-    return ModI.first->second.ID;
+    return ModI.first->second->ID;
 
-  ModuleDeps &MD = ModI.first->second;
+  ModI.first->second = std::make_unique<ModuleDeps>();
+  ModuleDeps &MD = *ModI.first->second;
 
   MD.ID.ModuleName = M->getFullModuleName();
   MD.ImportedByMainFile = DirectModularDeps.contains(M);

@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "clang/Basic/AttributeCommonInfo.h"
 #include "clang/Basic/Attributes.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/FileManager.h"
@@ -1511,7 +1512,7 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
       } else {
         FN += PLoc.getFilename();
       }
-      getLangOpts().remapPathPrefix(FN);
+      processPathForFileMacro(FN, getLangOpts(), getTargetInfo());
       Lexer::Stringify(FN);
       OS << '"' << FN << '"';
     }
@@ -1577,14 +1578,35 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
     Tok.setKind(tok::string_literal);
   } else if (II == Ident__FLT_EVAL_METHOD__) {
     // __FLT_EVAL_METHOD__ is set to the default value.
-    OS << getTUFPEvalMethod();
-    // __FLT_EVAL_METHOD__ expands to a simple numeric value.
-    Tok.setKind(tok::numeric_constant);
-    if (getLastFPEvalPragmaLocation().isValid()) {
-      // The program is ill-formed. The value of __FLT_EVAL_METHOD__ is altered
-      // by the pragma.
-      Diag(Tok, diag::err_illegal_use_of_flt_eval_macro);
-      Diag(getLastFPEvalPragmaLocation(), diag::note_pragma_entered_here);
+    if (getTUFPEvalMethod() ==
+        LangOptions::FPEvalMethodKind::FEM_Indeterminable) {
+      // This is possible if `AllowFPReassoc` or `AllowReciprocal` is enabled.
+      // These modes can be triggered via the command line option `-ffast-math`
+      // or via a `pragam float_control`.
+      // __FLT_EVAL_METHOD__ expands to -1.
+      // The `minus` operator is the next token we read from the stream.
+      auto Toks = std::make_unique<Token[]>(1);
+      OS << "-";
+      Tok.setKind(tok::minus);
+      // Push the token `1` to the stream.
+      Token NumberToken;
+      NumberToken.startToken();
+      NumberToken.setKind(tok::numeric_constant);
+      NumberToken.setLiteralData("1");
+      NumberToken.setLength(1);
+      Toks[0] = NumberToken;
+      EnterTokenStream(std::move(Toks), 1, /*DisableMacroExpansion*/ false,
+                       /*IsReinject*/ false);
+    } else {
+      OS << getTUFPEvalMethod();
+      // __FLT_EVAL_METHOD__ expands to a simple numeric value.
+      Tok.setKind(tok::numeric_constant);
+      if (getLastFPEvalPragmaLocation().isValid()) {
+        // The program is ill-formed. The value of __FLT_EVAL_METHOD__ is
+        // altered by the pragma.
+        Diag(Tok, diag::err_illegal_use_of_flt_eval_macro);
+        Diag(getLastFPEvalPragmaLocation(), diag::note_pragma_entered_here);
+      }
     }
   } else if (II == Ident__COUNTER__) {
     // __COUNTER__ expands to a simple numeric value.
@@ -1619,7 +1641,9 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
             // usual allocation and deallocation functions. Required by libc++
             return 201802;
           default:
-            return true;
+            return Builtin::evaluateRequiredTargetFeatures(
+                getBuiltinInfo().getRequiredFeatures(II->getBuiltinID()),
+                getTargetInfo().getTargetOpts().FeatureMap);
           }
           return true;
         } else if (II->getTokenID() != tok::identifier ||
@@ -1666,8 +1690,9 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
       [this](Token &Tok, bool &HasLexedNextToken) -> int {
         IdentifierInfo *II = ExpectFeatureIdentifierInfo(Tok, *this,
                                            diag::err_feature_check_malformed);
-        return II ? hasAttribute(AttrSyntax::GNU, nullptr, II,
-                                 getTargetInfo(), getLangOpts()) : 0;
+        return II ? hasAttribute(AttributeCommonInfo::Syntax::AS_GNU, nullptr,
+                                 II, getTargetInfo(), getLangOpts())
+                  : 0;
       });
   } else if (II == Ident__has_declspec) {
     EvaluateFeatureLikeBuiltinMacro(OS, Tok, II, *this, true,
@@ -1677,8 +1702,8 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
         if (II) {
           const LangOptions &LangOpts = getLangOpts();
           return LangOpts.DeclSpecKeyword &&
-                 hasAttribute(AttrSyntax::Declspec, nullptr, II,
-                              getTargetInfo(), LangOpts);
+                 hasAttribute(AttributeCommonInfo::Syntax::AS_Declspec, nullptr,
+                              II, getTargetInfo(), LangOpts);
         }
 
         return false;
@@ -1707,7 +1732,9 @@ void Preprocessor::ExpandBuiltinMacro(Token &Tok) {
                                              diag::err_feature_check_malformed);
           }
 
-          AttrSyntax Syntax = IsCXX ? AttrSyntax::CXX : AttrSyntax::C;
+          AttributeCommonInfo::Syntax Syntax =
+              IsCXX ? AttributeCommonInfo::Syntax::AS_CXX11
+                    : AttributeCommonInfo::Syntax::AS_C2x;
           return II ? hasAttribute(Syntax, ScopeII, II, getTargetInfo(),
                                    getLangOpts())
                     : 0;
@@ -1864,4 +1891,17 @@ void Preprocessor::markMacroAsUsed(MacroInfo *MI) {
   if (MI->isWarnIfUnused() && !MI->isUsed())
     WarnUnusedMacroLocs.erase(MI->getDefinitionLoc());
   MI->setIsUsed(true);
+}
+
+void Preprocessor::processPathForFileMacro(SmallVectorImpl<char> &Path,
+                                           const LangOptions &LangOpts,
+                                           const TargetInfo &TI) {
+  LangOpts.remapPathPrefix(Path);
+  if (LangOpts.UseTargetPathSeparator) {
+    if (TI.getTriple().isOSWindows())
+      llvm::sys::path::remove_dots(Path, false,
+                                   llvm::sys::path::Style::windows_backslash);
+    else
+      llvm::sys::path::remove_dots(Path, false, llvm::sys::path::Style::posix);
+  }
 }

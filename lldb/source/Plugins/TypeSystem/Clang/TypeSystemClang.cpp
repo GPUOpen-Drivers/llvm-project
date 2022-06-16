@@ -495,6 +495,9 @@ static void ParseLangArgs(LangOptions &Opts, InputKind IK, const char *triple) {
     case clang::Language::HIP:
       LangStd = LangStandard::lang_hip;
       break;
+    case clang::Language::HLSL:
+      LangStd = LangStandard::lang_hlsl;
+      break;
     }
   }
 
@@ -507,7 +510,6 @@ static void ParseLangArgs(LangOptions &Opts, InputKind IK, const char *triple) {
   Opts.GNUMode = Std.isGNUMode();
   Opts.GNUInline = !Std.isC99();
   Opts.HexFloats = Std.hasHexFloats();
-  Opts.ImplicitInt = Std.hasImplicitInt();
 
   Opts.WChar = true;
 
@@ -1146,7 +1148,7 @@ CompilerType TypeSystemClang::GetBuiltinTypeForDWARFEncodingAndBitSize(
     break;
   }
 
-  Log *log = GetLog(LLDBLog::Commands);
+  Log *log = GetLog(LLDBLog::Types);
   LLDB_LOG(log,
            "error: need to add support for DW_TAG_base_type '{0}' "
            "encoded with DW_ATE = {1:x}, bit_size = {2}",
@@ -4172,6 +4174,7 @@ TypeSystemClang::GetTypeClass(lldb::opaque_compiler_type_t type) {
     break;
 
   case clang::Type::Attributed:
+  case clang::Type::BTFTagAttributed:
     break;
   case clang::Type::TemplateTypeParm:
     break;
@@ -5097,6 +5100,7 @@ lldb::Encoding TypeSystemClang::GetEncoding(lldb::opaque_compiler_type_t type,
   case clang::Type::DependentSizedExtVector:
   case clang::Type::UnresolvedUsing:
   case clang::Type::Attributed:
+  case clang::Type::BTFTagAttributed:
   case clang::Type::TemplateTypeParm:
   case clang::Type::SubstTemplateTypeParm:
   case clang::Type::SubstTemplateTypeParmPack:
@@ -5250,6 +5254,7 @@ lldb::Format TypeSystemClang::GetFormat(lldb::opaque_compiler_type_t type) {
   case clang::Type::DependentSizedExtVector:
   case clang::Type::UnresolvedUsing:
   case clang::Type::Attributed:
+  case clang::Type::BTFTagAttributed:
   case clang::Type::TemplateTypeParm:
   case clang::Type::SubstTemplateTypeParm:
   case clang::Type::SubstTemplateTypeParmPack:
@@ -9828,10 +9833,7 @@ void ScratchTypeSystemClang::Dump(llvm::raw_ostream &output) {
   std::vector<KeyAndTS> sorted_typesystems;
   for (const auto &a : m_isolated_asts)
     sorted_typesystems.emplace_back(a.first, a.second.get());
-  llvm::stable_sort(sorted_typesystems,
-                    [](const KeyAndTS &lhs, const KeyAndTS &rhs) {
-                      return lhs.first < rhs.first;
-                    });
+  llvm::stable_sort(sorted_typesystems, llvm::less_first());
 
   // Dump each sub-AST too.
   for (const auto &a : sorted_typesystems) {

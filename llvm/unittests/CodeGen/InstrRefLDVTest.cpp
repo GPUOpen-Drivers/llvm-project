@@ -7,8 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -1109,9 +1113,10 @@ TEST_F(InstrRefLDVTest, MLocDiamondSpills) {
   // Create a stack location and ensure it's tracked.
   SpillLoc SL = {getRegByName("RSP"), StackOffset::getFixed(-8)};
   SpillLocationNo SpillNo = *MTracker->getOrTrackSpillLoc(SL);
-  ASSERT_EQ(MTracker->getNumLocs(), 10u); // Tracks all possible stack locs.
+  ASSERT_EQ(MTracker->getNumLocs(), 11u); // Tracks all possible stack locs.
   // Locations are: RSP, stack slots from 2^3 bits wide up to 2^9 for zmm regs,
   // then slots for sub_8bit_hi and sub_16bit_hi ({8, 8} and {16, 16}).
+  // Finally, one for spilt fp80 registers.
 
   // Pick out the locations on the stack that various x86 regs would be written
   // to. HAX is the upper 16 bits of EAX.
@@ -1131,7 +1136,7 @@ TEST_F(InstrRefLDVTest, MLocDiamondSpills) {
   // ignore here.
 
   FuncValueTable MInLocs, MOutLocs;
-  std::tie(MInLocs, MOutLocs) = allocValueTables(4, 10);
+  std::tie(MInLocs, MOutLocs) = allocValueTables(4, 11);
 
   // Transfer function: start with nothing.
   SmallVector<MLocTransferMap, 1> TransferFunc;
@@ -1166,7 +1171,7 @@ TEST_F(InstrRefLDVTest, MLocDiamondSpills) {
   // function.
   TransferFunc[1].insert({ALStackLoc, ALDefInBlk1});
   TransferFunc[1].insert({HAXStackLoc, HAXDefInBlk1});
-  initValueArray(MInLocs, 4, 10);
+  initValueArray(MInLocs, 4, 11);
   placeMLocPHIs(*MF, AllBlocks, MInLocs, TransferFunc);
   EXPECT_EQ(MInLocs[3][ALStackLoc.asU64()], ALPHI);
   EXPECT_EQ(MInLocs[3][AXStackLoc.asU64()], AXPHI);

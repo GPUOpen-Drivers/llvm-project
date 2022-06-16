@@ -60,7 +60,7 @@ public:
 
   TypeSize getRegisterBitWidth(TargetTransformInfo::RegisterKind K) const;
 
-  InstructionCost getRegUsageForType(Type *Ty);
+  unsigned getRegUsageForType(Type *Ty);
 
   InstructionCost getMaskedMemoryOpCost(unsigned Opcode, Type *Src,
                                         Align Alignment, unsigned AddressSpace,
@@ -80,13 +80,22 @@ public:
   InstructionCost getSpliceCost(VectorType *Tp, int Index);
   InstructionCost getShuffleCost(TTI::ShuffleKind Kind, VectorType *Tp,
                                  ArrayRef<int> Mask, int Index,
-                                 VectorType *SubTp);
+                                 VectorType *SubTp,
+                                 ArrayRef<const Value *> Args = None);
+
+  InstructionCost getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
+                                        TTI::TargetCostKind CostKind);
 
   InstructionCost getGatherScatterOpCost(unsigned Opcode, Type *DataTy,
                                          const Value *Ptr, bool VariableMask,
                                          Align Alignment,
                                          TTI::TargetCostKind CostKind,
                                          const Instruction *I);
+
+  InstructionCost getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
+                                   TTI::CastContextHint CCH,
+                                   TTI::TargetCostKind CostKind,
+                                   const Instruction *I = nullptr);
 
   InstructionCost getMinMaxReductionCost(VectorType *Ty, VectorType *CondTy,
                                          bool IsUnsigned,
@@ -107,7 +116,7 @@ public:
     // Don't allow elements larger than the ELEN.
     // FIXME: How to limit for scalable vectors?
     if (isa<FixedVectorType>(DataType) &&
-        DataType->getScalarSizeInBits() > ST->getMaxELENForFixedLengthVectors())
+        DataType->getScalarSizeInBits() > ST->getELEN())
       return false;
 
     if (Alignment <
@@ -135,7 +144,7 @@ public:
     // Don't allow elements larger than the ELEN.
     // FIXME: How to limit for scalable vectors?
     if (isa<FixedVectorType>(DataType) &&
-        DataType->getScalarSizeInBits() > ST->getMaxELENForFixedLengthVectors())
+        DataType->getScalarSizeInBits() > ST->getELEN())
       return false;
 
     if (Alignment <
@@ -152,6 +161,16 @@ public:
     return isLegalMaskedGatherScatter(DataType, Alignment);
   }
 
+  bool forceScalarizeMaskedGather(VectorType *VTy, Align Alignment) {
+    // Scalarize masked gather for RV64 if EEW=64 indices aren't supported.
+    return ST->is64Bit() && !ST->hasVInstructionsI64();
+  }
+
+  bool forceScalarizeMaskedScatter(VectorType *VTy, Align Alignment) {
+    // Scalarize masked scatter for RV64 if EEW=64 indices aren't supported.
+    return ST->is64Bit() && !ST->hasVInstructionsI64();
+  }
+
   /// \returns How the target needs this vector-predicated operation to be
   /// transformed.
   TargetTransformInfo::VPLegalization
@@ -162,9 +181,6 @@ public:
 
   bool isLegalToVectorizeReduction(const RecurrenceDescriptor &RdxDesc,
                                    ElementCount VF) const {
-    if (!ST->hasVInstructions())
-      return false;
-
     if (!VF.isScalable())
       return true;
 
@@ -196,18 +212,53 @@ public:
     return VF == 1 ? 1 : ST->getMaxInterleaveFactor();
   }
 
-  // TODO: We should define RISC-V's own register classes.
-  //       e.g. register class for FPR.
+  enum RISCVRegisterClass { GPRRC, FPRRC, VRRC };
   unsigned getNumberOfRegisters(unsigned ClassID) const {
-    bool Vector = (ClassID == 1);
-    if (Vector) {
-      if (ST->hasVInstructions())
+    switch (ClassID) {
+    case RISCVRegisterClass::GPRRC:
+      // 31 = 32 GPR - x0 (zero register)
+      // FIXME: Should we exclude fixed registers like SP, TP or GP?
+      return 31;
+    case RISCVRegisterClass::FPRRC:
+      if (ST->hasStdExtF())
         return 32;
       return 0;
+    case RISCVRegisterClass::VRRC:
+      // Although there are 32 vector registers, v0 is special in that it is the
+      // only register that can be used to hold a mask.
+      // FIXME: Should we conservatively return 31 as the number of usable
+      // vector registers?
+      return ST->hasVInstructions() ? 32 : 0;
     }
-    // 31 = 32 GPR - x0 (zero register)
-    // FIXME: Should we exclude fixed registers like SP, TP or GP?
-    return 31;
+    llvm_unreachable("unknown register class");
+  }
+
+  unsigned getRegisterClassForType(bool Vector, Type *Ty = nullptr) const {
+    if (Vector)
+      return RISCVRegisterClass::VRRC;
+    if (!Ty)
+      return RISCVRegisterClass::GPRRC;
+
+    Type *ScalarTy = Ty->getScalarType();
+    if ((ScalarTy->isHalfTy() && ST->hasStdExtZfh()) ||
+        (ScalarTy->isFloatTy() && ST->hasStdExtF()) ||
+        (ScalarTy->isDoubleTy() && ST->hasStdExtD())) {
+      return RISCVRegisterClass::FPRRC;
+    }
+
+    return RISCVRegisterClass::GPRRC;
+  }
+
+  const char *getRegisterClassName(unsigned ClassID) const {
+    switch (ClassID) {
+    case RISCVRegisterClass::GPRRC:
+      return "RISCV::GPRRC";
+    case RISCVRegisterClass::FPRRC:
+      return "RISCV::FPRRC";
+    case RISCVRegisterClass::VRRC:
+      return "RISCV::VRRC";
+    }
+    llvm_unreachable("unknown register class");
   }
 };
 

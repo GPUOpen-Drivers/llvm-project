@@ -132,7 +132,7 @@ static cl::opt<bool> UnrollAllowRemainder(
              "when unrolling a loop."));
 
 static cl::opt<bool>
-    UnrollRuntime("unroll-runtime", cl::ZeroOrMore, cl::Hidden,
+    UnrollRuntime("unroll-runtime", cl::Hidden,
                   cl::desc("Unroll loops with run-time trip counts"));
 
 static cl::opt<unsigned> UnrollMaxUpperBound(
@@ -787,15 +787,13 @@ shouldPragmaUnroll(Loop *L, const PragmaInfo &PInfo,
 
   // 2nd priority is unroll count set by pragma.
   if (PInfo.PragmaCount > 0) {
-    if ((UP.AllowRemainder || (TripMultiple % PInfo.PragmaCount == 0)) &&
-        UCE.getUnrolledLoopSize(UP, PInfo.PragmaCount) < PragmaUnrollThreshold)
+    if ((UP.AllowRemainder || (TripMultiple % PInfo.PragmaCount == 0)))
       return PInfo.PragmaCount;
   }
 
-  if (PInfo.PragmaFullUnroll && TripCount != 0) {
-    if (UCE.getUnrolledLoopSize(UP, TripCount) < PragmaUnrollThreshold)
-      return TripCount;
-  }
+  if (PInfo.PragmaFullUnroll && TripCount != 0)
+    return TripCount;
+
   // if didn't return until here, should continue to other priorties
   return None;
 }
@@ -911,7 +909,7 @@ bool llvm::computeUnrollCount(
   if (PP.PeelCount) {
     if (UnrollCount.getNumOccurrences() > 0) {
       report_fatal_error("Cannot specify both explicit peel count and "
-                         "explicit unroll count");
+                         "explicit unroll count", /*GenCrashDiag=*/false);
     }
     UP.Count = 1;
     UP.Runtime = false;
@@ -1547,8 +1545,12 @@ PreservedAnalyses LoopFullUnrollPass::run(Loop &L, LoopAnalysisManager &AM,
 
 PreservedAnalyses LoopUnrollPass::run(Function &F,
                                       FunctionAnalysisManager &AM) {
-  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &LI = AM.getResult<LoopAnalysis>(F);
+  // There are no loops in the function. Return before computing other expensive
+  // analyses.
+  if (LI.empty())
+    return PreservedAnalyses::all();
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &AC = AM.getResult<AssumptionAnalysis>(F);

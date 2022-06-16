@@ -62,6 +62,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineLoopUtils.h"
@@ -1298,7 +1299,7 @@ bool LowOverheadLoop::ValidateMVEInst(MachineInstr *MI) {
 }
 
 bool ARMLowOverheadLoops::runOnMachineFunction(MachineFunction &mf) {
-  const ARMSubtarget &ST = static_cast<const ARMSubtarget&>(mf.getSubtarget());
+  const ARMSubtarget &ST = mf.getSubtarget<ARMSubtarget>();
   if (!ST.hasLOB())
     return false;
 

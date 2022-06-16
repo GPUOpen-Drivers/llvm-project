@@ -101,7 +101,7 @@ public:
     // Generate a call to printf for the current element of the loop.
     auto printOp = cast<toy::PrintOp>(op);
     auto elementLoad =
-        rewriter.create<memref::LoadOp>(loc, printOp.input(), loopIvs);
+        rewriter.create<memref::LoadOp>(loc, printOp.getInput(), loopIvs);
     rewriter.create<func::CallOp>(
         loc, printfRef, rewriter.getIntegerType(32),
         ArrayRef<Value>({formatSpecifierCst, elementLoad}));
@@ -172,6 +172,8 @@ private:
 namespace {
 struct ToyToLLVMLoweringPass
     : public PassWrapper<ToyToLLVMLoweringPass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ToyToLLVMLoweringPass)
+
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<LLVM::LLVMDialect, scf::SCFDialect>();
   }

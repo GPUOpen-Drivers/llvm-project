@@ -61,6 +61,8 @@ namespace {
 class SerializeToHsacoPass
     : public PassWrapper<SerializeToHsacoPass, gpu::SerializeToBlobPass> {
 public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SerializeToHsacoPass)
+
   SerializeToHsacoPass(StringRef triple, StringRef arch, StringRef features,
                        int optLevel);
   SerializeToHsacoPass(const SerializeToHsacoPass &other);
@@ -272,7 +274,7 @@ SerializeToHsacoPass::translateToLLVMIR(llvm::LLVMContext &llvmContext) {
 
   Optional<SmallVector<std::unique_ptr<llvm::Module>, 3>> mbModules;
   std::string theRocmPath = getRocmPath();
-  llvm::SmallString<32> bitcodePath(std::move(theRocmPath));
+  llvm::SmallString<32> bitcodePath(theRocmPath);
   llvm::sys::path::append(bitcodePath, "amdgcn", "bitcode");
   mbModules = loadLibraries(bitcodePath, libraries, llvmContext);
 
@@ -431,7 +433,7 @@ SerializeToHsacoPass::createHsaco(const SmallVectorImpl<char> &isaBinary) {
   llvm::FileRemover cleanupHsaco(tempHsacoFilename);
 
   std::string theRocmPath = getRocmPath();
-  llvm::SmallString<32> lldPath(std::move(theRocmPath));
+  llvm::SmallString<32> lldPath(theRocmPath);
   llvm::sys::path::append(lldPath, "llvm", "bin", "ld.lld");
   int lldResult = llvm::sys::ExecuteAndWait(
       lldPath,

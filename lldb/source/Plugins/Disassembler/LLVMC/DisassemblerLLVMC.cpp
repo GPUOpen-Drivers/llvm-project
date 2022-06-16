@@ -10,6 +10,7 @@
 
 #include "llvm-c/Disassembler.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
@@ -22,6 +23,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/AArch64TargetParser.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/TargetSelect.h"
@@ -90,8 +92,7 @@ public:
                    AddressClass addr_class)
       : Instruction(address, addr_class),
         m_disasm_wp(std::static_pointer_cast<DisassemblerLLVMC>(
-            disasm.shared_from_this())),
-        m_using_file_addr(false) {}
+            disasm.shared_from_this())) {}
 
   ~InstructionLLVMC() override = default;
 
@@ -822,7 +823,7 @@ protected:
   std::weak_ptr<DisassemblerLLVMC> m_disasm_wp;
 
   bool m_is_valid = false;
-  bool m_using_file_addr;
+  bool m_using_file_addr = false;
   bool m_has_visited_instruction = false;
 
   // Be conservative. If we didn't understand the instruction, say it:
@@ -1178,10 +1179,13 @@ DisassemblerLLVMC::DisassemblerLLVMC(const ArchSpec &arch,
       features_str += "+dspr2,";
   }
 
-  // If any AArch64 variant, enable latest ISA with any optional
-  // extensions like MTE.
+  // If any AArch64 variant, enable latest ISA with all extensions.
   if (triple.isAArch64()) {
-    features_str += "+v9.3a,+mte";
+    features_str += "+v9.3a,";
+    std::vector<llvm::StringRef> features;
+    // Get all possible features
+    llvm::AArch64::getExtensionFeatures(-1, features);
+    features_str += llvm::join(features, ",");
 
     if (triple.getVendor() == llvm::Triple::Apple)
       cpu = "apple-latest";

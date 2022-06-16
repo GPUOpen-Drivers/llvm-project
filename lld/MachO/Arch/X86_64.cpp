@@ -12,6 +12,7 @@
 #include "Target.h"
 
 #include "lld/Common/ErrorHandler.h"
+#include "mach-o/compact_unwind_encoding.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Endian.h"
 
@@ -32,7 +33,7 @@ struct X86_64 : TargetInfo {
 
   void writeStub(uint8_t *buf, const Symbol &) const override;
   void writeStubHelperHeader(uint8_t *buf) const override;
-  void writeStubHelperEntry(uint8_t *buf, const DylibSymbol &,
+  void writeStubHelperEntry(uint8_t *buf, const Symbol &,
                             uint64_t entryAddr) const override;
 
   void relaxGotLoad(uint8_t *loc, uint8_t type) const override;
@@ -166,7 +167,7 @@ static constexpr uint8_t stubHelperEntry[] = {
     0xe9, 0, 0, 0, 0, // 0x5: jmp <__stub_helper>
 };
 
-void X86_64::writeStubHelperEntry(uint8_t *buf, const DylibSymbol &sym,
+void X86_64::writeStubHelperEntry(uint8_t *buf, const Symbol &sym,
                                   uint64_t entryAddr) const {
   memcpy(buf, stubHelperEntry, sizeof(stubHelperEntry));
   write32le(buf + 1, sym.lazyBindOffset);
@@ -184,6 +185,10 @@ void X86_64::relaxGotLoad(uint8_t *loc, uint8_t type) const {
 X86_64::X86_64() : TargetInfo(LP64()) {
   cpuType = CPU_TYPE_X86_64;
   cpuSubtype = CPU_SUBTYPE_X86_64_ALL;
+
+  modeDwarfEncoding = UNWIND_X86_MODE_DWARF;
+  subtractorRelocType = X86_64_RELOC_SUBTRACTOR;
+  unsignedRelocType = X86_64_RELOC_UNSIGNED;
 
   stubSize = sizeof(stub);
   stubHelperHeaderSize = sizeof(stubHelperHeader);

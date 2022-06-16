@@ -43,10 +43,8 @@
 
 #include "llvm/Analysis/IRSimilarityIdentifier.h"
 #include "llvm/IR/PassManager.h"
-#include "llvm/IR/ValueMap.h"
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
-#include <set>
 
 struct OutlinableGroup;
 
@@ -86,6 +84,13 @@ struct OutlinableRegion {
   /// track of which extracted argument maps to which overall argument.
   DenseMap<unsigned, unsigned> ExtractedArgToAgg;
   DenseMap<unsigned, unsigned> AggArgToExtracted;
+
+  /// Values in the outlined functions will often be replaced by arguments. When
+  /// finding corresponding values from one region to another, the found value
+  /// will be the value the argument previously replaced.  This structure maps
+  /// any replaced values for the region to the aggregate aggregate argument
+  /// in the overall function.
+  DenseMap<Value *, Value *> RemappedArguments;
 
   /// Marks whether we need to change the order of the arguments when mapping
   /// the old extracted function call to the new aggregate outlined function
@@ -168,6 +173,15 @@ struct OutlinableRegion {
   /// \param V [in] - The Value to look for in the other region.
   /// \return The corresponding Value to \p V if it exists, otherwise nullptr.
   Value *findCorrespondingValueIn(const OutlinableRegion &Other, Value *V);
+
+  /// Find a corresponding BasicBlock for \p BB in similar OutlinableRegion \p Other.
+  ///
+  /// \param Other [in] - The OutlinableRegion to find the corresponding
+  /// BasicBlock in.
+  /// \param BB [in] - The BasicBlock to look for in the other region.
+  /// \return The corresponding Value to \p V if it exists, otherwise nullptr.
+  BasicBlock *findCorrespondingBlockIn(const OutlinableRegion &Other,
+                                       BasicBlock *BB);
 
   /// Get the size of the code removed from the region.
   ///

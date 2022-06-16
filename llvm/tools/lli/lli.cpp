@@ -144,8 +144,7 @@ namespace {
                          "-extra-module arguments."));
 
   cl::list<std::string>
-    Dylibs("dlopen", cl::desc("Dynamic libraries to load before linking"),
-           cl::ZeroOrMore);
+      Dylibs("dlopen", cl::desc("Dynamic libraries to load before linking"));
 
   // The MCJIT supports building for a target address space separate from
   // the JIT compilation process. Use a forked process and a copying
@@ -166,13 +165,10 @@ namespace {
                 cl::value_desc("filename"), cl::init(""));
 
   // Determine optimization level.
-  cl::opt<char>
-  OptLevel("O",
-           cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
-                    "(default = '-O2')"),
-           cl::Prefix,
-           cl::ZeroOrMore,
-           cl::init(' '));
+  cl::opt<char> OptLevel("O",
+                         cl::desc("Optimization level. [-O0, -O1, -O2, or -O3] "
+                                  "(default = '-O2')"),
+                         cl::Prefix, cl::init(' '));
 
   cl::opt<std::string>
   TargetTriple("mtriple", cl::desc("Override target triple for module"));
@@ -881,7 +877,7 @@ int runOrcJIT(const char *ProgName) {
   }
 
   Builder.setLazyCompileFailureAddr(
-      pointerToJITTargetAddress(exitOnLazyCallThroughFailure));
+      orc::ExecutorAddr::fromPtr(exitOnLazyCallThroughFailure));
   Builder.setNumCompileThreads(LazyJITCompileThreads);
 
   // If the object cache is enabled then set a custom compile function
@@ -1049,23 +1045,21 @@ int runOrcJIT(const char *ProgName) {
   for (auto &ThreadEntryPoint : ThreadEntryPoints) {
     auto EntryPointSym = ExitOnErr(J->lookup(ThreadEntryPoint));
     typedef void (*EntryPointPtr)();
-    auto EntryPoint =
-      reinterpret_cast<EntryPointPtr>(static_cast<uintptr_t>(EntryPointSym.getAddress()));
+    auto EntryPoint = EntryPointSym.toPtr<EntryPointPtr>();
     AltEntryThreads.push_back(std::thread([EntryPoint]() { EntryPoint(); }));
   }
 
   // Resolve and run the main function.
-  JITEvaluatedSymbol MainSym = ExitOnErr(J->lookup(EntryFunc));
+  auto MainAddr = ExitOnErr(J->lookup(EntryFunc));
   int Result;
 
   if (EPC) {
     // ExecutorProcessControl-based execution with JITLink.
-    Result = ExitOnErr(
-        EPC->runAsMain(orc::ExecutorAddr(MainSym.getAddress()), InputArgv));
+    Result = ExitOnErr(EPC->runAsMain(MainAddr, InputArgv));
   } else {
     // Manual in-process execution with RuntimeDyld.
     using MainFnTy = int(int, char *[]);
-    auto MainFn = jitTargetAddressToFunction<MainFnTy *>(MainSym.getAddress());
+    auto MainFn = MainAddr.toPtr<MainFnTy *>();
     Result = orc::runAsMain(MainFn, InputArgv, StringRef(InputFile));
   }
 

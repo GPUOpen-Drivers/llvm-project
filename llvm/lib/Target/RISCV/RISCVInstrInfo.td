@@ -347,9 +347,18 @@ def ixlenimm_li : Operand<XLenVT> {
 
 // Standalone (codegen-only) immleaf patterns.
 
-// A 12-bit signed immediate plus one where the imm range will be -2047~2048.
+// A 12-bit signed immediate plus one where the imm range will be [-2047, 2048].
 def simm12_plus1 : ImmLeaf<XLenVT,
   [{return (isInt<12>(Imm) && Imm != -2048) || Imm == 2048;}]>;
+
+// A 12-bit signed immediate sub one and exclude zero
+def simm12_minus1_nonzero : PatLeaf<(imm), [{
+  if (!N->hasOneUse())
+    return false;
+  // The immediate operand must be in range [-2049, 0) or (0, 2046].
+  int64_t Imm = N->getSExtValue();
+  return (Imm >= -2049 && Imm < 0) || (Imm > 0 && Imm <= 2046);
+}]>;
 
 // A 6-bit constant greater than 32.
 def uimm6gt32 : ImmLeaf<XLenVT, [{
@@ -358,8 +367,10 @@ def uimm6gt32 : ImmLeaf<XLenVT, [{
 
 // Addressing modes.
 // Necessary because a frameindex can't be matched directly in a pattern.
-def AddrFI : ComplexPattern<iPTR, 1, "SelectAddrFI", [frameindex], []>;
+def FrameAddrRegImm : ComplexPattern<iPTR, 2, "SelectFrameAddrRegImm",
+                                     [frameindex, or, add]>;
 def BaseAddr : ComplexPattern<iPTR, 1, "SelectBaseAddr">;
+def AddrRegImm : ComplexPattern<iPTR, 2, "SelectAddrRegImm">;
 
 // Return the negation of an immediate value.
 def NegImm : SDNodeXForm<imm, [{
@@ -373,9 +384,9 @@ def ImmSub32 : SDNodeXForm<imm, [{
                                    N->getValueType(0));
 }]>;
 
-// Return an immediate value plus 32.
-def ImmPlus32 : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant(N->getSExtValue() + 32, SDLoc(N),
+// Return an immediate value plus 1.
+def ImmPlus1 : SDNodeXForm<imm, [{
+  return CurDAG->getTargetConstant(N->getSExtValue() + 1, SDLoc(N),
                                    N->getValueType(0));
 }]>;
 
@@ -415,6 +426,11 @@ def AddiPairImmB : SDNodeXForm<imm, [{
                                    N->getValueType(0));
 }]>;
 
+def TrailingZeros : SDNodeXForm<imm, [{
+  return CurDAG->getTargetConstant(N->getAPIntValue().countTrailingZeros(),
+                                   SDLoc(N), N->getValueType(0));
+}]>;
+
 def XLenSubTrailingOnes : SDNodeXForm<imm, [{
   uint64_t XLen = Subtarget->getXLen();
   uint64_t TrailingOnes = N->getAPIntValue().countTrailingOnes();
@@ -423,7 +439,13 @@ def XLenSubTrailingOnes : SDNodeXForm<imm, [{
 }]>;
 
 // Checks if this mask is a non-empty sequence of ones starting at the
-// least significant bit with the remainder zero and exceeds simm12.
+// most/least significant bit with the remainder zero and exceeds simm32/simm12.
+def LeadingOnesMask : PatLeaf<(imm), [{
+  if (!N->hasOneUse())
+    return false;
+  return !isInt<32>(N->getSExtValue()) && isMask_64(~N->getSExtValue());
+}], TrailingZeros>;
+
 def TrailingOnesMask : PatLeaf<(imm), [{
   if (!N->hasOneUse())
     return false;
@@ -493,9 +515,12 @@ class Shift_ri<bits<5> imm11_7, bits<3> funct3, string opcodestr>
       Sched<[WriteShiftImm, ReadShiftImm]>;
 
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in
-class ALU_rr<bits<7> funct7, bits<3> funct3, string opcodestr>
+class ALU_rr<bits<7> funct7, bits<3> funct3, string opcodestr,
+             bit Commutable = 0>
     : RVInstR<funct7, funct3, OPC_OP, (outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2),
-              opcodestr, "$rd, $rs1, $rs2">;
+              opcodestr, "$rd, $rs1, $rs2"> {
+  let isCommutable = Commutable;
+}
 
 let hasNoSchedulingInfo = 1,
     hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
@@ -518,9 +543,12 @@ class ShiftW_ri<bits<7> imm11_5, bits<3> funct3, string opcodestr>
       Sched<[WriteShiftImm32, ReadShiftImm32]>;
 
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in
-class ALUW_rr<bits<7> funct7, bits<3> funct3, string opcodestr>
+class ALUW_rr<bits<7> funct7, bits<3> funct3, string opcodestr,
+              bit Commutable = 0>
     : RVInstR<funct7, funct3, OPC_OP_32, (outs GPR:$rd),
-              (ins GPR:$rs1, GPR:$rs2), opcodestr, "$rd, $rs1, $rs2">;
+              (ins GPR:$rs1, GPR:$rs2), opcodestr, "$rd, $rs1, $rs2"> {
+  let isCommutable = Commutable;
+}
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
 class Priv<string opcodestr, bits<7> funct7>
@@ -593,16 +621,26 @@ def SLLI : Shift_ri<0b00000, 0b001, "slli">;
 def SRLI : Shift_ri<0b00000, 0b101, "srli">;
 def SRAI : Shift_ri<0b01000, 0b101, "srai">;
 
-def ADD  : ALU_rr<0b0000000, 0b000, "add">, Sched<[WriteIALU, ReadIALU, ReadIALU]>;
-def SUB  : ALU_rr<0b0100000, 0b000, "sub">, Sched<[WriteIALU, ReadIALU, ReadIALU]>;
-def SLL  : ALU_rr<0b0000000, 0b001, "sll">, Sched<[WriteShiftReg, ReadShiftReg, ReadShiftReg]>;
-def SLT  : ALU_rr<0b0000000, 0b010, "slt">, Sched<[WriteIALU, ReadIALU, ReadIALU]>;
-def SLTU : ALU_rr<0b0000000, 0b011, "sltu">, Sched<[WriteIALU, ReadIALU, ReadIALU]>;
-def XOR  : ALU_rr<0b0000000, 0b100, "xor">, Sched<[WriteIALU, ReadIALU, ReadIALU]>;
-def SRL  : ALU_rr<0b0000000, 0b101, "srl">, Sched<[WriteShiftReg, ReadShiftReg, ReadShiftReg]>;
-def SRA  : ALU_rr<0b0100000, 0b101, "sra">, Sched<[WriteShiftReg, ReadShiftReg, ReadShiftReg]>;
-def OR   : ALU_rr<0b0000000, 0b110, "or">, Sched<[WriteIALU, ReadIALU, ReadIALU]>;
-def AND  : ALU_rr<0b0000000, 0b111, "and">, Sched<[WriteIALU, ReadIALU, ReadIALU]>;
+def ADD  : ALU_rr<0b0000000, 0b000, "add", /*Commutable*/1>,
+           Sched<[WriteIALU, ReadIALU, ReadIALU]>;
+def SUB  : ALU_rr<0b0100000, 0b000, "sub">,
+           Sched<[WriteIALU, ReadIALU, ReadIALU]>;
+def SLL  : ALU_rr<0b0000000, 0b001, "sll">,
+           Sched<[WriteShiftReg, ReadShiftReg, ReadShiftReg]>;
+def SLT  : ALU_rr<0b0000000, 0b010, "slt">,
+           Sched<[WriteIALU, ReadIALU, ReadIALU]>;
+def SLTU : ALU_rr<0b0000000, 0b011, "sltu">,
+           Sched<[WriteIALU, ReadIALU, ReadIALU]>;
+def XOR  : ALU_rr<0b0000000, 0b100, "xor", /*Commutable*/1>,
+           Sched<[WriteIALU, ReadIALU, ReadIALU]>;
+def SRL  : ALU_rr<0b0000000, 0b101, "srl">,
+           Sched<[WriteShiftReg, ReadShiftReg, ReadShiftReg]>;
+def SRA  : ALU_rr<0b0100000, 0b101, "sra">,
+           Sched<[WriteShiftReg, ReadShiftReg, ReadShiftReg]>;
+def OR   : ALU_rr<0b0000000, 0b110, "or", /*Commutable*/1>,
+           Sched<[WriteIALU, ReadIALU, ReadIALU]>;
+def AND  : ALU_rr<0b0000000, 0b111, "and", /*Commutable*/1>,
+           Sched<[WriteIALU, ReadIALU, ReadIALU]>;
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in {
 def FENCE : RVInstI<0b000, OPC_MISC_MEM, (outs),
@@ -677,7 +715,7 @@ def SLLIW : ShiftW_ri<0b0000000, 0b001, "slliw">;
 def SRLIW : ShiftW_ri<0b0000000, 0b101, "srliw">;
 def SRAIW : ShiftW_ri<0b0100000, 0b101, "sraiw">;
 
-def ADDW  : ALUW_rr<0b0000000, 0b000, "addw">,
+def ADDW  : ALUW_rr<0b0000000, 0b000, "addw", /*Commutable*/1>,
             Sched<[WriteIALU32, ReadIALU32, ReadIALU32]>;
 def SUBW  : ALUW_rr<0b0100000, 0b000, "subw">,
             Sched<[WriteIALU32, ReadIALU32, ReadIALU32]>;
@@ -1079,9 +1117,6 @@ class PatGprUimmLog2XLen<SDPatternOperator OpNode, RVInstIShift Inst>
 
 /// Predicates
 
-def IsOrAdd: PatFrag<(ops node:$A, node:$B), (or node:$A, node:$B), [{
-  return isOrEquivalentToAdd(N);
-}]>;
 def assertsexti32 : PatFrag<(ops node:$src), (assertsext node:$src), [{
   return cast<VTSDNode>(N->getOperand(1))->getVT().bitsLE(MVT::i32);
 }]>;
@@ -1134,7 +1169,9 @@ def : PatGprUimmLog2XLen<shl, SLLI>;
 def : PatGprUimmLog2XLen<srl, SRLI>;
 def : PatGprUimmLog2XLen<sra, SRAI>;
 
-// AND with trailing ones mask exceeding simm12.
+// AND with leading/trailing ones mask exceeding simm32/simm12.
+def : Pat<(i64 (and GPR:$rs, LeadingOnesMask:$mask)),
+          (SLLI (SRLI $rs, LeadingOnesMask:$mask), LeadingOnesMask:$mask)>;
 def : Pat<(XLenVT (and GPR:$rs, TrailingOnesMask:$mask)),
           (SRLI (SLLI $rs, TrailingOnesMask:$mask), TrailingOnesMask:$mask)>;
 
@@ -1167,10 +1204,8 @@ def PseudoAddTPRel : Pseudo<(outs GPR:$rd),
 
 /// FrameIndex calculations
 
-def : Pat<(add (XLenVT AddrFI:$Rs), simm12:$imm12),
-          (ADDI (XLenVT AddrFI:$Rs), simm12:$imm12)>;
-def : Pat<(IsOrAdd (XLenVT AddrFI:$Rs), simm12:$imm12),
-          (ADDI (XLenVT AddrFI:$Rs), simm12:$imm12)>;
+def : Pat<(FrameAddrRegImm GPR:$rs1, simm12:$imm12),
+          (ADDI GPR:$rs1, simm12:$imm12)>;
 
 /// Setcc
 
@@ -1195,6 +1230,10 @@ def : Pat<(setule GPR:$rs1, GPR:$rs2), (XORI (SLTU GPR:$rs2, GPR:$rs1), 1)>;
 def : Pat<(setgt GPR:$rs1, GPR:$rs2), (SLT GPR:$rs2, GPR:$rs1)>;
 def : Pat<(setge GPR:$rs1, GPR:$rs2), (XORI (SLT GPR:$rs1, GPR:$rs2), 1)>;
 def : Pat<(setle GPR:$rs1, GPR:$rs2), (XORI (SLT GPR:$rs2, GPR:$rs1), 1)>;
+def : Pat<(setgt GPR:$rs1, simm12_minus1_nonzero:$imm),
+          (XORI (SLTI GPR:$rs1, (ImmPlus1 simm12_minus1_nonzero:$imm)), 1)>;
+def : Pat<(setugt GPR:$rs1, simm12_minus1_nonzero:$imm),
+          (XORI (SLTIU GPR:$rs1, (ImmPlus1 simm12_minus1_nonzero:$imm)), 1)>;
 
 def IntCCtoRISCVCC : SDNodeXForm<riscv_selectcc, [{
   ISD::CondCode CC = cast<CondCodeSDNode>(N->getOperand(2))->get();
@@ -1253,7 +1292,8 @@ def : Pat<(brind (add GPRJALR:$rs1, simm12:$imm12)),
 // Define isCodeGenOnly = 0 to support parsing assembly "call" instruction.
 let isCall = 1, isBarrier = 1, isCodeGenOnly = 0, Size = 8, hasSideEffects = 0,
     mayStore = 0, mayLoad = 0 in
-def PseudoCALLReg : Pseudo<(outs GPR:$rd), (ins call_symbol:$func), []> {
+def PseudoCALLReg : Pseudo<(outs GPR:$rd), (ins call_symbol:$func), []>,
+                    Sched<[WriteIALU, WriteJalr, ReadJalr]> {
   let AsmString = "call\t$rd, $func";
 }
 
@@ -1264,7 +1304,8 @@ def PseudoCALLReg : Pseudo<(outs GPR:$rd), (ins call_symbol:$func), []> {
 // Define AsmString to print "call" when compile with -S flag.
 // Define isCodeGenOnly = 0 to support parsing assembly "call" instruction.
 let isCall = 1, Defs = [X1], isCodeGenOnly = 0, Size = 8 in
-def PseudoCALL : Pseudo<(outs), (ins call_symbol:$func), []> {
+def PseudoCALL : Pseudo<(outs), (ins call_symbol:$func), []>,
+                 Sched<[WriteIALU, WriteJalr, ReadJalr]> {
   let AsmString = "call\t$func";
 }
 
@@ -1289,7 +1330,8 @@ def PseudoRET : Pseudo<(outs), (ins), [(riscv_ret_flag)]>,
 // Define AsmString to print "tail" when compile with -S flag.
 let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1, Uses = [X2],
     Size = 8, isCodeGenOnly = 0 in
-def PseudoTAIL : Pseudo<(outs), (ins call_symbol:$dst), []> {
+def PseudoTAIL : Pseudo<(outs), (ins call_symbol:$dst), []>,
+                 Sched<[WriteIALU, WriteJalr, ReadJalr]> {
   let AsmString = "tail\t$dst";
 }
 
@@ -1305,7 +1347,8 @@ def : Pat<(riscv_tail (iPTR texternalsym:$dst)),
 
 let isCall = 0, isBarrier = 1, isBranch = 1, isTerminator = 1, Size = 8,
     isCodeGenOnly = 0, hasSideEffects = 0, mayStore = 0, mayLoad = 0 in
-def PseudoJump : Pseudo<(outs GPR:$rd), (ins pseudo_jump_symbol:$target), []> {
+def PseudoJump : Pseudo<(outs GPR:$rd), (ins pseudo_jump_symbol:$target), []>,
+                 Sched<[WriteIALU, WriteJalr, ReadJalr]> {
   let AsmString = "jump\t$target, $rd";
 }
 
@@ -1324,7 +1367,7 @@ let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 0,
 def PseudoLA_TLS_IE : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                              "la.tls.ie", "$dst, $src">;
 
-let hasSideEffects = 0, mayLoad = 1, mayStore = 0, Size = 8, isCodeGenOnly = 0,
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Size = 8, isCodeGenOnly = 0,
     isAsmParserOnly = 1 in
 def PseudoLA_TLS_GD : Pseudo<(outs GPR:$dst), (ins bare_symbol:$src), [],
                              "la.tls.gd", "$dst, $src">;
@@ -1351,11 +1394,8 @@ def PseudoZEXT_W : Pseudo<(outs GPR:$rd), (ins GPR:$rs), [], "zext.w", "$rd, $rs
 /// Loads
 
 multiclass LdPat<PatFrag LoadOp, RVInst Inst, ValueType vt = XLenVT> {
-  def : Pat<(vt (LoadOp BaseAddr:$rs1)), (Inst BaseAddr:$rs1, 0)>;
-  def : Pat<(vt (LoadOp (add BaseAddr:$rs1, simm12:$imm12))),
-            (Inst BaseAddr:$rs1, simm12:$imm12)>;
-  def : Pat<(vt (LoadOp (IsOrAdd AddrFI:$rs1, simm12:$imm12))),
-            (Inst AddrFI:$rs1, simm12:$imm12)>;
+  def : Pat<(vt (LoadOp (AddrRegImm GPR:$rs1, simm12:$imm12))),
+            (Inst GPR:$rs1, simm12:$imm12)>;
 }
 
 defm : LdPat<sextloadi8, LB>;
@@ -1370,12 +1410,8 @@ defm : LdPat<zextloadi16, LHU>;
 
 multiclass StPat<PatFrag StoreOp, RVInst Inst, RegisterClass StTy,
                  ValueType vt> {
-  def : Pat<(StoreOp (vt StTy:$rs2), BaseAddr:$rs1),
-            (Inst StTy:$rs2, BaseAddr:$rs1, 0)>;
-  def : Pat<(StoreOp (vt StTy:$rs2), (add BaseAddr:$rs1, simm12:$imm12)),
-            (Inst StTy:$rs2, BaseAddr:$rs1, simm12:$imm12)>;
-  def : Pat<(StoreOp (vt StTy:$rs2), (IsOrAdd AddrFI:$rs1, simm12:$imm12)),
-            (Inst StTy:$rs2, AddrFI:$rs1, simm12:$imm12)>;
+  def : Pat<(StoreOp (vt StTy:$rs2), (AddrRegImm GPR:$rs1, simm12:$imm12)),
+            (Inst StTy:$rs2, GPR:$rs1, simm12:$imm12)>;
 }
 
 defm : StPat<truncstorei8, SB, GPR, XLenVT>;

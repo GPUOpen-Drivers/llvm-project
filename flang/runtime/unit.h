@@ -13,6 +13,7 @@
 
 #include "buffer.h"
 #include "connection.h"
+#include "environment.h"
 #include "file.h"
 #include "format.h"
 #include "io-error.h"
@@ -34,7 +35,9 @@ class ExternalFileUnit : public ConnectionState,
                          public OpenFile,
                          public FileFrame<ExternalFileUnit> {
 public:
-  explicit ExternalFileUnit(int unitNumber) : unitNumber_{unitNumber} {}
+  explicit ExternalFileUnit(int unitNumber) : unitNumber_{unitNumber} {
+    isUTF8 = executionEnvironment.defaultUTF8;
+  }
   ~ExternalFileUnit() {}
 
   int unitNumber() const { return unitNumber_; }
@@ -47,7 +50,7 @@ public:
       int unit, const Terminator &, bool &wasExtant);
   static ExternalFileUnit &LookUpOrCreateAnonymous(int unit, Direction,
       std::optional<bool> isUnformatted, const Terminator &);
-  static ExternalFileUnit *LookUp(const char *path);
+  static ExternalFileUnit *LookUp(const char *path, std::size_t pathLen);
   static ExternalFileUnit &CreateNew(int unit, const Terminator &);
   static ExternalFileUnit *LookUpForClose(int unit);
   static ExternalFileUnit &NewUnit(const Terminator &, bool forChildIo);
@@ -80,8 +83,6 @@ public:
       const char *, std::size_t, std::size_t elementBytes, IoErrorHandler &);
   bool Receive(char *, std::size_t, std::size_t elementBytes, IoErrorHandler &);
   std::size_t GetNextInputBytes(const char *&, IoErrorHandler &);
-  std::optional<char32_t> GetCurrentChar(IoErrorHandler &);
-  void SetLeftTabLimit();
   bool BeginReadingRecord(IoErrorHandler &);
   void FinishReadingRecord(IoErrorHandler &);
   bool AdvanceRecord(IoErrorHandler &);
@@ -114,6 +115,7 @@ private:
   void DoEndfile(IoErrorHandler &);
   void CommitWrites();
   bool CheckDirectAccess(IoErrorHandler &);
+  void HitEndOnRead(IoErrorHandler &);
 
   int unitNumber_{-1};
   Direction direction_{Direction::Output};
@@ -123,7 +125,8 @@ private:
 
   Lock lock_;
 
-  // When an I/O statement is in progress on this unit, holds its state.
+  // When a synchronous I/O statement is in progress on this unit, holds its
+  // state.
   std::variant<std::monostate, OpenStatementState, CloseStatementState,
       ExternalFormattedIoStatementState<Direction::Output>,
       ExternalFormattedIoStatementState<Direction::Input>,

@@ -476,7 +476,9 @@ add_entrypoint_object(
   HDRS
     ../expf.h
   DEPENDS
+    .common_constants
     libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.polyeval
     libc.include.math
   COMPILE_OPTIONS
     -O3
@@ -489,9 +491,11 @@ add_entrypoint_object(
   HDRS
     ../exp2f.h
   DEPENDS
-    .exp_utils
-    .math_utils
+    libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.polyeval
     libc.include.math
+  COMPILE_OPTIONS
+    -O3
 )
 
 add_entrypoint_object(
@@ -501,9 +505,13 @@ add_entrypoint_object(
   HDRS
     ../expm1f.h
   DEPENDS
+    .common_constants
+    libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.multiply_add
+    libc.src.__support.FPUtil.polyeval
     libc.include.math
-    libc.src.math.expf
-    libc.src.math.fabsf
+  COMPILE_OPTIONS
+    -O3
 )
 
 add_entrypoint_object(
@@ -667,6 +675,8 @@ add_entrypoint_object(
   DEPENDS
     .common_constants
     libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.multiply_add
+    libc.src.__support.FPUtil.polyeval
   COMPILE_OPTIONS
     -O3
 )
@@ -680,6 +690,8 @@ add_entrypoint_object(
   DEPENDS
     .common_constants
     libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.multiply_add
+    libc.src.__support.FPUtil.polyeval
   COMPILE_OPTIONS
     -O3
 )
@@ -693,6 +705,7 @@ add_entrypoint_object(
   DEPENDS
     .common_constants
     libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.polyeval
     COMPILE_OPTIONS
     -O3
 )
@@ -706,6 +719,8 @@ add_entrypoint_object(
   DEPENDS
     .common_constants
     libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.multiply_add
+    libc.src.__support.FPUtil.polyeval
   COMPILE_OPTIONS
     -O3
 )
@@ -1069,7 +1084,9 @@ add_object_library(
   HDRS
     dp_trig.h
   DEPENDS
-    libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.fputil #FPBits and ManipulationFunction
+    libc.src.__support.FPUtil.xfloat
+    libc.src.__support.CPP.uint
   COMPILE_OPTIONS
    -O3
 )

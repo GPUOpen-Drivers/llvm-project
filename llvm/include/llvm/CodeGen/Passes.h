@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -51,10 +53,8 @@ namespace llvm {
   FunctionPass *createUnreachableBlockEliminationPass();
 
   /// createBasicBlockSections Pass - This pass assigns sections to machine
-  /// basic blocks and is enabled with -fbasic-block-sections. Buf is a memory
-  /// buffer that contains the list of functions and basic block ids to
-  /// selectively enable basic block sections.
-  MachineFunctionPass *createBasicBlockSectionsPass(const MemoryBuffer *Buf);
+  /// basic blocks and is enabled with -fbasic-block-sections.
+  MachineFunctionPass *createBasicBlockSectionsPass();
 
   /// createMachineFunctionSplitterPass - This pass splits machine functions
   /// using profile information.
@@ -494,6 +494,9 @@ namespace llvm {
   // This pass expands indirectbr instructions.
   FunctionPass *createIndirectBrExpandPass();
 
+  /// Creates CFI Fixup pass. \see CFIFixup.cpp
+  FunctionPass *createCFIFixup();
+
   /// Creates CFI Instruction Inserter pass. \see CFIInstrInserter.cpp
   FunctionPass *createCFIInstrInserter();
 
@@ -557,6 +560,9 @@ namespace llvm {
 
   /// JMC instrument pass.
   ModulePass *createJMCInstrumenterPass();
+
+  /// This pass converts conditional moves to conditional jumps when profitable.
+  FunctionPass *createSelectOptimizePass();
 } // End llvm namespace
 
 #endif

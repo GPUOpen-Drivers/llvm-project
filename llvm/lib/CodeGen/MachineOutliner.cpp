@@ -59,6 +59,8 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/Passes.h"
@@ -853,9 +855,10 @@ bool MachineOutliner::outline(Module &M,
       MBB.erase(std::next(StartIt), std::next(EndIt));
 
       // Keep track of what we removed by marking them all as -1.
-      std::for_each(Mapper.UnsignedVec.begin() + C.getStartIdx(),
-                    Mapper.UnsignedVec.begin() + C.getEndIdx() + 1,
-                    [](unsigned &I) { I = static_cast<unsigned>(-1); });
+      for (unsigned &I :
+           llvm::make_range(Mapper.UnsignedVec.begin() + C.getStartIdx(),
+                            Mapper.UnsignedVec.begin() + C.getEndIdx() + 1))
+        I = static_cast<unsigned>(-1);
       OutlinedSomething = true;
 
       // Statistics.

@@ -522,6 +522,10 @@ def pooling_nhwc_sum(I=TensorDef(T1, S.N, S.OH * S.SH + S.KH * S.DH,
                      dilations=IndexAttrDef(S.DH, S.DW, default=[1, 1])):
   """Performs sum pooling.
 
+  Layout:
+    * Input: NHWC.
+    * Kernel: HW.
+
   Numeric casting is performed on the input operand, promoting it to the same
   data type as the accumulator/output.
   """
@@ -529,6 +533,28 @@ def pooling_nhwc_sum(I=TensorDef(T1, S.N, S.OH * S.SH + S.KH * S.DH,
   domain(D.n, D.oh, D.ow, D.c, D.kh, D.kw)
   O[D.n, D.oh, D.ow, D.c] += TypeFn.cast_signed(
       U, I[D.n, D.oh * S.SH + D.kh * S.DH, D.ow * S.SW + D.kw * S.DW, D.c])
+
+
+@linalg_structured_op
+def pooling_nchw_sum(I=TensorDef(T1, S.N, S.C, S.OH * S.SH + S.KH * S.DH,
+                                 S.OW * S.SW + S.KW * S.DW),
+                     K=TensorDef(T2, S.KH, S.KW, index_dims=[D.kh, D.kw]),
+                     O=TensorDef(U, S.N, S.C, S.OH, S.OW, output=True),
+                     strides=IndexAttrDef(S.SH, S.SW, default=[1, 1]),
+                     dilations=IndexAttrDef(S.DH, S.DW, default=[1, 1])):
+  """Performs sum pooling.
+
+  Layout:
+    * Input: NCHW.
+    * Kernel: HW.
+
+  Numeric casting is performed on the input operand, promoting it to the same
+  data type as the accumulator/output.
+  """
+  implements(ConvolutionOpInterface)
+  domain(D.n, D.c, D.oh, D.ow, D.kh, D.kw)
+  O[D.n, D.c, D.oh, D.ow] += TypeFn.cast_signed(
+      U, I[D.n, D.c, D.oh * S.SH + D.kh * S.DH, D.ow * S.SW + D.kw * S.DW])
 
 
 @linalg_structured_op
@@ -715,7 +741,7 @@ def pooling_ndhwc_min(I=TensorDef(T1, S.N, S.OD * S.SD + S.KD * S.DD,
 
 
 @linalg_structured_op
-def fill_tensor(value=ScalarDef(T1), O=TensorDef(U, output=True)):
+def fill(value=ScalarDef(T1), O=TensorDef(U, output=True)):
   """Fills the output tensor with the given value.
 
   Works for arbitrary ranked output tensors since the operation performs scalar

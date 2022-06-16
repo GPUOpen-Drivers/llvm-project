@@ -166,7 +166,8 @@ define void @pos_priv_mem() {
 ; CHECK-NEXT:    call void @aligned_barrier()
 ; CHECK-NEXT:    [[ARGC:%.*]] = addrspacecast i32 addrspace(5)* [[ARG]] to i32*
 ; CHECK-NEXT:    store i32 [[B]], i32* [[ARGC]], align 4
-; CHECK-NEXT:    store i32 [[A]], i32* @PG1, align 4
+; CHECK-NEXT:    [[V:%.*]] = load i32, i32* [[LOC]], align 4
+; CHECK-NEXT:    store i32 [[V]], i32* @PG1, align 4
 ; CHECK-NEXT:    ret void
 ;
   %arg = load i32 addrspace(5)*, i32 addrspace(5)** @GPtr5
@@ -245,7 +246,7 @@ define void @pos_multiple() {
 !13 = !{i32 7, !"openmp-device", i32 50}
 ;.
 ; CHECK: attributes #[[ATTR0:[0-9]+]] = { "llvm.assume"="ompx_aligned_barrier" }
-; CHECK: attributes #[[ATTR1:[0-9]+]] = { convergent nounwind }
+; CHECK: attributes #[[ATTR1:[0-9]+]] = { convergent nocallback nounwind }
 ; CHECK: attributes #[[ATTR2:[0-9]+]] = { convergent nounwind willreturn }
 ;.
 ; CHECK: [[META0:![0-9]+]] = !{i32 7, !"openmp", i32 50}

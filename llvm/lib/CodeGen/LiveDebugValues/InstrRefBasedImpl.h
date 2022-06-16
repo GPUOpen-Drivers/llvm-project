@@ -10,17 +10,14 @@
 #define LLVM_LIB_CODEGEN_LIVEDEBUGVALUES_INSTRREFBASEDLDV_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/UniqueVector.h"
 #include "llvm/CodeGen/LexicalScopes.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
-#include "llvm/CodeGen/MachineFrameInfo.h"
-#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
-#include "llvm/CodeGen/TargetFrameLowering.h"
-#include "llvm/CodeGen/TargetInstrInfo.h"
-#include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 
 #include "LiveDebugValues.h"
@@ -199,7 +196,7 @@ public:
 };
 
 /// Meta qualifiers for a value. Pair of whatever expression is used to qualify
-/// the the value, and Boolean of whether or not it's indirect.
+/// the value, and Boolean of whether or not it's indirect.
 class DbgValueProperties {
 public:
   DbgValueProperties(const DIExpression *DIExpr, bool Indirect)
@@ -635,6 +632,19 @@ public:
 
   /// Return true if Idx is a spill machine location.
   bool isSpill(LocIdx Idx) const { return LocIdxToLocID[Idx] >= NumRegs; }
+
+  /// How large is this location (aka, how wide is a value defined there?).
+  unsigned getLocSizeInBits(LocIdx L) const {
+    unsigned ID = LocIdxToLocID[L];
+    if (!isSpill(L)) {
+      return TRI.getRegSizeInBits(Register(ID), MF.getRegInfo());
+    } else {
+      // The slot location on the stack is uninteresting, we care about the
+      // position of the value within the slot (which comes with a size).
+      StackSlotPos Pos = locIDToSpillIdx(ID);
+      return Pos.first;
+    }
+  }
 
   MLocIterator begin() { return MLocIterator(LocIdxToIDNum, 0); }
 

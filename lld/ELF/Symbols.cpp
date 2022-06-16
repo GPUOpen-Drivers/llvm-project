@@ -16,6 +16,7 @@
 #include "Writer.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Strings.h"
+#include "llvm/Support/Compiler.h"
 #include <cstring>
 
 using namespace llvm;
@@ -23,6 +24,24 @@ using namespace llvm::object;
 using namespace llvm::ELF;
 using namespace lld;
 using namespace lld::elf;
+
+static_assert(sizeof(SymbolUnion) <= 64, "SymbolUnion too large");
+
+template <typename T> struct AssertSymbol {
+  static_assert(std::is_trivially_destructible<T>(),
+                "Symbol types must be trivially destructible");
+  static_assert(sizeof(T) <= sizeof(SymbolUnion), "SymbolUnion too small");
+  static_assert(alignof(T) <= alignof(SymbolUnion),
+                "SymbolUnion not aligned enough");
+};
+
+LLVM_ATTRIBUTE_UNUSED static inline void assertSymbols() {
+  AssertSymbol<Defined>();
+  AssertSymbol<CommonSymbol>();
+  AssertSymbol<Undefined>();
+  AssertSymbol<SharedSymbol>();
+  AssertSymbol<LazyObject>();
+}
 
 std::string lld::toString(const elf::Symbol &sym) {
   StringRef name = sym.getName();
@@ -528,14 +547,28 @@ bool Symbol::shouldReplace(const Defined &other) const {
       return false;
   }
 
-  return isWeak() && !other.isWeak();
+  // Incoming STB_GLOBAL overrides STB_WEAK/STB_GNU_UNIQUE. -fgnu-unique changes
+  // some vague linkage data in COMDAT from STB_WEAK to STB_GNU_UNIQUE. Treat
+  // STB_GNU_UNIQUE like STB_WEAK so that we prefer the first among all
+  // STB_WEAK/STB_GNU_UNIQUE copies. If we prefer an incoming STB_GNU_UNIQUE to
+  // an existing STB_WEAK, there may be discarded section errors because the
+  // selected copy may be in a non-prevailing COMDAT.
+  return !isGlobal() && other.isGlobal();
 }
 
-void elf::reportDuplicate(const Symbol &sym, InputFile *newFile,
+void elf::reportDuplicate(const Symbol &sym, const InputFile *newFile,
                           InputSectionBase *errSec, uint64_t errOffset) {
   if (config->allowMultipleDefinition)
     return;
-  const Defined *d = cast<Defined>(&sym);
+  // In glibc<2.32, crti.o has .gnu.linkonce.t.__x86.get_pc_thunk.bx, which
+  // is sort of proto-comdat. There is actually no duplicate if we have
+  // full support for .gnu.linkonce.
+  const Defined *d = dyn_cast<Defined>(&sym);
+  if (!d || d->getName() == "__x86.get_pc_thunk.bx")
+    return;
+  // Allow absolute symbols with the same value for GNU ld compatibility.
+  if (!d->section && !errSec && errOffset && d->value == errOffset)
+    return;
   if (!d->section || !errSec) {
     error("duplicate symbol: " + toString(sym) + "\n>>> defined in " +
           toString(sym.file) + "\n>>> defined in " + toString(newFile));

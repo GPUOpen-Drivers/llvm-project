@@ -118,6 +118,10 @@ StringRef AMDGPUTargetStreamer::getArchNameFromElfMach(unsigned ElfMach) {
   case ELF::EF_AMDGPU_MACH_AMDGCN_GFX1034: AK = GK_GFX1034; break;
   case ELF::EF_AMDGPU_MACH_AMDGCN_GFX1035: AK = GK_GFX1035; break;
   case ELF::EF_AMDGPU_MACH_AMDGCN_GFX1036: AK = GK_GFX1036; break;
+  case ELF::EF_AMDGPU_MACH_AMDGCN_GFX1100: AK = GK_GFX1100; break;
+  case ELF::EF_AMDGPU_MACH_AMDGCN_GFX1101: AK = GK_GFX1101; break;
+  case ELF::EF_AMDGPU_MACH_AMDGCN_GFX1102: AK = GK_GFX1102; break;
+  case ELF::EF_AMDGPU_MACH_AMDGCN_GFX1103: AK = GK_GFX1103; break;
   case ELF::EF_AMDGPU_MACH_NONE:           AK = GK_NONE;    break;
   }
 
@@ -183,6 +187,10 @@ unsigned AMDGPUTargetStreamer::getElfMach(StringRef GPU) {
   case GK_GFX1034: return ELF::EF_AMDGPU_MACH_AMDGCN_GFX1034;
   case GK_GFX1035: return ELF::EF_AMDGPU_MACH_AMDGCN_GFX1035;
   case GK_GFX1036: return ELF::EF_AMDGPU_MACH_AMDGCN_GFX1036;
+  case GK_GFX1100: return ELF::EF_AMDGPU_MACH_AMDGCN_GFX1100;
+  case GK_GFX1101: return ELF::EF_AMDGPU_MACH_AMDGCN_GFX1101;
+  case GK_GFX1102: return ELF::EF_AMDGPU_MACH_AMDGCN_GFX1102;
+  case GK_GFX1103: return ELF::EF_AMDGPU_MACH_AMDGCN_GFX1103;
   case GK_NONE:    return ELF::EF_AMDGPU_MACH_NONE;
   }
 
@@ -525,7 +533,7 @@ void AMDGPUTargetELFStreamer::EmitNote(
   if (STI.getTargetTriple().getOS() == Triple::AMDHSA)
     NoteFlags = ELF::SHF_ALLOC;
 
-  S.PushSection();
+  S.pushSection();
   S.SwitchSection(
       Context.getELFSection(ElfNote::SectionName, ELF::SHT_NOTE, NoteFlags));
   S.emitInt32(NameSZ);                                        // namesz
@@ -535,7 +543,7 @@ void AMDGPUTargetELFStreamer::EmitNote(
   S.emitValueToAlignment(4, 0, 1, 0);                         // padding 0
   EmitDesc(S);                                                // desc
   S.emitValueToAlignment(4, 0, 1, 0);                         // padding 0
-  S.PopSection();
+  S.popSection();
 }
 
 unsigned AMDGPUTargetELFStreamer::getEFlags() {
@@ -709,9 +717,9 @@ void
 AMDGPUTargetELFStreamer::EmitAMDKernelCodeT(const amd_kernel_code_t &Header) {
 
   MCStreamer &OS = getStreamer();
-  OS.PushSection();
+  OS.pushSection();
   OS.emitBytes(StringRef((const char*)&Header, sizeof(Header)));
-  OS.PopSection();
+  OS.popSection();
 }
 
 void AMDGPUTargetELFStreamer::EmitAMDGPUSymbolType(StringRef SymbolName,
@@ -828,11 +836,11 @@ bool AMDGPUTargetELFStreamer::EmitCodeEnd(const MCSubtargetInfo &STI) {
   }
 
   MCStreamer &OS = getStreamer();
-  OS.PushSection();
+  OS.pushSection();
   OS.emitValueToAlignment(CacheLineSize, Encoded_pad, 4);
   for (unsigned I = 0; I < FillSize; I += 4)
     OS.emitInt32(Encoded_pad);
-  OS.PopSection();
+  OS.popSection();
   return true;
 }
 
