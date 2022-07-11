@@ -567,6 +567,8 @@ private:
   MetadataTypeMap VirtualMetadataIdMap;
   MetadataTypeMap GeneralizedMetadataIdMap;
 
+  llvm::DenseMap<const llvm::Constant *, llvm::GlobalVariable *> RTTIProxyMap;
+
 public:
   CodeGenModule(ASTContext &C, const HeaderSearchOptions &headersearchopts,
                 const PreprocessorOptions &ppopts,
@@ -798,6 +800,14 @@ public:
 
   void setDSOLocal(llvm::GlobalValue *GV) const;
 
+  bool shouldMapVisibilityToDLLExport(const NamedDecl *D) const {
+    return getLangOpts().hasDefaultVisibilityExportMapping() && D &&
+           (D->getLinkageAndVisibility().getVisibility() ==
+            DefaultVisibility) &&
+           (getLangOpts().isAllDefaultVisibilityExportMapping() ||
+            (getLangOpts().isExplicitDefaultVisibilityExportMapping() &&
+             D->getLinkageAndVisibility().isVisibilityExplicit()));
+  }
   void setDLLImportDLLExport(llvm::GlobalValue *GV, GlobalDecl D) const;
   void setDLLImportDLLExport(llvm::GlobalValue *GV, const NamedDecl *D) const;
   /// Set visibility, dllimport/dllexport and dso_local.
@@ -1306,8 +1316,9 @@ public:
   bool isInNoSanitizeList(SanitizerMask Kind, llvm::Function *Fn,
                           SourceLocation Loc) const;
 
-  bool isInNoSanitizeList(llvm::GlobalVariable *GV, SourceLocation Loc,
-                          QualType Ty, StringRef Category = StringRef()) const;
+  bool isInNoSanitizeList(SanitizerMask Kind, llvm::GlobalVariable *GV,
+                          SourceLocation Loc, QualType Ty,
+                          StringRef Category = StringRef()) const;
 
   /// Imbue XRay attributes to a function, applying the always/never attribute
   /// lists in the process. Returns true if we did imbue attributes this way,
@@ -1373,10 +1384,10 @@ public:
   /// optimization.
   bool HasHiddenLTOVisibility(const CXXRecordDecl *RD);
 
-  /// Returns whether the given record has public std LTO visibility
-  /// and therefore may not participate in (single-module) CFI and whole-program
-  /// vtable optimization.
-  bool HasLTOVisibilityPublicStd(const CXXRecordDecl *RD);
+  /// Returns whether the given record has public LTO visibility (regardless of
+  /// -lto-whole-program-visibility) and therefore may not participate in
+  /// (single-module) CFI and whole-program vtable optimization.
+  bool AlwaysHasLTOVisibilityPublic(const CXXRecordDecl *RD);
 
   /// Returns the vcall visibility of the given type. This is the scope in which
   /// a virtual function call could be made which ends up being dispatched to a
@@ -1433,6 +1444,9 @@ public:
   std::vector<const CXXRecordDecl *>
   getMostBaseClasses(const CXXRecordDecl *RD);
 
+  llvm::GlobalVariable *
+  GetOrCreateRTTIProxyGlobalVariable(llvm::Constant *Addr);
+
   /// Get the declaration of std::terminate for the platform.
   llvm::FunctionCallee getTerminateFn();
 
@@ -1451,7 +1465,7 @@ public:
   /// \param FN is a pointer to IR function being generated.
   /// \param FD is a pointer to function declaration if any.
   /// \param CGF is a pointer to CodeGenFunction that generates this function.
-  void GenOpenCLArgMetadata(llvm::Function *FN,
+  void GenKernelArgMetadata(llvm::Function *FN,
                             const FunctionDecl *FD = nullptr,
                             CodeGenFunction *CGF = nullptr);
 

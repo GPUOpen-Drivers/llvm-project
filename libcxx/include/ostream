@@ -138,10 +138,13 @@ template <class Stream, class T>
 #include <__config>
 #include <bitset>
 #include <ios>
-#include <iterator> // TODO: Remove this include
 #include <locale>
 #include <streambuf>
 #include <version>
+
+#ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
+#  include <iterator>
+#endif
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #  pragma GCC system_header

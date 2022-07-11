@@ -14,6 +14,7 @@
 
 #include "clang/AST/Type.h"
 #include "clang/Basic/LLVM.h"
+#include "clang/Basic/Sanitizers.h"
 #include "clang/Basic/SourceLocation.h"
 
 namespace llvm {
@@ -40,15 +41,11 @@ public:
   void reportGlobal(llvm::GlobalVariable *GV, const VarDecl &D,
                     bool IsDynInit = false);
   void reportGlobal(llvm::GlobalVariable *GV, SourceLocation Loc,
-                    StringRef Name, QualType Ty = {}, bool IsDynInit = false);
+                    StringRef Name, QualType Ty = {},
+                    SanitizerMask NoSanitizeAttrMask = {},
+                    bool IsDynInit = false);
   void disableSanitizerForGlobal(llvm::GlobalVariable *GV);
   void disableSanitizerForInstruction(llvm::Instruction *I);
-
-private:
-  void reportGlobal(llvm::GlobalVariable *GV, SourceLocation Loc,
-                    StringRef Name, QualType Ty, bool IsDynInit,
-                    bool IsExcluded);
-  llvm::MDNode *getLocationMetadata(SourceLocation Loc);
 };
 } // end namespace CodeGen
 } // end namespace clang

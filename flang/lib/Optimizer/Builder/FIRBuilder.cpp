@@ -510,13 +510,14 @@ genNullPointerComparison(fir::FirOpBuilder &builder, mlir::Location loc,
   return builder.create<mlir::arith::CmpIOp>(loc, condition, ptrToInt, c0);
 }
 
-mlir::Value fir::FirOpBuilder::genIsNotNull(mlir::Location loc,
-                                            mlir::Value addr) {
+mlir::Value fir::FirOpBuilder::genIsNotNullAddr(mlir::Location loc,
+                                                mlir::Value addr) {
   return genNullPointerComparison(*this, loc, addr,
                                   mlir::arith::CmpIPredicate::ne);
 }
 
-mlir::Value fir::FirOpBuilder::genIsNull(mlir::Location loc, mlir::Value addr) {
+mlir::Value fir::FirOpBuilder::genIsNullAddr(mlir::Location loc,
+                                             mlir::Value addr) {
   return genNullPointerComparison(*this, loc, addr,
                                   mlir::arith::CmpIPredicate::eq);
 }
@@ -714,7 +715,7 @@ fir::factory::getNonDefaultLowerBounds(fir::FirOpBuilder &builder,
 }
 
 llvm::SmallVector<mlir::Value>
-fir::factory::getNonDeferredLengthParams(const fir::ExtendedValue &exv) {
+fir::factory::getNonDeferredLenParams(const fir::ExtendedValue &exv) {
   return exv.match(
       [&](const fir::CharArrayBoxValue &character)
           -> llvm::SmallVector<mlir::Value> { return {character.getLen()}; },
@@ -1223,6 +1224,35 @@ llvm::Optional<std::int64_t> fir::factory::getIntIfConstant(mlir::Value value) {
     if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(definingOp))
       if (auto intAttr = cst.getValue().dyn_cast<mlir::IntegerAttr>())
         return intAttr.getInt();
+  return {};
+}
+
+llvm::Optional<std::int64_t>
+fir::factory::getExtentFromTriplet(mlir::Value lb, mlir::Value ub,
+                                   mlir::Value stride) {
+  std::function<llvm::Optional<std::int64_t>(mlir::Value)> getConstantValue =
+      [&](mlir::Value value) -> llvm::Optional<std::int64_t> {
+    if (auto valInt = fir::factory::getIntIfConstant(value))
+      return valInt;
+    auto *definingOp = value.getDefiningOp();
+    if (mlir::isa_and_nonnull<fir::ConvertOp>(definingOp)) {
+      auto valOp = mlir::dyn_cast<fir::ConvertOp>(definingOp);
+      return getConstantValue(valOp.getValue());
+    }
+    return {};
+  };
+  if (auto lbInt = getConstantValue(lb)) {
+    if (auto ubInt = getConstantValue(ub)) {
+      if (auto strideInt = getConstantValue(stride)) {
+        if (strideInt.value() != 0) {
+          std::int64_t extent =
+              1 + (ubInt.value() - lbInt.value()) / strideInt.value();
+          if (extent > 0)
+            return extent;
+        }
+      }
+    }
+  }
   return {};
 }
 

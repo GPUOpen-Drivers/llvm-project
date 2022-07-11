@@ -14,7 +14,7 @@
 #include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/Utils/Utils.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
@@ -147,8 +147,8 @@ createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRange args,
       cast<tosa::NegateOp>(op).quantization_info()) {
     auto quantizationInfo = cast<tosa::NegateOp>(op).quantization_info();
     int32_t inputBitWidth = elementTy.getIntOrFloatBitWidth();
-    int64_t inZp = quantizationInfo.getValue().getInput_zp();
-    int64_t outZp = quantizationInfo.getValue().getOutput_zp();
+    int64_t inZp = quantizationInfo.getValue().getInputZp();
+    int64_t outZp = quantizationInfo.getValue().getOutputZp();
 
     // Compute the maximum value that can occur in the intermediate buffer.
     int64_t zpAdd = inZp + outZp;
@@ -944,7 +944,7 @@ static bool createReassociationMapsForCollapse(
 
   // If both iterators didn't reach the end, we have leftover dimentions which
   // implies that we have a mismatch in shape.
-  return !(currSrcDim != srcShape.size() || currDstDim != dstShape.size());
+  return currSrcDim == srcShape.size() && currDstDim == dstShape.size();
 }
 
 namespace {
@@ -1847,7 +1847,7 @@ public:
       } else if (elementTy.isa<IntegerType>() && !padOp.quantization_info()) {
         constantAttr = rewriter.getIntegerAttr(elementTy, 0);
       } else if (elementTy.isa<IntegerType>() && padOp.quantization_info()) {
-        int64_t value = padOp.quantization_info().getValue().getInput_zp();
+        int64_t value = padOp.quantization_info()->getInputZp();
         constantAttr = rewriter.getIntegerAttr(elementTy, value);
       }
       if (constantAttr)

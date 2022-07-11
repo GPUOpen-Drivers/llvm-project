@@ -1867,7 +1867,7 @@ Sema::ActOnStringLiteral(ArrayRef<Token> StringToks, Scope *UDLScope) {
     StringTokLocs.push_back(Tok.getLocation());
 
   QualType CharTy = Context.CharTy;
-  StringLiteral::StringKind Kind = StringLiteral::Ascii;
+  StringLiteral::StringKind Kind = StringLiteral::Ordinary;
   if (Literal.isWide()) {
     CharTy = Context.getWideCharType();
     Kind = StringLiteral::Wide;
@@ -3568,7 +3568,7 @@ ExprResult Sema::BuildPredefinedExpr(SourceLocation Loc,
       ResTy = Context.getConstantArrayType(ResTy, LengthI, nullptr,
                                            ArrayType::Normal,
                                            /*IndexTypeQuals*/ 0);
-      SL = StringLiteral::Create(Context, Str, StringLiteral::Ascii,
+      SL = StringLiteral::Create(Context, Str, StringLiteral::Ordinary,
                                  /*Pascal*/ false, ResTy, Loc);
     }
   }
@@ -3834,9 +3834,10 @@ ExprResult Sema::ActOnNumericConstant(const Token &Tok, Scope *UDLScope) {
       QualType StrTy = Context.getConstantArrayType(
           Context.adjustStringLiteralBaseType(Context.CharTy.withConst()),
           llvm::APInt(32, Length + 1), nullptr, ArrayType::Normal, 0);
-      Expr *Lit = StringLiteral::Create(
-          Context, StringRef(TokSpelling.data(), Length), StringLiteral::Ascii,
-          /*Pascal*/false, StrTy, &TokLoc, 1);
+      Expr *Lit =
+          StringLiteral::Create(Context, StringRef(TokSpelling.data(), Length),
+                                StringLiteral::Ordinary,
+                                /*Pascal*/ false, StrTy, &TokLoc, 1);
       return BuildLiteralOperatorCall(R, OpNameInfo, Lit, TokLoc);
     }
 
@@ -7733,6 +7734,36 @@ bool Sema::areVectorTypesSameSize(QualType SrcTy, QualType DestTy) {
   return (SrcLen * SrcEltSize == DestLen * DestEltSize);
 }
 
+// This returns true if at least one of the types is an altivec vector.
+bool Sema::anyAltivecTypes(QualType SrcTy, QualType DestTy) {
+  assert((DestTy->isVectorType() || SrcTy->isVectorType()) &&
+         "expected at least one type to be a vector here");
+
+  bool IsSrcTyAltivec =
+      SrcTy->isVectorType() && (SrcTy->castAs<VectorType>()->getVectorKind() ==
+                                VectorType::AltiVecVector);
+  bool IsDestTyAltivec = DestTy->isVectorType() &&
+                         (DestTy->castAs<VectorType>()->getVectorKind() ==
+                          VectorType::AltiVecVector);
+
+  return (IsSrcTyAltivec || IsDestTyAltivec);
+}
+
+// This returns true if both vectors have the same element type.
+bool Sema::areSameVectorElemTypes(QualType SrcTy, QualType DestTy) {
+  assert((DestTy->isVectorType() || SrcTy->isVectorType()) &&
+         "expected at least one type to be a vector here");
+
+  uint64_t SrcLen, DestLen;
+  QualType SrcEltTy, DestEltTy;
+  if (!breakDownVectorType(SrcTy, SrcLen, SrcEltTy))
+    return false;
+  if (!breakDownVectorType(DestTy, DestLen, DestEltTy))
+    return false;
+
+  return (SrcEltTy == DestEltTy);
+}
+
 /// Are the two types lax-compatible vector types?  That is, given
 /// that one of them is a vector, do they have equal storage sizes,
 /// where the storage size is the number of elements times the element
@@ -9552,6 +9583,13 @@ Sema::CheckAssignmentConstraints(QualType LHSType, ExprResult &RHS,
       // vectors, the total size only needs to be the same. This is a bitcast;
       // no bits are changed but the result type is different.
       if (isLaxVectorConversion(RHSType, LHSType)) {
+        // The default for lax vector conversions with Altivec vectors will
+        // change, so if we are converting between vector types where
+        // at least one is an Altivec vector, emit a warning.
+        if (anyAltivecTypes(RHSType, LHSType) &&
+            !areSameVectorElemTypes(RHSType, LHSType))
+          Diag(RHS.get()->getExprLoc(), diag::warn_deprecated_lax_vec_conv_all)
+              << RHSType << LHSType;
         Kind = CK_BitCast;
         return IncompatibleVectors;
       }
@@ -9565,6 +9603,9 @@ Sema::CheckAssignmentConstraints(QualType LHSType, ExprResult &RHS,
       const VectorType *VecType = RHSType->getAs<VectorType>();
       if (VecType && VecType->getNumElements() == 1 &&
           isLaxVectorConversion(RHSType, LHSType)) {
+        if (VecType->getVectorKind() == VectorType::AltiVecVector)
+          Diag(RHS.get()->getExprLoc(), diag::warn_deprecated_lax_vec_conv_all)
+              << RHSType << LHSType;
         ExprResult *VecExpr = &RHS;
         *VecExpr = ImpCastExprToType(VecExpr->get(), LHSType, CK_BitCast);
         Kind = CK_BitCast;
@@ -10503,6 +10544,9 @@ QualType Sema::CheckVectorOperands(ExprResult &LHS, ExprResult &RHS,
   QualType OtherType = LHSVecType ? RHSType : LHSType;
   ExprResult *OtherExpr = LHSVecType ? &RHS : &LHS;
   if (isLaxVectorConversion(OtherType, VecType)) {
+    if (anyAltivecTypes(RHSType, LHSType) &&
+        !areSameVectorElemTypes(RHSType, LHSType))
+      Diag(Loc, diag::warn_deprecated_lax_vec_conv_all) << RHSType << LHSType;
     // If we're allowing lax vector conversions, only the total (data) size
     // needs to be the same. For non compound assignment, if one of the types is
     // scalar, the result is always the vector type.
@@ -11416,10 +11460,16 @@ static void DiagnoseBadShiftValues(Sema& S, ExprResult &LHS, ExprResult &RHS,
     return;
   llvm::APSInt Left = LHSResult.Val.getInt();
 
-  // If LHS does not have a signed type and non-negative value
-  // then, the behavior is undefined before C++2a. Warn about it.
-  if (Left.isNegative() && !S.getLangOpts().isSignedOverflowDefined() &&
-      !S.getLangOpts().CPlusPlus20) {
+  // Don't warn if signed overflow is defined, then all the rest of the
+  // diagnostics will not be triggered because the behavior is defined.
+  // Also don't warn in C++20 mode (and newer), as signed left shifts
+  // always wrap and never overflow.
+  if (S.getLangOpts().isSignedOverflowDefined() || S.getLangOpts().CPlusPlus20)
+    return;
+
+  // If LHS does not have a non-negative value then, the
+  // behavior is undefined before C++2a. Warn about it.
+  if (Left.isNegative()) {
     S.DiagRuntimeBehavior(Loc, LHS.get(),
                           S.PDiag(diag::warn_shift_lhs_negative)
                             << LHS.get()->getSourceRange());
@@ -14424,8 +14474,7 @@ static void RecordModifiableNonNullParam(Sema &S, const Expr *Exp) {
     if (!FD->hasAttr<NonNullAttr>() && !Param->hasAttr<NonNullAttr>())
       return;
   if (FunctionScopeInfo *FD = S.getCurFunction())
-    if (!FD->ModifiedNonNullParams.count(Param))
-      FD->ModifiedNonNullParams.insert(Param);
+    FD->ModifiedNonNullParams.insert(Param);
 }
 
 /// CheckIndirectionOperand - Type check unary indirection (prefix '*').
@@ -16705,7 +16754,7 @@ bool Sema::CheckConversionToObjCLiteral(QualType DstType, Expr *&Exp,
     if (!PT->isObjCIdType() &&
         !(ID && ID->getIdentifier()->isStr("NSString")))
       return false;
-    if (!SL->isAscii())
+    if (!SL->isOrdinary())
       return false;
 
     if (Diagnose) {
@@ -17895,7 +17944,7 @@ void Sema::MarkFunctionReferenced(SourceLocation Loc, FunctionDecl *Func,
   if (NeedDefinition &&
       (Func->getTemplateSpecializationKind() != TSK_Undeclared ||
        Func->getMemberSpecializationInfo()))
-    checkSpecializationVisibility(Loc, Func);
+    checkSpecializationReachability(Loc, Func);
 
   if (getLangOpts().CUDA)
     CheckCUDACall(Loc, Func);

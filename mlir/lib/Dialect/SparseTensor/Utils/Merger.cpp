@@ -377,6 +377,7 @@ bool Merger::isSingleCondition(unsigned t, unsigned e) const {
   case kBinary:
     return false;
   }
+  llvm_unreachable("unexpected kind");
 }
 
 #ifndef NDEBUG
@@ -682,7 +683,7 @@ unsigned Merger::buildLattices(unsigned e, unsigned i) {
     {
       unsigned child0 = buildLattices(tensorExps[e].children.e0, i);
       UnaryOp unop = cast<UnaryOp>(tensorExps[e].op);
-      Region &absentRegion = unop.absentRegion();
+      Region &absentRegion = unop.getAbsentRegion();
 
       if (absentRegion.empty()) {
         // Simple mapping over existing values.
@@ -691,7 +692,7 @@ unsigned Merger::buildLattices(unsigned e, unsigned i) {
       // invariant on the right.
       Block &absentBlock = absentRegion.front();
       YieldOp absentYield = cast<YieldOp>(absentBlock.getTerminator());
-      Value absentVal = absentYield.result();
+      Value absentVal = absentYield.getResult();
       unsigned rhs = addExp(kInvariant, absentVal);
       return takeDisj(kind, child0, buildLattices(rhs, i), unop);
     }
@@ -772,8 +773,8 @@ unsigned Merger::buildLattices(unsigned e, unsigned i) {
       unsigned child0 = buildLattices(tensorExps[e].children.e0, i);
       unsigned child1 = buildLattices(tensorExps[e].children.e1, i);
       BinaryOp binop = cast<BinaryOp>(tensorExps[e].op);
-      Region &leftRegion = binop.leftRegion();
-      Region &rightRegion = binop.rightRegion();
+      Region &leftRegion = binop.getLeftRegion();
+      Region &rightRegion = binop.getRightRegion();
       // Left Region.
       Operation *leftYield = nullptr;
       if (!leftRegion.empty()) {
@@ -786,8 +787,8 @@ unsigned Merger::buildLattices(unsigned e, unsigned i) {
         Block &rightBlock = rightRegion.front();
         rightYield = rightBlock.getTerminator();
       }
-      bool includeLeft = binop.left_identity() || !leftRegion.empty();
-      bool includeRight = binop.right_identity() || !rightRegion.empty();
+      bool includeLeft = binop.getLeftIdentity() || !leftRegion.empty();
+      bool includeRight = binop.getRightIdentity() || !rightRegion.empty();
       return takeCombi(kBinary, child0, child1, binop, includeLeft,
                        kBinaryBranch, leftYield, includeRight, kBinaryBranch,
                        rightYield);
@@ -797,7 +798,9 @@ unsigned Merger::buildLattices(unsigned e, unsigned i) {
 }
 
 Optional<unsigned> Merger::buildTensorExpFromLinalg(linalg::GenericOp op) {
+  // Build the linalg semantics backward from yield.
   Operation *yield = op.region().front().getTerminator();
+  assert(isa<linalg::YieldOp>(yield));
   return buildTensorExp(op, yield->getOperand(0));
 }
 
@@ -829,6 +832,37 @@ Type Merger::inferType(unsigned e, Value src) {
   if (auto vtp = src.getType().dyn_cast<VectorType>())
     return VectorType::get(vtp.getNumElements(), dtp, vtp.getNumScalableDims());
   return dtp;
+}
+
+/// Ensures that sparse compiler can generate code for expression.
+static bool isAdmissableBranchExp(Operation *op, Block *block, Value v) {
+  // Arguments are always admissable.
+  if (auto arg = v.dyn_cast<BlockArgument>())
+    return true;
+  // Accept index anywhere.
+  Operation *def = v.getDefiningOp();
+  if (isa<linalg::IndexOp>(def))
+    return true;
+  // Operation defined outside branch.
+  if (def->getBlock() != block) {
+    return def->getBlock() != op->getBlock(); // invariant?
+  }
+  // Operation defined within branch. Anything is accepted,
+  // as long as all subexpressions are admissable.
+  for (unsigned i = 0, n = def->getNumOperands(); i < n; i++)
+    if (!isAdmissableBranchExp(op, block, def->getOperand(i)))
+      return false;
+  return true;
+}
+
+/// Ensures that sparse compiler can generate code for branch.
+static bool isAdmissableBranch(Operation *op, Region &region) {
+  if (region.empty())
+    return true;
+  // Build the semi-ring branch semantics backward from yield.
+  Operation *yield = region.front().getTerminator();
+  assert(isa<YieldOp>(yield));
+  return isAdmissableBranchExp(op, &region.front(), yield->getOperand(0));
 }
 
 Optional<unsigned> Merger::buildTensorExp(linalg::GenericOp op, Value v) {
@@ -919,8 +953,11 @@ Optional<unsigned> Merger::buildTensorExp(linalg::GenericOp op, Value v) {
         return addExp(kCRe, e);
       if (isa<arith::BitcastOp>(def))
         return addExp(kBitCast, e, v);
-      if (isa<sparse_tensor::UnaryOp>(def))
-        return addExp(kUnary, e, Value(), def);
+      if (auto unop = dyn_cast<sparse_tensor::UnaryOp>(def)) {
+        if (isAdmissableBranch(unop, unop.getPresentRegion()) &&
+            isAdmissableBranch(unop, unop.getAbsentRegion()))
+          return addExp(kUnary, e, Value(), def);
+      }
     }
   }
   // Construct binary operations if subexpressions can be built.
@@ -970,8 +1007,14 @@ Optional<unsigned> Merger::buildTensorExp(linalg::GenericOp op, Value v) {
         return addExp(kShrU, e0, e1);
       if (isa<arith::ShLIOp>(def) && isInvariant(e1))
         return addExp(kShlI, e0, e1);
-      if (isa<sparse_tensor::BinaryOp>(def))
-        return addExp(kBinary, e0, e1, Value(), def);
+      if (auto binop = dyn_cast<sparse_tensor::BinaryOp>(def)) {
+        if (isAdmissableBranch(binop, binop.getOverlapRegion()) &&
+            (binop.getLeftIdentity() ||
+             isAdmissableBranch(binop, binop.getLeftRegion())) &&
+            (binop.getRightIdentity() ||
+             isAdmissableBranch(binop, binop.getRightRegion())))
+          return addExp(kBinary, e0, e1, Value(), def);
+      }
     }
   }
   // Cannot build.
@@ -989,7 +1032,7 @@ static Value insertYieldOp(RewriterBase &rewriter, Location loc, Region &region,
   // Merge cloned block and return yield value.
   Operation *placeholder = rewriter.create<arith::ConstantIndexOp>(loc, 0);
   rewriter.mergeBlockBefore(&tmpRegion.front(), placeholder, vals);
-  Value val = clonedYield.result();
+  Value val = clonedYield.getResult();
   rewriter.eraseOp(clonedYield);
   rewriter.eraseOp(placeholder);
   return val;
@@ -1001,7 +1044,7 @@ static Value buildUnaryPresent(RewriterBase &rewriter, Location loc,
     // Empty input value must be propagated.
     return Value();
   UnaryOp unop = cast<UnaryOp>(op);
-  Region &presentRegion = unop.presentRegion();
+  Region &presentRegion = unop.getPresentRegion();
   if (presentRegion.empty())
     // Uninitialized Value() will be interpreted as missing data in the
     // output.
@@ -1015,7 +1058,7 @@ static Value buildBinaryOverlap(RewriterBase &rewriter, Location loc,
     // Empty input values must be propagated.
     return Value();
   BinaryOp binop = cast<BinaryOp>(op);
-  Region &overlapRegion = binop.overlapRegion();
+  Region &overlapRegion = binop.getOverlapRegion();
   if (overlapRegion.empty())
     // Uninitialized Value() will be interpreted as missing data in the
     // output.

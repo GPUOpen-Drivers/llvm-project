@@ -273,7 +273,7 @@ void UnwindInfoSectionImpl::prepareRelocations(ConcatInputSection *isec) {
               r.referent = s = sym;
       }
       if (auto *undefined = dyn_cast<Undefined>(s)) {
-        treatUndefinedSymbol(*undefined);
+        treatUndefinedSymbol(*undefined, isec, r.offset);
         // treatUndefinedSymbol() can replace s with a DylibSymbol; re-check.
         if (isa<Undefined>(s))
           continue;
@@ -326,7 +326,7 @@ void UnwindInfoSectionImpl::prepareRelocations(ConcatInputSection *isec) {
 // is no source address to make a relative location meaningful.
 void UnwindInfoSectionImpl::relocateCompactUnwind(
     std::vector<CompactUnwindEntry> &cuEntries) {
-  parallelForEachN(0, symbolsVec.size(), [&](size_t i) {
+  parallelFor(0, symbolsVec.size(), [&](size_t i) {
     CompactUnwindEntry &cu = cuEntries[i];
     const Defined *d = symbolsVec[i].second;
     cu.functionAddress = d->getVA();

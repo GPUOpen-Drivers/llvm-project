@@ -820,6 +820,8 @@ bool MachineSinking::isProfitableToSinkTo(Register Reg, MachineInstr &MI,
         return false;
     } else {
       MachineInstr *DefMI = MRI->getVRegDef(Reg);
+      if (!DefMI)
+        continue;
       MachineCycle *Cycle = CI->getCycle(DefMI->getParent());
       // DefMI is defined outside of cycle. There should be no live range
       // impact for this operand. Defination outside of cycle means:
@@ -1172,7 +1174,7 @@ bool MachineSinking::hasStoreBetween(MachineBasicBlock *From,
 
       // If this BB is too big or the block number in straight line between From
       // and To is too big, stop searching to save compiling time.
-      if (BB->size() > SinkLoadInstsPerBlockThreshold ||
+      if (BB->sizeWithoutDebugLargerThan(SinkLoadInstsPerBlockThreshold) ||
           HandledDomBlocks.size() > SinkLoadBlocksThreshold) {
         for (auto *DomBB : HandledDomBlocks) {
           if (DomBB != BB && DT->dominates(DomBB, BB))
@@ -1274,7 +1276,7 @@ bool MachineSinking::SinkIntoCycle(MachineCycle *Cycle, MachineInstr &I) {
         dbgs() << "CycleSink: Not sinking, sink block is the preheader\n");
     return false;
   }
-  if (SinkBlock->size() > SinkLoadInstsPerBlockThreshold) {
+  if (SinkBlock->sizeWithoutDebugLargerThan(SinkLoadInstsPerBlockThreshold)) {
     LLVM_DEBUG(
         dbgs() << "CycleSink: Not Sinking, block too large to analyse.\n");
     return false;
@@ -1283,6 +1285,12 @@ bool MachineSinking::SinkIntoCycle(MachineCycle *Cycle, MachineInstr &I) {
   LLVM_DEBUG(dbgs() << "CycleSink: Sinking instruction!\n");
   SinkBlock->splice(SinkBlock->SkipPHIsAndLabels(SinkBlock->begin()), Preheader,
                     I);
+
+  // Conservatively clear any kill flags on uses of sunk instruction
+  for (MachineOperand &MO : I.operands()) {
+    if (MO.isReg() && MO.readsReg())
+      RegsToClearKillFlags.insert(MO.getReg());
+  }
 
   // The instruction is moved from its basic block, so do not retain the
   // debug information.

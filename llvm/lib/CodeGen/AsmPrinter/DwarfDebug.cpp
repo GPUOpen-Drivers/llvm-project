@@ -357,7 +357,7 @@ DwarfDebug::DwarfDebug(AsmPrinter *A)
     DebuggerTuning = Asm->TM.Options.DebuggerTuning;
   else if (IsDarwin)
     DebuggerTuning = DebuggerKind::LLDB;
-  else if (TT.isPS4())
+  else if (TT.isPS())
     DebuggerTuning = DebuggerKind::SCE;
   else if (TT.isOSAIX())
     DebuggerTuning = DebuggerKind::DBX;
@@ -3042,15 +3042,22 @@ void DwarfDebug::emitDebugARanges() {
     for (const ArangeSpan &Span : List) {
       Asm->emitLabelReference(Span.Start, PtrSize);
 
-      // Calculate the size as being from the span start to it's end.
-      if (Span.End) {
+      // Calculate the size as being from the span start to its end.
+      //
+      // If the size is zero, then round it up to one byte. The DWARF
+      // specification requires that entries in this table have nonzero
+      // lengths.
+      auto SizeRef = SymSize.find(Span.Start);
+      if ((SizeRef == SymSize.end() || SizeRef->second != 0) && Span.End) {
         Asm->emitLabelDifference(Span.End, Span.Start, PtrSize);
       } else {
         // For symbols without an end marker (e.g. common), we
         // write a single arange entry containing just that one symbol.
-        uint64_t Size = SymSize[Span.Start];
-        if (Size == 0)
+        uint64_t Size;
+        if (SizeRef == SymSize.end() || SizeRef->second == 0)
           Size = 1;
+        else
+          Size = SizeRef->second;
 
         Asm->OutStreamer->emitIntValue(Size, PtrSize);
       }

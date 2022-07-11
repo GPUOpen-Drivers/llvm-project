@@ -349,6 +349,8 @@ public:
 
   MCRegister getVCC() const;
 
+  MCRegister getExec() const;
+
   const TargetRegisterClass *getRegClass(unsigned RCID) const;
 
   // Find reaching register definition

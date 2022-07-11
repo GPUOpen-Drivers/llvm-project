@@ -313,8 +313,7 @@ public:
         auto PreheaderCount = BFI->getBlockProfileCount(L.getLoopPreheader());
         // If the average loop trip count is not greater than 1.5, we skip
         // promotion.
-        if (PreheaderCount &&
-            (PreheaderCount.getValue() * 3) >= (InstrCount.getValue() * 2))
+        if (PreheaderCount && (*PreheaderCount * 3) >= (*InstrCount * 2))
           continue;
       }
 
@@ -1246,7 +1245,7 @@ bool InstrProfiling::emitRuntimeHook() {
       new GlobalVariable(*M, Int32Ty, false, GlobalValue::ExternalLinkage,
                          nullptr, getInstrProfRuntimeHookVarName());
 
-  if (TT.isOSBinFormatELF()) {
+  if (TT.isOSBinFormatELF() && !TT.isPS()) {
     // Mark the user variable as used so that it isn't stripped out.
     CompilerUsedVars.push_back(Var);
   } else {

@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -3480,12 +3482,8 @@ const SCEV *ScalarEvolution::getUDivExpr(const SCEV *LHS,
       }
 
       // Fold if both operands are constant.
-      if (const SCEVConstant *LHSC = dyn_cast<SCEVConstant>(LHS)) {
-        Constant *LHSCV = LHSC->getValue();
-        Constant *RHSCV = RHSC->getValue();
-        return getConstant(cast<ConstantInt>(ConstantExpr::getUDiv(LHSCV,
-                                                                   RHSCV)));
-      }
+      if (const SCEVConstant *LHSC = dyn_cast<SCEVConstant>(LHS))
+        return getConstant(LHSC->getAPInt().udiv(RHSC->getAPInt()));
     }
   }
 
@@ -4847,7 +4845,7 @@ public:
         SelectInst *SI = cast<SelectInst>(I);
         Optional<const SCEV *> Res =
             compareWithBackedgeCondition(SI->getCondition());
-        if (Res.hasValue()) {
+        if (Res) {
           bool IsOne = cast<SCEVConstant>(Res.getValue())->getValue()->isOne();
           Result = SE.getSCEV(IsOne ? SI->getTrueValue() : SI->getFalseValue());
         }
@@ -4855,7 +4853,7 @@ public:
       }
       default: {
         Optional<const SCEV *> Res = compareWithBackedgeCondition(I);
-        if (Res.hasValue())
+        if (Res)
           Result = Res.getValue();
         break;
       }
@@ -6161,9 +6159,8 @@ const SCEV *ScalarEvolution::createNodeForSelectOrPHI(Value *V, Value *Cond,
 /// Expand GEP instructions into add and multiply operations. This allows them
 /// to be analyzed by regular SCEV code.
 const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
-  // Don't attempt to analyze GEPs over unsized objects.
-  if (!GEP->getSourceElementType()->isSized())
-    return getUnknown(GEP);
+  assert(GEP->getSourceElementType()->isSized() &&
+         "GEP source element type must be sized");
 
   SmallVector<const SCEV *, 4> IndexExprs;
   for (Value *Index : GEP->indices())
@@ -6596,7 +6593,7 @@ ScalarEvolution::getRangeRef(const SCEV *S,
 
     // Check if the IR explicitly contains !range metadata.
     Optional<ConstantRange> MDRange = GetRangeFromMetadata(U->getValue());
-    if (MDRange.hasValue())
+    if (MDRange)
       ConservativeResult = ConservativeResult.intersectWith(MDRange.getValue(),
                                                             RangeType);
 
@@ -6885,7 +6882,7 @@ ConstantRange ScalarEvolution::getRangeViaFactoring(const SCEV *Start,
       FalseValue = *FalseVal;
 
       // Re-apply the cast we peeled off earlier
-      if (CastOp.hasValue())
+      if (CastOp)
         switch (*CastOp) {
         default:
           llvm_unreachable("Unknown SCEV cast type!");
@@ -7196,7 +7193,7 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
     // to obey basic rules for definitions dominating uses which this
     // analysis depends on.
     if (!DT.isReachableFromEntry(I->getParent()))
-      return getUnknown(UndefValue::get(V->getType()));
+      return getUnknown(PoisonValue::get(V->getType()));
   } else if (ConstantInt *CI = dyn_cast<ConstantInt>(V))
     return getConstant(CI);
   else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V))
@@ -7826,7 +7823,7 @@ unsigned ScalarEvolution::getSmallConstantTripMultiple(const Loop *L) {
       Res = Multiple;
     Res = (unsigned)GreatestCommonDivisor64(*Res, Multiple);
   }
-  return Res.getValueOr(1);
+  return Res.value_or(1);
 }
 
 unsigned ScalarEvolution::getSmallConstantTripMultiple(const Loop *L,
@@ -8858,7 +8855,7 @@ ScalarEvolution::ExitLimit ScalarEvolution::computeShiftCompareExitLimit(
 
         // and the kind of shift should be match the kind of shift we peeled
         // off, if any.
-        (!PostShiftOpCode.hasValue() || *PostShiftOpCode == OpCodeOut);
+        (!PostShiftOpCode || *PostShiftOpCode == OpCodeOut);
   };
 
   PHINode *PN;
@@ -9046,13 +9043,6 @@ static Constant *EvaluateExpression(Value *V, const Loop *L,
     Operands[i] = C;
   }
 
-  if (CmpInst *CI = dyn_cast<CmpInst>(I))
-    return ConstantFoldCompareInstOperands(CI->getPredicate(), Operands[0],
-                                           Operands[1], DL, TLI);
-  if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
-    if (!LI->isVolatile())
-      return ConstantFoldLoadFromConstPtr(Operands[0], LI->getType(), DL);
-  }
   return ConstantFoldInstOperands(I, Operands, DL, TLI);
 }
 
@@ -9296,67 +9286,44 @@ static Constant *BuildConstantFromSCEV(const SCEV *V) {
   }
   case scAddExpr: {
     const SCEVAddExpr *SA = cast<SCEVAddExpr>(V);
-    if (Constant *C = BuildConstantFromSCEV(SA->getOperand(0))) {
-      if (PointerType *PTy = dyn_cast<PointerType>(C->getType())) {
-        unsigned AS = PTy->getAddressSpace();
-        Type *DestPtrTy = Type::getInt8PtrTy(C->getContext(), AS);
-        C = ConstantExpr::getBitCast(C, DestPtrTy);
+    Constant *C = nullptr;
+    for (const SCEV *Op : SA->operands()) {
+      Constant *OpC = BuildConstantFromSCEV(Op);
+      if (!OpC)
+        return nullptr;
+      if (!C) {
+        C = OpC;
+        continue;
       }
-      for (unsigned i = 1, e = SA->getNumOperands(); i != e; ++i) {
-        Constant *C2 = BuildConstantFromSCEV(SA->getOperand(i));
-        if (!C2)
-          return nullptr;
-
-        // First pointer!
-        if (!C->getType()->isPointerTy() && C2->getType()->isPointerTy()) {
-          unsigned AS = C2->getType()->getPointerAddressSpace();
-          std::swap(C, C2);
-          Type *DestPtrTy = Type::getInt8PtrTy(C->getContext(), AS);
-          // The offsets have been converted to bytes.  We can add bytes to an
-          // i8* by GEP with the byte count in the first index.
-          C = ConstantExpr::getBitCast(C, DestPtrTy);
-        }
-
-        // Don't bother trying to sum two pointers. We probably can't
-        // statically compute a load that results from it anyway.
-        if (C2->getType()->isPointerTy())
-          return nullptr;
-
-        if (C->getType()->isPointerTy()) {
-          C = ConstantExpr::getGetElementPtr(Type::getInt8Ty(C->getContext()),
-                                             C, C2);
-        } else {
-          C = ConstantExpr::getAdd(C, C2);
-        }
+      assert(!C->getType()->isPointerTy() &&
+             "Can only have one pointer, and it must be last");
+      if (auto *PT = dyn_cast<PointerType>(OpC->getType())) {
+        // The offsets have been converted to bytes.  We can add bytes to an
+        // i8* by GEP with the byte count in the first index.
+        Type *DestPtrTy =
+            Type::getInt8PtrTy(PT->getContext(), PT->getAddressSpace());
+        OpC = ConstantExpr::getBitCast(OpC, DestPtrTy);
+        C = ConstantExpr::getGetElementPtr(Type::getInt8Ty(C->getContext()),
+                                           OpC, C);
+      } else {
+        C = ConstantExpr::getAdd(C, OpC);
       }
-      return C;
     }
-    return nullptr;
+    return C;
   }
   case scMulExpr: {
     const SCEVMulExpr *SM = cast<SCEVMulExpr>(V);
-    if (Constant *C = BuildConstantFromSCEV(SM->getOperand(0))) {
-      // Don't bother with pointers at all.
-      if (C->getType()->isPointerTy())
+    Constant *C = nullptr;
+    for (const SCEV *Op : SM->operands()) {
+      assert(!Op->getType()->isPointerTy() && "Can't multiply pointers");
+      Constant *OpC = BuildConstantFromSCEV(Op);
+      if (!OpC)
         return nullptr;
-      for (unsigned i = 1, e = SM->getNumOperands(); i != e; ++i) {
-        Constant *C2 = BuildConstantFromSCEV(SM->getOperand(i));
-        if (!C2 || C2->getType()->isPointerTy())
-          return nullptr;
-        C = ConstantExpr::getMul(C, C2);
-      }
-      return C;
+      C = C ? ConstantExpr::getMul(C, OpC) : OpC;
     }
-    return nullptr;
+    return C;
   }
-  case scUDivExpr: {
-    const SCEVUDivExpr *SU = cast<SCEVUDivExpr>(V);
-    if (Constant *LHS = BuildConstantFromSCEV(SU->getLHS()))
-      if (Constant *RHS = BuildConstantFromSCEV(SU->getRHS()))
-        if (LHS->getType() == RHS->getType())
-          return ConstantExpr::getUDiv(LHS, RHS);
-    return nullptr;
-  }
+  case scUDivExpr:
   case scSMaxExpr:
   case scUMaxExpr:
   case scSMinExpr:
@@ -9472,15 +9439,7 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
         if (MadeImprovement) {
           Constant *C = nullptr;
           const DataLayout &DL = getDataLayout();
-          if (const CmpInst *CI = dyn_cast<CmpInst>(I))
-            C = ConstantFoldCompareInstOperands(CI->getPredicate(), Operands[0],
-                                                Operands[1], DL, &TLI);
-          else if (const LoadInst *Load = dyn_cast<LoadInst>(I)) {
-            if (!Load->isVolatile())
-              C = ConstantFoldLoadFromConstPtr(Operands[0], Load->getType(),
-                                               DL);
-          } else
-            C = ConstantFoldInstOperands(I, Operands, DL, &TLI);
+          C = ConstantFoldInstOperands(I, Operands, DL, &TLI);
           if (!C) return V;
           return getSCEV(C);
         }
@@ -9710,15 +9669,15 @@ GetQuadraticEquation(const SCEVAddRecExpr *AddRec) {
 /// (b) if neither X nor Y exist, return None,
 /// (c) if exactly one of X and Y exists, return that value.
 static Optional<APInt> MinOptional(Optional<APInt> X, Optional<APInt> Y) {
-  if (X.hasValue() && Y.hasValue()) {
+  if (X && Y) {
     unsigned W = std::max(X->getBitWidth(), Y->getBitWidth());
     APInt XW = X->sext(W);
     APInt YW = Y->sext(W);
     return XW.slt(YW) ? *X : *Y;
   }
-  if (!X.hasValue() && !Y.hasValue())
+  if (!X && !Y)
     return None;
-  return X.hasValue() ? *X : *Y;
+  return X ? *X : *Y;
 }
 
 /// Helper function to truncate an optional APInt to a given BitWidth.
@@ -9733,7 +9692,7 @@ static Optional<APInt> MinOptional(Optional<APInt> X, Optional<APInt> Y) {
 /// equation are BW+1 bits wide (to avoid truncation when converting from
 /// the addrec to the equation).
 static Optional<APInt> TruncIfPossible(Optional<APInt> X, unsigned BitWidth) {
-  if (!X.hasValue())
+  if (!X)
     return None;
   unsigned W = X->getBitWidth();
   if (BitWidth > 1 && BitWidth < W && X->isIntN(BitWidth))
@@ -9760,13 +9719,13 @@ SolveQuadraticAddRecExact(const SCEVAddRecExpr *AddRec, ScalarEvolution &SE) {
   APInt A, B, C, M;
   unsigned BitWidth;
   auto T = GetQuadraticEquation(AddRec);
-  if (!T.hasValue())
+  if (!T)
     return None;
 
   std::tie(A, B, C, M, BitWidth) = *T;
   LLVM_DEBUG(dbgs() << __func__ << ": solving for unsigned overflow\n");
   Optional<APInt> X = APIntOps::SolveQuadraticEquationWrap(A, B, C, BitWidth+1);
-  if (!X.hasValue())
+  if (!X)
     return None;
 
   ConstantInt *CX = ConstantInt::get(SE.getContext(), *X);
@@ -9802,7 +9761,7 @@ SolveQuadraticAddRecRange(const SCEVAddRecExpr *AddRec,
   APInt A, B, C, M;
   unsigned BitWidth;
   auto T = GetQuadraticEquation(AddRec);
-  if (!T.hasValue())
+  if (!T)
     return None;
 
   // Be careful about the return value: there can be two reasons for not
@@ -9847,7 +9806,7 @@ SolveQuadraticAddRecRange(const SCEVAddRecExpr *AddRec,
     // If SolveQuadraticEquationWrap returns None, it means that there can
     // be a solution, but the function failed to find it. We cannot treat it
     // as "no solution".
-    if (!SO.hasValue() || !UO.hasValue())
+    if (!SO || !UO)
       return { None, false };
 
     // Check the smaller value first to see if it leaves the range.
@@ -9951,7 +9910,7 @@ ScalarEvolution::howFarToZero(const SCEV *V, const Loop *L, bool ControlsExit,
     // value at this index.  When solving for "X*X != 5", for example, we
     // should not accept a root of 2.
     if (auto S = SolveQuadraticAddRecExact(AddRec, *this)) {
-      const auto *R = cast<SCEVConstant>(getConstant(S.getValue()));
+      const auto *R = cast<SCEVConstant>(getConstant(*S));
       return ExitLimit(R, R, false, Predicates);
     }
     return getCouldNotCompute();
@@ -10471,7 +10430,7 @@ ScalarEvolution::getMonotonicPredicateType(const SCEVAddRecExpr *LHS,
     auto ResultSwapped =
         getMonotonicPredicateTypeImpl(LHS, ICmpInst::getSwappedPredicate(Pred));
 
-    assert(ResultSwapped.hasValue() && "should be able to analyze both!");
+    assert(ResultSwapped && "should be able to analyze both!");
     assert(ResultSwapped.getValue() != Result.getValue() &&
            "monotonicity should flip as we flip the predicate");
   }
@@ -11648,7 +11607,7 @@ bool ScalarEvolution::isImpliedViaMerge(ICmpInst::Predicate Pred,
       const SCEV *L = getSCEV(LPhi->getIncomingValueForBlock(IncBB));
       // Make sure L does not refer to a value from a potentially previous
       // iteration of a loop.
-      if (!properlyDominates(L, IncBB))
+      if (!properlyDominates(L, LBB))
         return false;
       if (!ProvedEasily(L, RHS))
         return false;
@@ -12781,7 +12740,7 @@ const SCEV *SCEVAddRecExpr::getNumIterationsInRange(const ConstantRange &Range,
 
   if (isQuadratic()) {
     if (auto S = SolveQuadraticAddRecRange(this, Range, SE))
-      return SE.getConstant(S.getValue());
+      return SE.getConstant(*S);
   }
 
   return SE.getCouldNotCompute();

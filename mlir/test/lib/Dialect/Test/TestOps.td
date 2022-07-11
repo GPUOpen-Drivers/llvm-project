@@ -215,16 +215,6 @@ def I64EnumAttrOp : TEST_Op<"i64_enum_attr"> {
   let results = (outs I32:$val);
 }
 
-def SomeStructAttr : StructAttr<"SomeStructAttr", Test_Dialect, [
-  StructFieldAttr<"some_field", I64Attr>,
-  StructFieldAttr<"some_other_field", I64Attr>
-]> {}
-
-def StructAttrOp : TEST_Op<"struct_attr"> {
-  let arguments = (ins SomeStructAttr:$the_struct_attr);
-  let results = (outs);
-}
-
 def IntAttrOp : TEST_Op<"int_attrs"> {
   let arguments = (ins
     AnyI32Attr:$any_i32_attr,
@@ -278,6 +268,22 @@ def StringElementsAttrOp : TEST_Op<"string_elements_attr"> {
   let arguments = (ins
       StringElementsAttr:$scalar_string_attr
   );
+}
+
+def DenseArrayAttrOp : TEST_Op<"dense_array_attr"> {
+  let arguments = (ins
+    DenseI8ArrayAttr:$i8attr,
+    DenseI16ArrayAttr:$i16attr,
+    DenseI32ArrayAttr:$i32attr,
+    DenseI64ArrayAttr:$i64attr,
+    DenseF32ArrayAttr:$f32attr,
+    DenseF64ArrayAttr:$f64attr
+  );
+  let assemblyFormat = [{
+   `i8attr` `=` $i8attr `i16attr` `=` $i16attr `i32attr` `=` $i32attr
+   `i64attr` `=` $i64attr  `f32attr` `=` $f32attr `f64attr` `=` $f64attr
+   attr-dict
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -2549,7 +2555,8 @@ def RegionIfOp : TEST_Op<"region_if",
     ::mlir::Block::BlockArgListType getJoinArgs() {
       return getBody(2)->getArguments();
     }
-    ::mlir::OperandRange getSuccessorEntryOperands(unsigned index);
+    ::mlir::OperandRange getSuccessorEntryOperands(
+        ::llvm::Optional<unsigned> index);
   }];
   let hasCustomAssemblyFormat = 1;
 }

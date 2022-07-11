@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc --debugify-and-strip-all-safe=0 -mtriple=arm64-- -O3 -debug-pass=Structure < %s -o /dev/null 2>&1 | \
 ; RUN:     grep -v "Verify generated machine code" | FileCheck %s
 
@@ -202,6 +200,7 @@
 ; CHECK-NEXT:       Insert XRay ops
 ; CHECK-NEXT:       Implement the 'patchable-function' attribute
 ; CHECK-NEXT:       AArch64 load / store optimization pass
+; CHECK-NEXT:       Machine Copy Propagation Pass
 ; CHECK-NEXT:       Workaround A53 erratum 835769 pass
 ; CHECK-NEXT:       AArch64 Branch Targets
 ; CHECK-NEXT:       Branch relaxation pass

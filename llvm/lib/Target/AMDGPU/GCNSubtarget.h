@@ -107,6 +107,7 @@ protected:
   bool GFX10_3Insts = false;
   bool GFX7GFX8GFX9Insts = false;
   bool SGPRInitBug = false;
+  bool UserSGPRInit16Bug = false;
   bool NegativeScratchOffsetBug = false;
   bool NegativeUnalignedScratchOffsetBug = false;
   bool HasSMemRealTime = false;
@@ -928,6 +929,10 @@ public:
     return SGPRInitBug;
   }
 
+  bool hasUserSGPRInit16Bug() const {
+    return UserSGPRInit16Bug;
+  }
+
   bool hasNegativeScratchOffsetBug() const { return NegativeScratchOffsetBug; }
 
   bool hasNegativeUnalignedScratchOffsetBug() const {
@@ -1043,6 +1048,8 @@ public:
   bool hasNullExportTarget() const { return !GFX11Insts; }
 
   bool hasVOPDInsts() const { return HasVOPDInsts; }
+
+  bool hasFlatScratchSVSSwizzleBug() const { return getGeneration() == GFX11; }
 
   /// Return true if the target has the S_DELAY_ALU instruction.
   bool hasDelayAlu() const { return GFX11Insts; }

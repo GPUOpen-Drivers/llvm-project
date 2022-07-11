@@ -79,7 +79,7 @@ constexpr bool all_the_algorithms()
 {
     void *a[10] = {};
     void *b[10] = {};
-    //void *half[5] = {};
+    void *half[5] = {};
     void **first = a;
     void **mid = a+5;
     void **last = a+10;
@@ -140,8 +140,8 @@ constexpr bool all_the_algorithms()
     (void)std::ranges::is_sorted_until(a, Less(&copies)); assert(copies == 0);
     //if (!std::is_constant_evaluated()) { (void)std::ranges::inplace_merge(first, mid, last, Less(&copies)); assert(copies == 0); }
     //if (!std::is_constant_evaluated()) { (void)std::ranges::inplace_merge(a, mid, Less(&copies)); assert(copies == 0); }
-    //(void)std::ranges::lexicographical_compare(first, last, first2, last2, Less(&copies)); assert(copies == 0);
-    //(void)std::ranges::lexicographical_compare(a, b, Less(&copies)); assert(copies == 0);
+    (void)std::ranges::lexicographical_compare(first, last, first2, last2, Less(&copies)); assert(copies == 0);
+    (void)std::ranges::lexicographical_compare(a, b, Less(&copies)); assert(copies == 0);
     (void)std::ranges::lower_bound(first, last, value, Less(&copies)); assert(copies == 0);
     (void)std::ranges::lower_bound(a, value, Less(&copies)); assert(copies == 0);
     //(void)std::ranges::make_heap(first, last, Less(&copies)); assert(copies == 0);
@@ -151,8 +151,8 @@ constexpr bool all_the_algorithms()
     (void)std::ranges::max(a, Less(&copies)); assert(copies == 0);
     (void)std::ranges::max_element(first, last, Less(&copies)); assert(copies == 0);
     (void)std::ranges::max_element(a, Less(&copies)); assert(copies == 0);
-    //(void)std::ranges::merge(first, mid, mid, last, first2, Less(&copies)); assert(copies == 0);
-    //(void)std::ranges::merge(half, half, b, Less(&copies)); assert(copies == 0);
+    (void)std::ranges::merge(first, mid, mid, last, first2, Less(&copies)); assert(copies == 0);
+    (void)std::ranges::merge(half, half, b, Less(&copies)); assert(copies == 0);
     (void)std::ranges::min(value, value, Less(&copies)); assert(copies == 0);
     (void)std::ranges::min({ value, value }, Less(&copies)); assert(copies == 0);
     (void)std::ranges::min(a, Less(&copies)); assert(copies == 0);
@@ -189,8 +189,8 @@ constexpr bool all_the_algorithms()
     //(void)std::ranges::push_heap(a, Less(&copies)); assert(copies == 0);
     //(void)std::ranges::remove_copy_if(first, last, first2, UnaryTrue(&copies)); assert(copies == 0);
     //(void)std::ranges::remove_copy_if(a, first2, UnaryTrue(&copies)); assert(copies == 0);
-    //(void)std::ranges::remove_if(first, last, UnaryTrue(&copies)); assert(copies == 0);
-    //(void)std::ranges::remove_if(a, UnaryTrue(&copies)); assert(copies == 0);
+    (void)std::ranges::remove_if(first, last, UnaryTrue(&copies)); assert(copies == 0);
+    (void)std::ranges::remove_if(a, UnaryTrue(&copies)); assert(copies == 0);
     //(void)std::ranges::replace_copy_if(first, last, first2, UnaryTrue(&copies), value); assert(copies == 0);
     //(void)std::ranges::replace_copy_if(a, first2, UnaryTrue(&copies), value); assert(copies == 0);
     (void)std::ranges::replace_if(first, last, UnaryTrue(&copies), value); assert(copies == 0);
@@ -207,14 +207,14 @@ constexpr bool all_the_algorithms()
     //(void)std::ranges::set_symmetric_difference(a, b, first2, Less(&copies)); assert(copies == 0);
     //(void)std::ranges::set_union(first, mid, mid, last, first2, Less(&copies)); assert(copies == 0);
     //(void)std::ranges::set_union(a, b, first2, Less(&copies)); assert(copies == 0);
-    //(void)std::ranges::sort(first, last, Less(&copies)); assert(copies == 0);
-    //(void)std::ranges::sort(a, Less(&copies)); assert(copies == 0);
+    (void)std::ranges::sort(first, last, Less(&copies)); assert(copies == 0);
+    (void)std::ranges::sort(a, Less(&copies)); assert(copies == 0);
     //(void)std::ranges::sort_heap(first, last, Less(&copies)); assert(copies == 0);
     //(void)std::ranges::sort_heap(a, Less(&copies)); assert(copies == 0);
     //if (!std::is_constant_evaluated()) { (void)std::ranges::stable_partition(first, last, UnaryTrue(&copies)); assert(copies == 0); }
     //if (!std::is_constant_evaluated()) { (void)std::ranges::stable_partition(a, UnaryTrue(&copies)); assert(copies == 0); }
-    //if (!std::is_constant_evaluated()) { (void)std::ranges::stable_sort(first, last, Less(&copies)); assert(copies == 0); }
-    //if (!std::is_constant_evaluated()) { (void)std::ranges::stable_sort(a, Less(&copies)); assert(copies == 0); }
+    if (!std::is_constant_evaluated()) { (void)std::ranges::stable_sort(first, last, Less(&copies)); assert(copies == 0); }
+    if (!std::is_constant_evaluated()) { (void)std::ranges::stable_sort(a, Less(&copies)); assert(copies == 0); }
 #if TEST_STD_VER > 20
     //(void)std::ranges::starts_with(first, last, first2, last2, Equal(&copies)); assert(copies == 0);
 #endif

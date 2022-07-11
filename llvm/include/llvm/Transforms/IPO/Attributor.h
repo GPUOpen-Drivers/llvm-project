@@ -119,6 +119,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/DOTGraphTraits.h"
@@ -3708,10 +3709,10 @@ struct AAAlign : public IRAttribute<
   AAAlign(const IRPosition &IRP, Attributor &A) : IRAttribute(IRP) {}
 
   /// Return assumed alignment.
-  uint64_t getAssumedAlign() const { return getAssumed(); }
+  Align getAssumedAlign() const { return Align(getAssumed()); }
 
   /// Return known alignment.
-  uint64_t getKnownAlign() const { return getKnown(); }
+  Align getKnownAlign() const { return Align(getKnown()); }
 
   /// See AbstractAttribute::getName()
   const std::string getName() const override { return "AAAlign"; }
@@ -4883,12 +4884,10 @@ struct AAPointerInfo : public AbstractAttribute {
     Instruction *getRemoteInst() const { return RemoteI; }
 
     /// Return true if the value written is not known yet.
-    bool isWrittenValueYetUndetermined() const { return !Content.hasValue(); }
+    bool isWrittenValueYetUndetermined() const { return !Content; }
 
     /// Return true if the value written cannot be determined at all.
-    bool isWrittenValueUnknown() const {
-      return Content.hasValue() && !*Content;
-    }
+    bool isWrittenValueUnknown() const { return Content && !*Content; }
 
     /// Return the type associated with the access, if known.
     Type *getType() const { return Ty; }
