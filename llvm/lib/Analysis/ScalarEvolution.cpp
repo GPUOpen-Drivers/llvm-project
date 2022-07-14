@@ -2321,9 +2321,13 @@ bool ScalarEvolution::willNotOverflow(Instruction::BinaryOps BinOp, bool Signed,
   return A == B;
 }
 
-std::pair<SCEV::NoWrapFlags, bool /*Deduced*/>
+Optional<SCEV::NoWrapFlags>
 ScalarEvolution::getStrengthenedNoWrapFlagsFromBinOp(
     const OverflowingBinaryOperator *OBO) {
+  // It cannot be done any better.
+  if (OBO->hasNoUnsignedWrap() && OBO->hasNoSignedWrap())
+    return None;
+
   SCEV::NoWrapFlags Flags = SCEV::NoWrapFlags::FlagAnyWrap;
 
   if (OBO->hasNoUnsignedWrap())
@@ -2333,13 +2337,10 @@ ScalarEvolution::getStrengthenedNoWrapFlagsFromBinOp(
 
   bool Deduced = false;
 
-  if (OBO->hasNoUnsignedWrap() && OBO->hasNoSignedWrap())
-    return {Flags, Deduced};
-
   if (OBO->getOpcode() != Instruction::Add &&
       OBO->getOpcode() != Instruction::Sub &&
       OBO->getOpcode() != Instruction::Mul)
-    return {Flags, Deduced};
+    return None;
 
   const SCEV *LHS = getSCEV(OBO->getOperand(0));
   const SCEV *RHS = getSCEV(OBO->getOperand(1));
@@ -2358,7 +2359,9 @@ ScalarEvolution::getStrengthenedNoWrapFlagsFromBinOp(
     Deduced = true;
   }
 
-  return {Flags, Deduced};
+  if (Deduced)
+    return Flags;
+  return None;
 }
 
 // We're trying to construct a SCEV of type `Type' with `Ops' as operands and

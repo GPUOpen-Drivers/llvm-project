@@ -28,7 +28,7 @@ using namespace mlir;
 namespace {
 static llvm::omp::ScheduleKind
 convertToScheduleKind(Optional<omp::ClauseScheduleKind> schedKind) {
-  if (!schedKind.hasValue())
+  if (!schedKind.has_value())
     return llvm::omp::OMP_SCHEDULE_Default;
   switch (schedKind.getValue()) {
   case omp::ClauseScheduleKind::Static:
@@ -971,7 +971,7 @@ convertOmpSimdLoop(Operation &opInst, llvm::IRBuilderBase &builder,
   llvm::CanonicalLoopInfo *loopInfo =
       ompBuilder->collapseLoops(ompLoc.DL, loopInfos, {});
 
-  ompBuilder->applySimd(ompLoc.DL, loopInfo);
+  ompBuilder->applySimd(loopInfo, nullptr);
 
   builder.restoreIP(afterIP);
   return success();

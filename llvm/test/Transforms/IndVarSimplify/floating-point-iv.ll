@@ -89,10 +89,7 @@ define void @test4() nounwind {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    br label [[BB:%.*]]
 ; CHECK:       bb:
-; CHECK-NEXT:    [[IV_INT:%.*]] = phi i32 [ 40, [[ENTRY:%.*]] ], [ [[DOTINT:%.*]], [[BB]] ]
-; CHECK-NEXT:    [[INDVAR_CONV:%.*]] = sitofp i32 [[IV_INT]] to double
-; CHECK-NEXT:    [[TMP0:%.*]] = tail call i32 @foo(double [[INDVAR_CONV]]) #[[ATTR0]]
-; CHECK-NEXT:    [[DOTINT]] = add nsw i32 [[IV_INT]], -1
+; CHECK-NEXT:    [[TMP0:%.*]] = tail call i32 @foo(double 4.000000e+01) #[[ATTR0]]
 ; CHECK-NEXT:    br i1 false, label [[BB]], label [[RETURN:%.*]]
 ; CHECK:       return:
 ; CHECK-NEXT:    ret void
@@ -382,8 +379,7 @@ define void @pr55505_remove_redundant_fptosi_for_float_iv(i32 %index, ptr %dst) 
 ; CHECK-NEXT:    [[FLOAT_IV_INT:%.*]] = phi i32 [ 1000, [[ENTRY:%.*]] ], [ [[FLOAT_IV_NEXT_INT:%.*]], [[LOOP]] ]
 ; CHECK-NEXT:    [[INDVAR_CONV:%.*]] = sitofp i32 [[FLOAT_IV_INT]] to float
 ; CHECK-NEXT:    call void @use.float(float [[INDVAR_CONV]])
-; CHECK-NEXT:    [[CONV_I32:%.*]] = fptosi float [[INDVAR_CONV]] to i32
-; CHECK-NEXT:    call void @use.i32(i32 [[CONV_I32]])
+; CHECK-NEXT:    call void @use.i32(i32 [[FLOAT_IV_INT]])
 ; CHECK-NEXT:    [[CONV_I16:%.*]] = fptosi float [[INDVAR_CONV]] to i16
 ; CHECK-NEXT:    [[CONV_I64:%.*]] = fptosi float [[INDVAR_CONV]] to i64
 ; CHECK-NEXT:    call void @use.i16(i16 [[CONV_I16]])

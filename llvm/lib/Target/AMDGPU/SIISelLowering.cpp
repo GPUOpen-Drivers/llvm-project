@@ -354,7 +354,7 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
   // TODO: Generalize to more vector types.
   setOperationAction({ISD::EXTRACT_VECTOR_ELT, ISD::INSERT_VECTOR_ELT},
                      {MVT::v2i16, MVT::v2f16, MVT::v2i8, MVT::v4i8, MVT::v8i8,
-                      MVT::v4i16, MVT::v4f16, MVT::v16i16, MVT::v16f16},
+                      MVT::v4i16, MVT::v4f16},
                      Custom);
 
   // Deal with vec3 vector operations when widened to vec4.
@@ -2115,7 +2115,8 @@ void SITargetLowering::allocateSystemSGPRs(CCState &CCInfo,
                                            SIMachineFunctionInfo &Info,
                                            CallingConv::ID CallConv,
                                            bool IsShader) const {
-  if (Subtarget->hasUserSGPRInit16Bug()) {
+  if (Subtarget->hasUserSGPRInit16Bug() && !Subtarget->isAmdPalOS()) {
+    // Note: user SGPRs are handled by the front-end for pal based shaders
     // Pad up the used user SGPRs with dead inputs.
     unsigned CurrentUserSGPRs = Info.getNumUserSGPRs();
 
@@ -2178,7 +2179,8 @@ void SITargetLowering::allocateSystemSGPRs(CCState &CCInfo,
     CCInfo.AllocateReg(PrivateSegmentWaveByteOffsetReg);
   }
 
-  assert(!Subtarget->hasUserSGPRInit16Bug() || Info.getNumPreloadedSGPRs() >= 16);
+  assert(!Subtarget->hasUserSGPRInit16Bug() || Subtarget->isAmdPalOS() ||
+         Info.getNumPreloadedSGPRs() >= 16);
 }
 
 static void reservePrivateMemoryRegs(const TargetMachine &TM,

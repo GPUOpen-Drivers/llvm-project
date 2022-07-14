@@ -90,7 +90,7 @@ static void getXferIndices(OpBuilder &b, OpTy xferOp, Value iv,
   indices.append(prevIndices.begin(), prevIndices.end());
 
   Location loc = xferOp.getLoc();
-  bool isBroadcast = !dim.hasValue();
+  bool isBroadcast = !dim.has_value();
   if (!isBroadcast) {
     AffineExpr d0, d1;
     bindDims(xferOp.getContext(), d0, d1);
@@ -357,7 +357,7 @@ struct Strategy<TransferReadOp> {
   static void getBufferIndices(TransferReadOp xferOp,
                                SmallVector<Value, 8> &indices) {
     auto storeOp = getStoreOp(xferOp);
-    auto prevIndices = memref::StoreOpAdaptor(storeOp).indices();
+    auto prevIndices = memref::StoreOpAdaptor(storeOp).getIndices();
     indices.append(prevIndices.begin(), prevIndices.end());
   }
 
@@ -463,7 +463,7 @@ struct Strategy<TransferWriteOp> {
   static void getBufferIndices(TransferWriteOp xferOp,
                                SmallVector<Value, 8> &indices) {
     auto loadOp = xferOp.getVector().getDefiningOp<memref::LoadOp>();
-    auto prevIndices = memref::LoadOpAdaptor(loadOp).indices();
+    auto prevIndices = memref::LoadOpAdaptor(loadOp).getIndices();
     indices.append(prevIndices.begin(), prevIndices.end());
   }
 

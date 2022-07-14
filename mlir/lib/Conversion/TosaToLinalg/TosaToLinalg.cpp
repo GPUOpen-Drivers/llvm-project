@@ -369,10 +369,17 @@ createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRange args,
 
   // tosa::ClampOp
   if (isa<tosa::ClampOp>(op) && elementTy.isa<FloatType>()) {
-    auto min = rewriter.create<arith::ConstantOp>(loc, elementTy,
-                                                  op->getAttr("min_fp"));
-    auto max = rewriter.create<arith::ConstantOp>(loc, elementTy,
-                                                  op->getAttr("max_fp"));
+    bool losesInfo = false;
+    APFloat min_apf = op->getAttr("min_fp").cast<FloatAttr>().getValue();
+    APFloat max_apf = op->getAttr("max_fp").cast<FloatAttr>().getValue();
+    min_apf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
+                    APFloat::rmNearestTiesToEven, &losesInfo);
+    max_apf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
+                    APFloat::rmNearestTiesToEven, &losesInfo);
+    auto min = rewriter.create<arith::ConstantOp>(
+        loc, elementTy, rewriter.getFloatAttr(elementTy, min_apf));
+    auto max = rewriter.create<arith::ConstantOp>(
+        loc, elementTy, rewriter.getFloatAttr(elementTy, max_apf));
     return clampHelper<arith::CmpFOp>(loc, args[0], min, max,
                                       arith::CmpFPredicate::OLT, rewriter);
   }
@@ -410,8 +417,12 @@ createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRange args,
   if (isa<tosa::ReluNOp>(op) && elementTy.isa<FloatType>()) {
     auto zero =
         rewriter.create<arith::ConstantOp>(loc, FloatAttr::get(elementTy, 0));
-    auto n = rewriter.create<arith::ConstantOp>(loc, elementTy,
-                                                op->getAttr("max_fp"));
+    bool losesInfo = false;
+    APFloat max_apf = op->getAttr("max_fp").cast<FloatAttr>().getValue();
+    max_apf.convert(elementTy.cast<FloatType>().getFloatSemantics(),
+                    APFloat::rmNearestTiesToEven, &losesInfo);
+    auto n = rewriter.create<arith::ConstantOp>(
+        loc, elementTy, rewriter.getFloatAttr(elementTy, max_apf));
     return clampHelper<arith::CmpFOp>(loc, args[0], zero, n,
                                       arith::CmpFPredicate::OLT, rewriter);
   }
@@ -1153,7 +1164,7 @@ public:
 
     auto dynamicDimsOr =
         checkHasDynamicBatchDims(rewriter, op, {input, op.output()});
-    if (!dynamicDimsOr.hasValue())
+    if (!dynamicDimsOr.has_value())
       return failure();
     SmallVector<Value> dynamicDims = dynamicDimsOr.getValue();
 
@@ -1345,7 +1356,7 @@ public:
 
     auto dynamicDimsOr =
         checkHasDynamicBatchDims(rewriter, op, {input, op.output()});
-    if (!dynamicDimsOr.hasValue())
+    if (!dynamicDimsOr.has_value())
       return failure();
     SmallVector<Value> dynamicDims = dynamicDimsOr.getValue();
 
@@ -2040,7 +2051,7 @@ public:
 
     auto dynamicDimsOr =
         checkHasDynamicBatchDims(rewriter, op, {input, indices, op.output()});
-    if (!dynamicDimsOr.hasValue())
+    if (!dynamicDimsOr.has_value())
       return failure();
     SmallVector<Value> dynamicDims = dynamicDimsOr.getValue();
 

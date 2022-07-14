@@ -49,7 +49,7 @@ static Value allocBuffer(ImplicitLocOpBuilder &b,
   auto width = layout.getTypeSize(elementType);
 
   IntegerAttr alignmentAttr;
-  if (alignment.hasValue())
+  if (alignment.has_value())
     alignmentAttr = b.getI64IntegerAttr(alignment.getValue());
 
   // Static buffer.
@@ -108,7 +108,8 @@ defaultDeallocBufferCallBack(const LinalgPromotionOptions &options,
                              OpBuilder &b, Value fullLocalView) {
   if (!options.useAlloca) {
     auto viewOp = cast<memref::ViewOp>(fullLocalView.getDefiningOp());
-    b.create<memref::DeallocOp>(viewOp.source().getLoc(), viewOp.source());
+    b.create<memref::DeallocOp>(viewOp.getSource().getLoc(),
+                                viewOp.getSource());
   }
   return success();
 }
