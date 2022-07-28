@@ -10,19 +10,25 @@
 #ifndef _LIBCPP___ITERATOR_REVERSE_ITERATOR_H
 #define _LIBCPP___ITERATOR_REVERSE_ITERATOR_H
 
+#include <__algorithm/unwrap_iter.h>
 #include <__compare/compare_three_way_result.h>
 #include <__compare/three_way_comparable.h>
 #include <__concepts/convertible_to.h>
 #include <__config>
+#include <__iterator/advance.h>
 #include <__iterator/concepts.h>
 #include <__iterator/incrementable_traits.h>
 #include <__iterator/iter_move.h>
 #include <__iterator/iter_swap.h>
 #include <__iterator/iterator.h>
 #include <__iterator/iterator_traits.h>
+#include <__iterator/next.h>
 #include <__iterator/prev.h>
 #include <__iterator/readable_traits.h>
 #include <__memory/addressof.h>
+#include <__ranges/access.h>
+#include <__ranges/concepts.h>
+#include <__ranges/subrange.h>
 #include <__utility/move.h>
 #include <type_traits>
 
@@ -135,7 +141,7 @@ public:
 #if _LIBCPP_STD_VER > 17
     _LIBCPP_INLINE_VISIBILITY
     constexpr pointer operator->() const
-      requires is_pointer_v<_Iter> || requires(const _Iter i) { i.operator->(); }
+      requires is_pointer_v<_Iter> || requires(const _Iter __i) { __i.operator->(); }
     {
       if constexpr (is_pointer_v<_Iter>) {
         return std::prev(current);
@@ -318,6 +324,59 @@ inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX14
 reverse_iterator<_Iter> make_reverse_iterator(_Iter __i)
 {
     return reverse_iterator<_Iter>(__i);
+}
+#endif
+
+template <class _Iter>
+using _ReverseWrapper = reverse_iterator<reverse_iterator<_Iter> >;
+
+template <class _Iter, bool __b>
+struct __unwrap_iter_impl<_ReverseWrapper<_Iter>, __b> {
+  static _LIBCPP_CONSTEXPR decltype(std::__unwrap_iter(std::declval<_Iter>()))
+  __apply(_ReverseWrapper<_Iter> __i) _NOEXCEPT {
+    return std::__unwrap_iter(__i.base().base());
+  }
+};
+
+template <class _OrigIter, class _UnwrappedIter>
+struct __rewrap_iter_impl<_ReverseWrapper<_OrigIter>, _UnwrappedIter> {
+  template <class _Iter>
+  struct _ReverseWrapperCount {
+    static _LIBCPP_CONSTEXPR const size_t value = 1;
+  };
+
+  template <class _Iter>
+  struct _ReverseWrapperCount<_ReverseWrapper<_Iter> > {
+    static _LIBCPP_CONSTEXPR const size_t value = 1 + _ReverseWrapperCount<_Iter>::value;
+  };
+
+  template <size_t _RewrapCount, class _OIter, class _UIter, __enable_if_t<_RewrapCount != 0, int> = 0>
+  _LIBCPP_HIDE_FROM_ABI static _LIBCPP_CONSTEXPR _ReverseWrapper<_OIter> __rewrap(_ReverseWrapper<_OIter> __iter1,
+                                                                                  _UIter __iter2) {
+    return _ReverseWrapper<_OIter>(
+        reverse_iterator<_OIter>(__rewrap<_RewrapCount - 1>(__iter1.base().base(), __iter2)));
+  }
+
+  template <size_t _RewrapCount, class _OIter, class _UIter, __enable_if_t<_RewrapCount == 0, int> = 0>
+  _LIBCPP_HIDE_FROM_ABI static _LIBCPP_CONSTEXPR decltype(std::__rewrap_iter(std::declval<_OIter>(),
+                                                                             std::declval<_UIter>()))
+  __rewrap(_OIter __iter1, _UIter __iter2) {
+    return std::__rewrap_iter(__iter1, __iter2);
+  }
+
+  _LIBCPP_HIDE_FROM_ABI static _LIBCPP_CONSTEXPR _ReverseWrapper<_OrigIter> __apply(_ReverseWrapper<_OrigIter> __iter1,
+                                                                                    _UnwrappedIter __iter2) {
+    return __rewrap<_ReverseWrapperCount<_OrigIter>::value>(__iter1, __iter2);
+  }
+};
+
+#if _LIBCPP_STD_VER > 17 && !defined(_LIBCPP_HAS_NO_INCOMPLETE_RANGES)
+template <ranges::bidirectional_range _Range>
+_LIBCPP_HIDE_FROM_ABI constexpr ranges::
+    subrange<reverse_iterator<ranges::iterator_t<_Range>>, reverse_iterator<ranges::iterator_t<_Range>>>
+    __reverse_range(_Range&& __range) {
+  auto __first = ranges::begin(__range);
+  return {std::make_reverse_iterator(ranges::next(__first, ranges::end(__range))), std::make_reverse_iterator(__first)};
 }
 #endif
 

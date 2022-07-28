@@ -623,6 +623,7 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
     return IC.replaceInstUsesWith(II, RightShift);
   }
   case Intrinsic::amdgcn_exp:
+  case Intrinsic::amdgcn_exp_row:
   case Intrinsic::amdgcn_exp_compr: {
     ConstantInt *En = cast<ConstantInt>(II.getArgOperand(1));
     unsigned EnBits = En->getZExtValue();
@@ -921,6 +922,12 @@ GCNTTIImpl::instCombineIntrinsic(InstCombiner &IC, IntrinsicInst &II) const {
 
     return IC.replaceOperand(II, 0, UndefValue::get(VDstIn->getType()));
   }
+  case Intrinsic::amdgcn_permlane64:
+    // A constant value is trivially uniform.
+    if (Constant *C = dyn_cast<Constant>(II.getArgOperand(0))) {
+      return IC.replaceInstUsesWith(II, C);
+    }
+    break;
   case Intrinsic::amdgcn_readfirstlane:
   case Intrinsic::amdgcn_readlane: {
     // A constant value is trivially uniform.

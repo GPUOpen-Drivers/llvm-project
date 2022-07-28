@@ -104,7 +104,7 @@ ParseResult Parser::parseNameOrFileLineColLocation(LocationAttr &loc) {
       return emitWrongTokenError(
           "expected integer line number in FileLineColLoc");
     auto line = getToken().getUnsignedIntegerValue();
-    if (!line.hasValue())
+    if (!line)
       return emitWrongTokenError(
           "expected integer line number in FileLineColLoc");
     consumeToken(Token::integer);
@@ -118,7 +118,7 @@ ParseResult Parser::parseNameOrFileLineColLocation(LocationAttr &loc) {
       return emitWrongTokenError(
           "expected integer column number in FileLineColLoc");
     auto column = getToken().getUnsignedIntegerValue();
-    if (!column.hasValue())
+    if (!column.has_value())
       return emitError("expected integer column number in FileLineColLoc");
     consumeToken(Token::integer);
 

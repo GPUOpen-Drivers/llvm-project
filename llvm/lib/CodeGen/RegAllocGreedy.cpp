@@ -1902,7 +1902,8 @@ unsigned RAGreedy::tryLastChanceRecoloring(const LiveInterval &VirtReg,
       const LiveInterval *LI;
       MCRegister PhysReg;
       std::tie(LI, PhysReg) = RecolorStack[I];
-      Matrix->assign(*LI, PhysReg);
+      if (!LI->empty() && !MRI->reg_nodbg_empty(LI->reg()))
+        Matrix->assign(*LI, PhysReg);
     }
 
     // Pop the stack of recoloring attempts.
@@ -2487,6 +2488,21 @@ void RAGreedy::reportStats() {
   }
 }
 
+bool RAGreedy::hasVirtRegAlloc() {
+  for (unsigned I = 0, E = MRI->getNumVirtRegs(); I != E; ++I) {
+    Register Reg = Register::index2VirtReg(I);
+    if (MRI->reg_nodbg_empty(Reg))
+      continue;
+    const TargetRegisterClass *RC = MRI->getRegClass(Reg);
+    if (!RC)
+      continue;
+    if (ShouldAllocateClass(*TRI, *RC))
+      return true;
+  }
+
+  return false;
+}
+
 bool RAGreedy::runOnMachineFunction(MachineFunction &mf) {
   LLVM_DEBUG(dbgs() << "********** GREEDY REGISTER ALLOCATION **********\n"
                     << "********** Function: " << mf.getName() << '\n');
@@ -2500,6 +2516,12 @@ bool RAGreedy::runOnMachineFunction(MachineFunction &mf) {
   RegAllocBase::init(getAnalysis<VirtRegMap>(),
                      getAnalysis<LiveIntervals>(),
                      getAnalysis<LiveRegMatrix>());
+
+  // Early return if there is no virtual register to be allocated to a
+  // physical register.
+  if (!hasVirtRegAlloc())
+    return false;
+
   Indexes = &getAnalysis<SlotIndexes>();
   MBFI = &getAnalysis<MachineBlockFrequencyInfo>();
   DomTree = &getAnalysis<MachineDominatorTree>();

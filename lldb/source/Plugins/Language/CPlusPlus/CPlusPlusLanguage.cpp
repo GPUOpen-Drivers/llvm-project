@@ -756,6 +756,12 @@ static void LoadLibCxxFormatters(lldb::TypeCategoryImplSP cpp_category_sp) {
       lldb_private::formatters::LibcxxAtomicSyntheticFrontEndCreator,
       "libc++ std::atomic synthetic children",
       ConstString("^std::__[[:alnum:]]+::atomic<.+>$"), stl_synth_flags, true);
+  AddCXXSynthetic(
+      cpp_category_sp,
+      lldb_private::formatters::LibcxxStdSpanSyntheticFrontEndCreator,
+      "libc++ std::span synthetic children",
+      ConstString("^std::__[[:alnum:]]+::span<.+>(( )?&)?$"), stl_deref_flags,
+      true);
 
   cpp_category_sp->GetRegexTypeSyntheticsContainer()->Add(
       RegularExpression("^(std::__[[:alnum:]]+::)deque<.+>(( )?&)?$"),
@@ -869,6 +875,11 @@ static void LoadLibCxxFormatters(lldb::TypeCategoryImplSP cpp_category_sp) {
                 "libc++ std::variant summary provider",
                 ConstString("^std::__[[:alnum:]]+::variant<.+>(( )?&)?$"),
                 stl_summary_flags, true);
+  AddCXXSummary(cpp_category_sp,
+                lldb_private::formatters::LibcxxContainerSummaryProvider,
+                "libc++ std::span summary provider",
+                ConstString("^std::__[[:alnum:]]+::span<.+>(( )?&)?$"),
+                stl_summary_flags, true);
 
   stl_summary_flags.SetSkipPointers(true);
 
@@ -900,6 +911,14 @@ static void LoadLibCxxFormatters(lldb::TypeCategoryImplSP cpp_category_sp) {
       "std::map iterator synthetic children",
       ConstString("^std::__[[:alnum:]]+::__map_iterator<.+>$"), stl_synth_flags,
       true);
+
+  AddCXXSynthetic(
+      cpp_category_sp,
+      lldb_private::formatters::
+          LibCxxUnorderedMapIteratorSyntheticFrontEndCreator,
+      "std::unordered_map iterator synthetic children",
+      ConstString("^std::__[[:alnum:]]+::__hash_map_(const_)?iterator<.+>$"),
+      stl_synth_flags, true);
 }
 
 static void LoadLibStdcppFormatters(lldb::TypeCategoryImplSP cpp_category_sp) {

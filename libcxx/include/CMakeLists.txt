@@ -45,6 +45,7 @@ set(files
   __algorithm/lexicographical_compare.h
   __algorithm/lower_bound.h
   __algorithm/make_heap.h
+  __algorithm/make_projected.h
   __algorithm/max.h
   __algorithm/max_element.h
   __algorithm/merge.h
@@ -78,31 +79,72 @@ set(files
   __algorithm/ranges_count.h
   __algorithm/ranges_count_if.h
   __algorithm/ranges_equal.h
+  __algorithm/ranges_equal_range.h
   __algorithm/ranges_fill.h
   __algorithm/ranges_fill_n.h
   __algorithm/ranges_find.h
+  __algorithm/ranges_find_end.h
   __algorithm/ranges_find_first_of.h
   __algorithm/ranges_find_if.h
   __algorithm/ranges_find_if_not.h
   __algorithm/ranges_for_each.h
   __algorithm/ranges_for_each_n.h
+  __algorithm/ranges_generate.h
+  __algorithm/ranges_generate_n.h
+  __algorithm/ranges_includes.h
+  __algorithm/ranges_inplace_merge.h
+  __algorithm/ranges_is_heap.h
+  __algorithm/ranges_is_heap_until.h
   __algorithm/ranges_is_partitioned.h
   __algorithm/ranges_is_sorted.h
   __algorithm/ranges_is_sorted_until.h
+  __algorithm/ranges_lexicographical_compare.h
   __algorithm/ranges_lower_bound.h
+  __algorithm/ranges_make_heap.h
   __algorithm/ranges_max.h
   __algorithm/ranges_max_element.h
+  __algorithm/ranges_merge.h
   __algorithm/ranges_min.h
   __algorithm/ranges_min_element.h
   __algorithm/ranges_minmax.h
   __algorithm/ranges_minmax_element.h
   __algorithm/ranges_mismatch.h
+  __algorithm/ranges_move.h
+  __algorithm/ranges_move_backward.h
   __algorithm/ranges_none_of.h
+  __algorithm/ranges_nth_element.h
+  __algorithm/ranges_partial_sort_copy.h
+  __algorithm/ranges_partition.h
+  __algorithm/ranges_partition_copy.h
+  __algorithm/ranges_partition_point.h
+  __algorithm/ranges_pop_heap.h
+  __algorithm/ranges_push_heap.h
+  __algorithm/ranges_remove.h
+  __algorithm/ranges_remove_copy.h
+  __algorithm/ranges_remove_copy_if.h
+  __algorithm/ranges_remove_if.h
   __algorithm/ranges_replace.h
+  __algorithm/ranges_replace_copy.h
+  __algorithm/ranges_replace_copy_if.h
   __algorithm/ranges_replace_if.h
   __algorithm/ranges_reverse.h
+  __algorithm/ranges_reverse_copy.h
+  __algorithm/ranges_rotate_copy.h
+  __algorithm/ranges_search.h
+  __algorithm/ranges_search_n.h
+  __algorithm/ranges_set_difference.h
+  __algorithm/ranges_set_intersection.h
+  __algorithm/ranges_set_symmetric_difference.h
+  __algorithm/ranges_set_union.h
+  __algorithm/ranges_shuffle.h
+  __algorithm/ranges_sort.h
+  __algorithm/ranges_sort_heap.h
+  __algorithm/ranges_stable_partition.h
+  __algorithm/ranges_stable_sort.h
   __algorithm/ranges_swap_ranges.h
   __algorithm/ranges_transform.h
+  __algorithm/ranges_unique.h
+  __algorithm/ranges_unique_copy.h
   __algorithm/ranges_upper_bound.h
   __algorithm/remove.h
   __algorithm/remove_copy.h
@@ -210,6 +252,7 @@ set(files
   __coroutine/noop_coroutine_handle.h
   __coroutine/trivial_awaitables.h
   __debug
+  __debug_utils/randomize_range.h
   __errc
   __filesystem/copy_options.h
   __filesystem/directory_entry.h
@@ -245,6 +288,7 @@ set(files
   __format/formatter_floating_point.h
   __format/formatter_integer.h
   __format/formatter_integral.h
+  __format/formatter_output.h
   __format/formatter_pointer.h
   __format/formatter_string.h
   __format/parser_std_format_spec.h
@@ -255,6 +299,7 @@ set(files
   __functional/bind_front.h
   __functional/binder1st.h
   __functional/binder2nd.h
+  __functional/boyer_moore_searcher.h
   __functional/compose.h
   __functional/default_searcher.h
   __functional/function.h
@@ -282,6 +327,7 @@ set(files
   __iterator/access.h
   __iterator/advance.h
   __iterator/back_insert_iterator.h
+  __iterator/bounded_iter.h
   __iterator/common_iterator.h
   __iterator/concepts.h
   __iterator/counted_iterator.h
@@ -480,9 +526,13 @@ set(files
   __type_traits/is_compound.h
   __type_traits/is_const.h
   __type_traits/is_constant_evaluated.h
+  __type_traits/is_constructible.h
   __type_traits/is_convertible.h
   __type_traits/is_copy_assignable.h
+  __type_traits/is_copy_constructible.h
   __type_traits/is_core_convertible.h
+  __type_traits/is_default_constructible.h
+  __type_traits/is_destructible.h
   __type_traits/is_empty.h
   __type_traits/is_enum.h
   __type_traits/is_final.h
@@ -495,6 +545,15 @@ set(files
   __type_traits/is_member_object_pointer.h
   __type_traits/is_member_pointer.h
   __type_traits/is_move_assignable.h
+  __type_traits/is_move_constructible.h
+  __type_traits/is_nothrow_assignable.h
+  __type_traits/is_nothrow_constructible.h
+  __type_traits/is_nothrow_copy_assignable.h
+  __type_traits/is_nothrow_copy_constructible.h
+  __type_traits/is_nothrow_default_constructible.h
+  __type_traits/is_nothrow_destructible.h
+  __type_traits/is_nothrow_move_assignable.h
+  __type_traits/is_nothrow_move_constructible.h
   __type_traits/is_null_pointer.h
   __type_traits/is_object.h
   __type_traits/is_pod.h
@@ -509,12 +568,21 @@ set(files
   __type_traits/is_signed.h
   __type_traits/is_standard_layout.h
   __type_traits/is_trivial.h
+  __type_traits/is_trivially_assignable.h
+  __type_traits/is_trivially_constructible.h
+  __type_traits/is_trivially_copy_assignable.h
+  __type_traits/is_trivially_copy_constructible.h
   __type_traits/is_trivially_copyable.h
+  __type_traits/is_trivially_default_constructible.h
+  __type_traits/is_trivially_destructible.h
+  __type_traits/is_trivially_move_assignable.h
+  __type_traits/is_trivially_move_constructible.h
   __type_traits/is_unbounded_array.h
   __type_traits/is_union.h
   __type_traits/is_unsigned.h
   __type_traits/is_void.h
   __type_traits/is_volatile.h
+  __type_traits/negation.h
   __type_traits/rank.h
   __type_traits/remove_all_extents.h
   __type_traits/remove_const.h
@@ -525,6 +593,7 @@ set(files
   __type_traits/remove_volatile.h
   __type_traits/type_identity.h
   __type_traits/underlying_type.h
+  __type_traits/void_t.h
   __undef_macros
   __utility/as_const.h
   __utility/auto_cast.h

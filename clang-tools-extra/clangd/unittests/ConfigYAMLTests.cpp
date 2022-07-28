@@ -163,9 +163,9 @@ Index:
   ASSERT_THAT(Diags.Diagnostics, IsEmpty());
   ASSERT_EQ(Results.size(), 1u);
   ASSERT_TRUE(Results[0].Index.External);
-  EXPECT_FALSE(Results[0].Index.External.getValue()->File.hasValue());
-  EXPECT_FALSE(Results[0].Index.External.getValue()->MountPoint.hasValue());
-  EXPECT_FALSE(Results[0].Index.External.getValue()->Server.hasValue());
+  EXPECT_FALSE(Results[0].Index.External.getValue()->File.has_value());
+  EXPECT_FALSE(Results[0].Index.External.getValue()->MountPoint.has_value());
+  EXPECT_FALSE(Results[0].Index.External.getValue()->Server.has_value());
   EXPECT_THAT(*Results[0].Index.External.getValue()->IsNone, testing::Eq(true));
 }
 
@@ -259,6 +259,19 @@ Diagnostics:
   ASSERT_THAT(Diags.Diagnostics, IsEmpty());
   ASSERT_EQ(Results.size(), 1u);
   EXPECT_THAT(Results[0].Diagnostics.Includes.IgnoreHeader,
+              ElementsAre(val("foo"), val("bar")));
+}
+
+TEST(ParseYAML, Style) {
+  CapturedDiags Diags;
+  Annotations YAML(R"yaml(
+Style:
+  FullyQualifiedNamespaces: [foo, bar])yaml");
+  auto Results =
+      Fragment::parseYAML(YAML.code(), "config.yaml", Diags.callback());
+  ASSERT_THAT(Diags.Diagnostics, IsEmpty());
+  ASSERT_EQ(Results.size(), 1u);
+  EXPECT_THAT(Results[0].Style.FullyQualifiedNamespaces,
               ElementsAre(val("foo"), val("bar")));
 }
 } // namespace

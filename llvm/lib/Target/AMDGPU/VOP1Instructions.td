@@ -110,13 +110,17 @@ class getVOP1Pat64 <SDPatternOperator node, VOPProfile P> : LetDummies {
 }
 
 multiclass VOP1Inst <string opName, VOPProfile P,
-                     SDPatternOperator node = null_frag> {
+                     SDPatternOperator node = null_frag, int VOPDOp = -1> {
   // We only want to set this on the basic, non-SDWA or DPP forms.
   defvar should_mov_imm = !or(!eq(opName, "v_mov_b32"),
                               !eq(opName, "v_mov_b64"));
 
   let isMoveImm = should_mov_imm in {
-    def _e32 : VOP1_Pseudo <opName, P>;
+    if !eq(VOPDOp, -1) then
+      def _e32 : VOP1_Pseudo <opName, P>;
+    else
+      // Only for V_MOV_B32
+      def _e32 : VOP1_Pseudo <opName, P>, VOPD_Component<VOPDOp, "v_mov_b32">;
     def _e64 : VOP3InstBase <opName, P, node>;
   }
 
@@ -147,7 +151,7 @@ class VOPProfileI2F<ValueType dstVt, ValueType srcVt> :
   VOPProfile<[dstVt, srcVt, untyped, untyped]> {
 
   let Ins64 = (ins Src0RC64:$src0, clampmod:$clamp, omod:$omod);
-  let InsVOP3Base = Ins64;
+  let InsVOP3Base = (ins Src0DPP:$src0, clampmod:$clamp, omod:$omod);
   let Asm64 = "$vdst, $src0$clamp$omod";
   let AsmVOP3DPPBase = Asm64;
 
@@ -182,8 +186,15 @@ let VOPAsmPrefer32Bit = 1 in {
 defm V_NOP : VOP1Inst <"v_nop", VOP_NOP_PROFILE>;
 }
 
+def VOPProfile_MOV : VOPProfile <[i32, i32, untyped, untyped]> {
+  let InsVOPDX = (ins Src0RC32:$src0X);
+  let InsVOPDXDeferred = (ins VSrc_f32_Deferred:$src0X);
+  let InsVOPDY = (ins Src0RC32:$src0Y);
+  let InsVOPDYDeferred = (ins VSrc_f32_Deferred:$src0Y);
+}
+
 let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
-defm V_MOV_B32 : VOP1Inst <"v_mov_b32", VOP_I32_I32>;
+defm V_MOV_B32 : VOP1Inst <"v_mov_b32", VOPProfile_MOV, null_frag, 0x8>;
 
 let SubtargetPredicate = isGFX940Plus in
 defm V_MOV_B64 : VOP1Inst <"v_mov_b64", VOP_I64_I64>;
@@ -518,7 +529,8 @@ def V_ACCVGPR_MOV_B32 : VOP1_Pseudo<"v_accvgpr_mov_b32", VOPProfileAccMov, [], 1
 let SubtargetPredicate = isGFX11Plus in {
   // Restrict src0 to be VGPR
   def V_PERMLANE64_B32 : VOP1_Pseudo<"v_permlane64_b32", VOP_MOVRELS,
-                                      [],
+                                      getVOP1Pat64<int_amdgcn_permlane64,
+                                                   VOP_MOVRELS>.ret,
                                       /*VOP1Only=*/ 1>;
   defm V_NOT_B16        : VOP1Inst<"v_not_b16", VOP_I16_I16>;
   defm V_CVT_I32_I16    : VOP1Inst<"v_cvt_i32_i16", VOP_I32_I16>;
@@ -1110,3 +1122,15 @@ def : GCNPat <
                         (as_i32timm $dpp8), (i32 DPP8Mode.FI_0))
 >;
 } // End OtherPredicates = [isGFX10Only]
+
+//===----------------------------------------------------------------------===//
+// GFX11
+//===----------------------------------------------------------------------===//
+
+let OtherPredicates = [isGFX11Only] in {
+def : GCNPat <
+  (i32 (int_amdgcn_mov_dpp8 i32:$src, timm:$dpp8)),
+  (V_MOV_B32_dpp8_gfx11 VGPR_32:$src, VGPR_32:$src,
+                        (as_i32timm $dpp8), (i32 DPP8Mode.FI_0))
+>;
+} // End OtherPredicates = [isGFX11Only]

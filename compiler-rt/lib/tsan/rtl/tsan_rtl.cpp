@@ -651,9 +651,6 @@ void Initialize(ThreadState *thr) {
   __tsan::InitializePlatformEarly();
 
 #if !SANITIZER_GO
-  // Re-exec ourselves if we need to set additional env or command line args.
-  MaybeReexec();
-
   InitializeAllocator();
   ReplaceSystemMalloc();
 #endif
@@ -722,8 +719,10 @@ void MaybeSpawnBackgroundThread() {
 int Finalize(ThreadState *thr) {
   bool failed = false;
 
+#if !SANITIZER_GO
   if (common_flags()->print_module_map == 1)
     DumpProcessMap();
+#endif
 
   if (flags()->atexit_sleep_ms > 0 && ThreadCount(thr) > 1)
     internal_usleep(u64(flags()->atexit_sleep_ms) * 1000);

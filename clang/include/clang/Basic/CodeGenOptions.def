@@ -107,6 +107,7 @@ CODEGENOPT(CFProtectionReturn , 1, 0) ///< if -fcf-protection is
 CODEGENOPT(CFProtectionBranch , 1, 0) ///< if -fcf-protection is
                                       ///< set to full or branch.
 CODEGENOPT(IBTSeal, 1, 0)             ///< set to optimize CFProtectionBranch.
+CODEGENOPT(FunctionReturnThunks, 1, 0) ///< -mfunction-return={keep|thunk-extern}
 
 CODEGENOPT(XRayInstrumentFunctions , 1, 0) ///< Set when -fxray-instrument is
                                            ///< enabled.
@@ -187,6 +188,7 @@ CODEGENOPT(NoImplicitFloat   , 1, 0) ///< Set when -mno-implicit-float is enable
 CODEGENOPT(NullPointerIsValid , 1, 0) ///< Assume Null pointer deference is defined.
 CODEGENOPT(OpenCLCorrectlyRoundedDivSqrt, 1, 0) ///< -cl-fp32-correctly-rounded-divide-sqrt
 CODEGENOPT(HIPCorrectlyRoundedDivSqrt, 1, 1) ///< -fno-hip-fp32-correctly-rounded-divide-sqrt
+CODEGENOPT(HIPSaveKernelArgName, 1, 0) ///< Set when -fhip-kernel-arg-name is enabled.
 CODEGENOPT(UniqueInternalLinkageNames, 1, 0) ///< Internal Linkage symbols get unique names.
 CODEGENOPT(SplitMachineFunctions, 1, 0) ///< Split machine functions using profile information.
 

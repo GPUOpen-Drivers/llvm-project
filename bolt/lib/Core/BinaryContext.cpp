@@ -124,8 +124,7 @@ BinaryContext::createBinaryContext(const ObjectFile *File, bool IsPIC,
     break;
   case llvm::Triple::aarch64:
     ArchName = "aarch64";
-    FeaturesStr = "+fp-armv8,+neon,+crypto,+dotprod,+crc,+lse,+ras,+rdm,"
-                  "+fullfp16,+spe,+fuse-aes,+rcpc";
+    FeaturesStr = "+all";
     break;
   default:
     return createStringError(std::errc::not_supported,
@@ -416,7 +415,7 @@ BinaryContext::handleAddressRef(uint64_t Address, BinaryFunction &BF,
             BF.addEntryPointAtOffset(Address - BF.getAddress()), Addend);
       }
     } else {
-      BF.InterproceduralReferences.insert(Address);
+      addInterproceduralReference(&BF, Address);
     }
   }
 
@@ -718,9 +717,8 @@ void BinaryContext::skipMarkedFragments() {
     BF->setSimple(false);
     BF->setHasSplitJumpTable(true);
 
-    std::for_each(BF->Fragments.begin(), BF->Fragments.end(), addToWorklist);
-    std::for_each(BF->ParentFragments.begin(), BF->ParentFragments.end(),
-                  addToWorklist);
+    llvm::for_each(BF->Fragments, addToWorklist);
+    llvm::for_each(BF->ParentFragments, addToWorklist);
   }
   if (!FragmentsToSkip.empty())
     errs() << "BOLT-WARNING: skipped " << FragmentsToSkip.size() << " function"
@@ -764,12 +762,31 @@ BinaryFunction *BinaryContext::createBinaryFunction(
 const MCSymbol *
 BinaryContext::getOrCreateJumpTable(BinaryFunction &Function, uint64_t Address,
                                     JumpTable::JumpTableType Type) {
+  auto isFragmentOf = [](BinaryFunction *Fragment, BinaryFunction *Parent) {
+    return (Fragment->isFragment() && Fragment->isParentFragment(Parent));
+  };
+
   if (JumpTable *JT = getJumpTableContainingAddress(Address)) {
     assert(JT->Type == Type && "jump table types have to match");
-    assert(JT->Parent == &Function &&
+    bool HasMultipleParents = isFragmentOf(JT->Parent, &Function) ||
+                              isFragmentOf(&Function, JT->Parent);
+    assert((JT->Parent == &Function || HasMultipleParents) &&
            "cannot re-use jump table of a different function");
     assert(Address == JT->getAddress() && "unexpected non-empty jump table");
 
+    // Flush OffsetEntries with INVALID_OFFSET if multiple parents
+    // Duplicate the entry for the parent function for easy access
+    if (HasMultipleParents) {
+      if (opts::Verbosity > 2) {
+        outs() << "BOLT-WARNING: Multiple fragments access same jump table: "
+               << JT->Parent->getPrintName() << "; " << Function.getPrintName()
+               << "\n";
+      }
+      constexpr uint64_t INVALID_OFFSET = std::numeric_limits<uint64_t>::max();
+      for (unsigned I = 0; I < JT->OffsetEntries.size(); ++I)
+        JT->OffsetEntries[I] = INVALID_OFFSET;
+      Function.JumpTables.emplace(Address, JT);
+    }
     return JT->getFirstLabel();
   }
 
@@ -1040,10 +1057,9 @@ void BinaryContext::generateSymbolHashes() {
 
     // First check if a non-anonymous alias exists and move it to the front.
     if (BD.getSymbols().size() > 1) {
-      auto Itr = std::find_if(BD.getSymbols().begin(), BD.getSymbols().end(),
-                              [&](const MCSymbol *Symbol) {
-                                return !isInternalSymbolName(Symbol->getName());
-                              });
+      auto Itr = llvm::find_if(BD.getSymbols(), [&](const MCSymbol *Symbol) {
+        return !isInternalSymbolName(Symbol->getName());
+      });
       if (Itr != BD.getSymbols().end()) {
         size_t Idx = std::distance(BD.getSymbols().begin(), Itr);
         std::swap(BD.getSymbols()[0], BD.getSymbols()[Idx]);
@@ -1104,9 +1120,106 @@ bool BinaryContext::registerFragment(BinaryFunction &TargetFunction,
   return true;
 }
 
-void BinaryContext::processInterproceduralReferences(BinaryFunction &Function) {
-  for (uint64_t Address : Function.InterproceduralReferences) {
-    if (!Address)
+void BinaryContext::addAdrpAddRelocAArch64(BinaryFunction &BF,
+                                           MCInst &LoadLowBits,
+                                           MCInst &LoadHiBits,
+                                           uint64_t Target) {
+  const MCSymbol *TargetSymbol;
+  uint64_t Addend = 0;
+  std::tie(TargetSymbol, Addend) = handleAddressRef(Target, BF,
+                                                    /*IsPCRel*/ true);
+  int64_t Val;
+  MIB->replaceImmWithSymbolRef(LoadHiBits, TargetSymbol, Addend, Ctx.get(), Val,
+                               ELF::R_AARCH64_ADR_PREL_PG_HI21);
+  MIB->replaceImmWithSymbolRef(LoadLowBits, TargetSymbol, Addend, Ctx.get(),
+                               Val, ELF::R_AARCH64_ADD_ABS_LO12_NC);
+}
+
+bool BinaryContext::handleAArch64Veneer(uint64_t Address, bool MatchOnly) {
+  BinaryFunction *TargetFunction = getBinaryFunctionContainingAddress(Address);
+  if (TargetFunction)
+    return false;
+
+  ErrorOr<BinarySection &> Section = getSectionForAddress(Address);
+  assert(Section && "cannot get section for referenced address");
+  if (!Section->isText())
+    return false;
+
+  bool Ret = false;
+  StringRef SectionContents = Section->getContents();
+  uint64_t Offset = Address - Section->getAddress();
+  const uint64_t MaxSize = SectionContents.size() - Offset;
+  const uint8_t *Bytes =
+      reinterpret_cast<const uint8_t *>(SectionContents.data());
+  ArrayRef<uint8_t> Data(Bytes + Offset, MaxSize);
+
+  auto matchVeneer = [&](BinaryFunction::InstrMapType &Instructions,
+                         MCInst &Instruction, uint64_t Offset,
+                         uint64_t AbsoluteInstrAddr,
+                         uint64_t TotalSize) -> bool {
+    MCInst *TargetHiBits, *TargetLowBits;
+    uint64_t TargetAddress, Count;
+    Count = MIB->matchLinkerVeneer(Instructions.begin(), Instructions.end(),
+                                   AbsoluteInstrAddr, Instruction, TargetHiBits,
+                                   TargetLowBits, TargetAddress);
+    if (!Count)
+      return false;
+
+    if (MatchOnly)
+      return true;
+
+    // NOTE The target symbol was created during disassemble's
+    // handleExternalReference
+    const MCSymbol *VeneerSymbol = getOrCreateGlobalSymbol(Address, "FUNCat");
+    BinaryFunction *Veneer = createBinaryFunction(VeneerSymbol->getName().str(),
+                                                  *Section, Address, TotalSize);
+    addAdrpAddRelocAArch64(*Veneer, *TargetLowBits, *TargetHiBits,
+                           TargetAddress);
+    MIB->addAnnotation(Instruction, "AArch64Veneer", true);
+    Veneer->addInstruction(Offset, std::move(Instruction));
+    --Count;
+    for (auto It = std::prev(Instructions.end()); Count != 0;
+         It = std::prev(It), --Count) {
+      MIB->addAnnotation(It->second, "AArch64Veneer", true);
+      Veneer->addInstruction(It->first, std::move(It->second));
+    }
+
+    Veneer->getOrCreateLocalLabel(Address);
+    Veneer->setMaxSize(TotalSize);
+    Veneer->updateState(BinaryFunction::State::Disassembled);
+    LLVM_DEBUG(dbgs() << "BOLT-DEBUG: handling veneer function at 0x" << Address
+                      << "\n");
+    return true;
+  };
+
+  uint64_t Size = 0, TotalSize = 0;
+  BinaryFunction::InstrMapType VeneerInstructions;
+  for (Offset = 0; Offset < MaxSize; Offset += Size) {
+    MCInst Instruction;
+    const uint64_t AbsoluteInstrAddr = Address + Offset;
+    if (!SymbolicDisAsm->getInstruction(Instruction, Size, Data.slice(Offset),
+                                        AbsoluteInstrAddr, nulls()))
+      break;
+
+    TotalSize += Size;
+    if (MIB->isBranch(Instruction)) {
+      Ret = matchVeneer(VeneerInstructions, Instruction, Offset,
+                        AbsoluteInstrAddr, TotalSize);
+      break;
+    }
+
+    VeneerInstructions.emplace(Offset, std::move(Instruction));
+  }
+
+  return Ret;
+}
+
+void BinaryContext::processInterproceduralReferences() {
+  for (const std::pair<BinaryFunction *, uint64_t> &It :
+       InterproceduralReferences) {
+    BinaryFunction &Function = *It.first;
+    uint64_t Address = It.second;
+    if (!Address || Function.isIgnored())
       continue;
 
     BinaryFunction *TargetFunction =
@@ -1115,7 +1228,7 @@ void BinaryContext::processInterproceduralReferences(BinaryFunction &Function) {
       continue;
 
     if (TargetFunction) {
-      if (TargetFunction->IsFragment &&
+      if (TargetFunction->isFragment() &&
           !registerFragment(*TargetFunction, Function)) {
         errs() << "BOLT-WARNING: interprocedural reference between unrelated "
                   "fragments: "
@@ -1141,6 +1254,10 @@ void BinaryContext::processInterproceduralReferences(BinaryFunction &Function) {
     if (SectionName == ".plt" || SectionName == ".plt.got")
       continue;
 
+    // Check if it is aarch64 veneer written at Address
+    if (isAArch64() && handleAArch64Veneer(Address))
+      continue;
+
     if (opts::processAllFunctions()) {
       errs() << "BOLT-ERROR: cannot process binaries with unmarked "
              << "object in code at address 0x" << Twine::utohexstr(Address)
@@ -1161,7 +1278,7 @@ void BinaryContext::processInterproceduralReferences(BinaryFunction &Function) {
     }
   }
 
-  clearList(Function.InterproceduralReferences);
+  InterproceduralReferences.clear();
 }
 
 void BinaryContext::postProcessSymbolTable() {
@@ -1205,8 +1322,7 @@ void BinaryContext::foldFunction(BinaryFunction &ChildBF,
   ChildBF.getSymbols().clear();
 
   // Move other names the child function is known under.
-  std::move(ChildBF.Aliases.begin(), ChildBF.Aliases.end(),
-            std::back_inserter(ParentBF.Aliases));
+  llvm::move(ChildBF.Aliases, std::back_inserter(ParentBF.Aliases));
   ChildBF.Aliases.clear();
 
   if (HasRelocations) {
@@ -1373,32 +1489,29 @@ unsigned BinaryContext::addDebugFilenameToUnit(const uint32_t DestCUID,
 
 std::vector<BinaryFunction *> BinaryContext::getSortedFunctions() {
   std::vector<BinaryFunction *> SortedFunctions(BinaryFunctions.size());
-  std::transform(BinaryFunctions.begin(), BinaryFunctions.end(),
-                 SortedFunctions.begin(),
-                 [](std::pair<const uint64_t, BinaryFunction> &BFI) {
-                   return &BFI.second;
-                 });
+  llvm::transform(BinaryFunctions, SortedFunctions.begin(),
+                  [](std::pair<const uint64_t, BinaryFunction> &BFI) {
+                    return &BFI.second;
+                  });
 
-  std::stable_sort(SortedFunctions.begin(), SortedFunctions.end(),
-                   [](const BinaryFunction *A, const BinaryFunction *B) {
-                     if (A->hasValidIndex() && B->hasValidIndex()) {
-                       return A->getIndex() < B->getIndex();
-                     }
-                     return A->hasValidIndex();
-                   });
+  llvm::stable_sort(SortedFunctions,
+                    [](const BinaryFunction *A, const BinaryFunction *B) {
+                      if (A->hasValidIndex() && B->hasValidIndex()) {
+                        return A->getIndex() < B->getIndex();
+                      }
+                      return A->hasValidIndex();
+                    });
   return SortedFunctions;
 }
 
 std::vector<BinaryFunction *> BinaryContext::getAllBinaryFunctions() {
   std::vector<BinaryFunction *> AllFunctions;
   AllFunctions.reserve(BinaryFunctions.size() + InjectedBinaryFunctions.size());
-  std::transform(BinaryFunctions.begin(), BinaryFunctions.end(),
-                 std::back_inserter(AllFunctions),
-                 [](std::pair<const uint64_t, BinaryFunction> &BFI) {
-                   return &BFI.second;
-                 });
-  std::copy(InjectedBinaryFunctions.begin(), InjectedBinaryFunctions.end(),
-            std::back_inserter(AllFunctions));
+  llvm::transform(BinaryFunctions, std::back_inserter(AllFunctions),
+                  [](std::pair<const uint64_t, BinaryFunction> &BFI) {
+                    return &BFI.second;
+                  });
+  llvm::copy(InjectedBinaryFunctions, std::back_inserter(AllFunctions));
 
   return AllFunctions;
 }
@@ -1471,21 +1584,15 @@ void BinaryContext::preprocessDebugInfo() {
     ContainsDwarfLegacy |= CU->getVersion() < 5;
   }
 
-  if (ContainsDwarf5 && ContainsDwarfLegacy)
-    llvm::errs() << "BOLT-WARNING: BOLT does not support mix mode binary with "
-                    "DWARF5 and DWARF{2,3,4}.\n";
-
-  std::sort(AllRanges.begin(), AllRanges.end());
+  llvm::sort(AllRanges);
   for (auto &KV : BinaryFunctions) {
     const uint64_t FunctionAddress = KV.first;
     BinaryFunction &Function = KV.second;
 
-    auto It = std::partition_point(
-        AllRanges.begin(), AllRanges.end(),
-        [=](CURange R) { return R.HighPC <= FunctionAddress; });
-    if (It != AllRanges.end() && It->LowPC <= FunctionAddress) {
+    auto It = llvm::partition_point(
+        AllRanges, [=](CURange R) { return R.HighPC <= FunctionAddress; });
+    if (It != AllRanges.end() && It->LowPC <= FunctionAddress)
       Function.setDWARFUnit(It->Unit);
-    }
   }
 
   // Discover units with debug info that needs to be updated.
@@ -2199,8 +2306,7 @@ DebugAddressRangesVector BinaryContext::translateModuleAddressRanges(
         break;
       const DebugAddressRangesVector FunctionRanges =
           Function.getOutputAddressRanges();
-      std::move(std::begin(FunctionRanges), std::end(FunctionRanges),
-                std::back_inserter(OutputRanges));
+      llvm::move(FunctionRanges, std::back_inserter(OutputRanges));
       std::advance(BFI, 1);
     }
   }
