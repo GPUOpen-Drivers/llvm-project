@@ -974,7 +974,7 @@ public:
   /// This is a convenience function for code that uses aggregate return values
   /// as a vehicle for having multiple return values.
   ReturnInst *CreateAggregateRet(Value *const *retVals, unsigned N) {
-    Value *V = UndefValue::get(getCurrentFunctionReturnType());
+    Value *V = PoisonValue::get(getCurrentFunctionReturnType());
     for (unsigned i = 0; i != N; ++i)
       V = CreateInsertValue(V, retVals[i], i, "mrv");
     return Insert(ReturnInst::Create(Context, V));
@@ -1162,11 +1162,11 @@ private:
     RoundingMode UseRounding = DefaultConstrainedRounding;
 
     if (Rounding)
-      UseRounding = Rounding.getValue();
+      UseRounding = Rounding.value();
 
     Optional<StringRef> RoundingStr = convertRoundingModeToStr(UseRounding);
     assert(RoundingStr && "Garbage strict rounding mode!");
-    auto *RoundingMDS = MDString::get(Context, RoundingStr.getValue());
+    auto *RoundingMDS = MDString::get(Context, RoundingStr.value());
 
     return MetadataAsValue::get(Context, RoundingMDS);
   }
@@ -1175,11 +1175,11 @@ private:
     fp::ExceptionBehavior UseExcept = DefaultConstrainedExcept;
 
     if (Except)
-      UseExcept = Except.getValue();
+      UseExcept = Except.value();
 
     Optional<StringRef> ExceptStr = convertExceptionBehaviorToStr(UseExcept);
     assert(ExceptStr && "Garbage strict exception behavior!");
-    auto *ExceptMDS = MDString::get(Context, ExceptStr.getValue());
+    auto *ExceptMDS = MDString::get(Context, ExceptStr.value());
 
     return MetadataAsValue::get(Context, ExceptMDS);
   }

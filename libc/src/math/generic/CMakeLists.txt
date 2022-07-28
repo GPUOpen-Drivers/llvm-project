@@ -76,11 +76,16 @@ add_entrypoint_object(
     sinf.cpp
   HDRS
     ../sinf.h
+    range_reduction.h
+    range_reduction_fma.h
   DEPENDS
-    .sincosf_utils
     libc.include.math
     libc.src.errno.errno
     libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.fma
+    libc.src.__support.FPUtil.multiply_add
+    libc.src.__support.FPUtil.nearest_integer
+    libc.src.__support.FPUtil.polyeval
   COMPILE_OPTIONS
     -O3
 )
@@ -478,6 +483,8 @@ add_entrypoint_object(
   DEPENDS
     .common_constants
     libc.src.__support.FPUtil.fputil
+    libc.src.__support.FPUtil.multiply_add
+    libc.src.__support.FPUtil.nearest_integer
     libc.src.__support.FPUtil.polyeval
     libc.include.math
   COMPILE_OPTIONS
@@ -508,6 +515,7 @@ add_entrypoint_object(
     .common_constants
     libc.src.__support.FPUtil.fputil
     libc.src.__support.FPUtil.multiply_add
+    libc.src.__support.FPUtil.nearest_integer
     libc.src.__support.FPUtil.polyeval
     libc.include.math
   COMPILE_OPTIONS

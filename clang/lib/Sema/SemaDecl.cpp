@@ -275,6 +275,45 @@ static ParsedType recoverFromTypeInKnownDependentBase(Sema &S,
   return S.CreateParsedType(T, Builder.getTypeSourceInfo(Context, T));
 }
 
+/// Build a ParsedType for a simple-type-specifier with a nested-name-specifier.
+static ParsedType buildNamedType(Sema &S, const CXXScopeSpec *SS, QualType T,
+                                 SourceLocation NameLoc,
+                                 bool WantNontrivialTypeSourceInfo = true) {
+  switch (T->getTypeClass()) {
+  case Type::DeducedTemplateSpecialization:
+  case Type::Enum:
+  case Type::InjectedClassName:
+  case Type::Record:
+  case Type::Typedef:
+  case Type::UnresolvedUsing:
+  case Type::Using:
+    break;
+  // These can never be qualified so an ElaboratedType node
+  // would carry no additional meaning.
+  case Type::ObjCInterface:
+  case Type::ObjCTypeParam:
+  case Type::TemplateTypeParm:
+    return ParsedType::make(T);
+  default:
+    llvm_unreachable("Unexpected Type Class");
+  }
+
+  if (!SS || SS->isEmpty())
+    return ParsedType::make(
+        S.Context.getElaboratedType(ETK_None, nullptr, T, nullptr));
+
+  QualType ElTy = S.getElaboratedType(ETK_None, *SS, T);
+  if (!WantNontrivialTypeSourceInfo)
+    return ParsedType::make(ElTy);
+
+  TypeLocBuilder Builder;
+  Builder.pushTypeSpec(T).setNameLoc(NameLoc);
+  ElaboratedTypeLoc ElabTL = Builder.push<ElaboratedTypeLoc>(ElTy);
+  ElabTL.setElaboratedKeywordLoc(SourceLocation());
+  ElabTL.setQualifierLoc(SS->getWithLocInContext(S.Context));
+  return S.CreateParsedType(ElTy, Builder.getTypeSourceInfo(S.Context, ElTy));
+}
+
 /// If the identifier refers to a type name within this scope,
 /// return the declaration of that type.
 ///
@@ -500,8 +539,7 @@ ParsedType Sema::getTypeName(const IdentifierInfo &II, SourceLocation NameLoc,
   } else if (auto *UD = dyn_cast<UnresolvedUsingIfExistsDecl>(IIDecl)) {
     (void)DiagnoseUseOfDecl(UD, NameLoc);
     // Recover with 'int'
-    T = Context.IntTy;
-    FoundUsingShadow = nullptr;
+    return ParsedType::make(Context.IntTy);
   } else if (AllowDeducedTemplate) {
     if (auto *TD = getAsTypeTemplateDecl(IIDecl)) {
       assert(!FoundUsingShadow || FoundUsingShadow->getTargetDecl() == TD);
@@ -523,27 +561,7 @@ ParsedType Sema::getTypeName(const IdentifierInfo &II, SourceLocation NameLoc,
   if (FoundUsingShadow)
     T = Context.getUsingType(FoundUsingShadow, T);
 
-  // NOTE: avoid constructing an ElaboratedType(Loc) if this is a
-  // constructor or destructor name (in such a case, the scope specifier
-  // will be attached to the enclosing Expr or Decl node).
-  if (SS && SS->isNotEmpty() && !IsCtorOrDtorName &&
-      !isa<ObjCInterfaceDecl, UnresolvedUsingIfExistsDecl>(IIDecl)) {
-    if (WantNontrivialTypeSourceInfo) {
-      // Construct a type with type-source information.
-      TypeLocBuilder Builder;
-      Builder.pushTypeSpec(T).setNameLoc(NameLoc);
-
-      T = getElaboratedType(ETK_None, *SS, T);
-      ElaboratedTypeLoc ElabTL = Builder.push<ElaboratedTypeLoc>(T);
-      ElabTL.setElaboratedKeywordLoc(SourceLocation());
-      ElabTL.setQualifierLoc(SS->getWithLocInContext(Context));
-      return CreateParsedType(T, Builder.getTypeSourceInfo(Context, T));
-    } else {
-      T = getElaboratedType(ETK_None, *SS, T);
-    }
-  }
-
-  return ParsedType::make(T);
+  return buildNamedType(*this, SS, T, NameLoc, WantNontrivialTypeSourceInfo);
 }
 
 // Builds a fake NNS for the given decl context.
@@ -1147,17 +1165,7 @@ Corrected:
     QualType T = Context.getTypeDeclType(Type);
     if (const auto *USD = dyn_cast<UsingShadowDecl>(Found))
       T = Context.getUsingType(USD, T);
-
-    if (SS.isEmpty()) // No elaborated type, trivial location info
-      return ParsedType::make(T);
-
-    TypeLocBuilder Builder;
-    Builder.pushTypeSpec(T).setNameLoc(NameLoc);
-    T = getElaboratedType(ETK_None, SS, T);
-    ElaboratedTypeLoc ElabTL = Builder.push<ElaboratedTypeLoc>(T);
-    ElabTL.setElaboratedKeywordLoc(SourceLocation());
-    ElabTL.setQualifierLoc(SS.getWithLocInContext(Context));
-    return CreateParsedType(T, Builder.getTypeSourceInfo(Context, T));
+    return buildNamedType(*this, &SS, T, NameLoc);
   };
 
   NamedDecl *FirstDecl = (*Result.begin())->getUnderlyingDecl();
@@ -2092,7 +2100,7 @@ static void CheckPoppedLabel(LabelDecl *L, Sema &S) {
 }
 
 void Sema::ActOnPopScope(SourceLocation Loc, Scope *S) {
-  S->mergeNRVOIntoParent();
+  S->applyNRVO();
 
   if (S->decl_empty()) return;
   assert((S->getFlags() & (Scope::DeclScope | Scope::TemplateParamScope)) &&
@@ -9411,15 +9419,27 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     NewFD->setLocalExternDecl();
 
   if (getLangOpts().CPlusPlus) {
+    // The rules for implicit inlines changed in C++20 for methods and friends
+    // with an in-class definition (when such a definition is not attached to
+    // the global module).  User-specified 'inline' overrides this (set when
+    // the function decl is created above).
+    // FIXME: We need a better way to separate C++ standard and clang modules.
+    bool ImplicitInlineCXX20 = !getLangOpts().CPlusPlusModules ||
+                               !NewFD->getOwningModule() ||
+                               NewFD->getOwningModule()->isGlobalModule() ||
+                               NewFD->getOwningModule()->isModuleMapModule();
     bool isInline = D.getDeclSpec().isInlineSpecified();
     bool isVirtual = D.getDeclSpec().isVirtualSpecified();
     bool hasExplicit = D.getDeclSpec().hasExplicitSpecifier();
     isFriend = D.getDeclSpec().isFriendSpecified();
     if (isFriend && !isInline && D.isFunctionDefinition()) {
-      // C++ [class.friend]p5
+      // Pre-C++20 [class.friend]p5
       //   A function can be defined in a friend declaration of a
       //   class . . . . Such a function is implicitly inline.
-      NewFD->setImplicitlyInline();
+      // Post C++20 [class.friend]p7
+      //   Such a function is implicitly an inline function if it is attached
+      //   to the global module.
+      NewFD->setImplicitlyInline(ImplicitInlineCXX20);
     }
 
     // If this is a method defined in an __interface, and is not a constructor
@@ -9702,11 +9722,14 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
     }
 
     if (isa<CXXMethodDecl>(NewFD) && DC == CurContext &&
-        D.isFunctionDefinition()) {
-      // C++ [class.mfct]p2:
+        D.isFunctionDefinition() && !isInline) {
+      // Pre C++20 [class.mfct]p2:
       //   A member function may be defined (8.4) in its class definition, in
       //   which case it is an inline member function (7.1.2)
-      NewFD->setImplicitlyInline();
+      // Post C++20 [class.mfct]p1:
+      //   If a member function is attached to the global module and is defined
+      //   in its class definition, it is inline.
+      NewFD->setImplicitlyInline(ImplicitInlineCXX20);
     }
 
     if (SC == SC_Static && isa<CXXMethodDecl>(NewFD) &&
@@ -15514,7 +15537,7 @@ void Sema::AddKnownFunctionAttributesForReplaceableGlobalAllocationFunction(
   //         specified by the value of this argument.
   if (AlignmentParam && !FD->hasAttr<AllocAlignAttr>()) {
     FD->addAttr(AllocAlignAttr::CreateImplicit(
-        Context, ParamIdx(AlignmentParam.getValue(), FD), FD->getLocation()));
+        Context, ParamIdx(AlignmentParam.value(), FD), FD->getLocation()));
   }
 
   // FIXME:
@@ -16194,7 +16217,10 @@ Decl *Sema::ActOnTag(Scope *S, unsigned TagSpec, TagUseKind TUK,
           ED->setIntegerTypeSourceInfo(TI);
         else
           ED->setIntegerType(QualType(EnumUnderlying.get<const Type *>(), 0));
-        ED->setPromotionType(ED->getIntegerType());
+        QualType EnumTy = ED->getIntegerType();
+        ED->setPromotionType(EnumTy->isPromotableIntegerType()
+                                 ? Context.getPromotedIntegerType(EnumTy)
+                                 : EnumTy);
       }
     } else { // struct/union
       New = RecordDecl::Create(Context, Kind, SearchDC, KWLoc, Loc, Name,
@@ -16816,8 +16842,11 @@ CreateNewDecl:
       if (TypeSourceInfo *TI = EnumUnderlying.dyn_cast<TypeSourceInfo*>())
         ED->setIntegerTypeSourceInfo(TI);
       else
-        ED->setIntegerType(QualType(EnumUnderlying.get<const Type*>(), 0));
-      ED->setPromotionType(ED->getIntegerType());
+        ED->setIntegerType(QualType(EnumUnderlying.get<const Type *>(), 0));
+      QualType EnumTy = ED->getIntegerType();
+      ED->setPromotionType(EnumTy->isPromotableIntegerType()
+                               ? Context.getPromotedIntegerType(EnumTy)
+                               : EnumTy);
       assert(ED->isComplete() && "enum with type should be complete");
     }
   } else {
@@ -18878,13 +18907,23 @@ void Sema::ActOnEnumBody(SourceLocation EnumLoc, SourceRange BraceRange,
     const llvm::APSInt &InitVal = ECD->getInitVal();
 
     // Keep track of the size of positive and negative values.
-    if (InitVal.isUnsigned() || InitVal.isNonNegative())
-      NumPositiveBits = std::max(NumPositiveBits,
-                                 (unsigned)InitVal.getActiveBits());
-    else
+    if (InitVal.isUnsigned() || InitVal.isNonNegative()) {
+      // If the enumerator is zero that should still be counted as a positive
+      // bit since we need a bit to store the value zero.
+      unsigned ActiveBits = InitVal.getActiveBits();
+      NumPositiveBits = std::max({NumPositiveBits, ActiveBits, 1u});
+    } else {
       NumNegativeBits = std::max(NumNegativeBits,
                                  (unsigned)InitVal.getMinSignedBits());
+    }
   }
+
+  // If we have have an empty set of enumerators we still need one bit.
+  // From [dcl.enum]p8
+  // If the enumerator-list is empty, the values of the enumeration are as if
+  // the enumeration had a single enumerator with value 0
+  if (!NumPositiveBits && !NumNegativeBits)
+    NumPositiveBits = 1;
 
   // Figure out the type that should be used for this enum.
   QualType BestType;

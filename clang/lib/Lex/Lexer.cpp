@@ -1462,11 +1462,11 @@ static bool isAllowedIDChar(uint32_t C, const LangOptions &LangOpts) {
     return false;
   } else if (LangOpts.DollarIdents && '$' == C) {
     return true;
-  } else if (LangOpts.CPlusPlus) {
+  } else if (LangOpts.CPlusPlus || LangOpts.C2x) {
     // A non-leading codepoint must have the XID_Continue property.
     // XIDContinueRanges doesn't contains characters also in XIDStartRanges,
     // so we need to check both tables.
-    // '_' doesn't have the XID_Continue property but is allowed in C++.
+    // '_' doesn't have the XID_Continue property but is allowed in C and C++.
     static const llvm::sys::UnicodeCharSet XIDStartChars(XIDStartRanges);
     static const llvm::sys::UnicodeCharSet XIDContinueChars(XIDContinueRanges);
     return C == '_' || XIDStartChars.contains(C) ||
@@ -1486,7 +1486,7 @@ static bool isAllowedInitiallyIDChar(uint32_t C, const LangOptions &LangOpts) {
   if (LangOpts.AsmPreprocessor) {
     return false;
   }
-  if (LangOpts.CPlusPlus) {
+  if (LangOpts.CPlusPlus || LangOpts.C2x) {
     static const llvm::sys::UnicodeCharSet XIDStartChars(XIDStartRanges);
     // '_' doesn't have the XID_Start property but is allowed in C++.
     return C == '_' || XIDStartChars.contains(C);
@@ -3287,7 +3287,10 @@ llvm::Optional<uint32_t> Lexer::tryReadNumericUCN(const char *&StartPtr,
   }
 
   if (Delimited && PP) {
-    Diag(BufferPtr, diag::ext_delimited_escape_sequence) << /*delimited*/ 0;
+    Diag(BufferPtr, PP->getLangOpts().CPlusPlus2b
+                        ? diag::warn_cxx2b_delimited_escape_sequence
+                        : diag::ext_delimited_escape_sequence)
+        << /*delimited*/ 0 << (PP->getLangOpts().CPlusPlus ? 1 : 0);
   }
 
   if (Result) {
@@ -3371,7 +3374,10 @@ llvm::Optional<uint32_t> Lexer::tryReadNamedUCN(const char *&StartPtr,
   }
 
   if (Diagnose && PP && !LooseMatch)
-    Diag(BufferPtr, diag::ext_delimited_escape_sequence) << /*named*/ 1;
+    Diag(BufferPtr, PP->getLangOpts().CPlusPlus2b
+                        ? diag::warn_cxx2b_delimited_escape_sequence
+                        : diag::ext_delimited_escape_sequence)
+        << /*named*/ 1 << (PP->getLangOpts().CPlusPlus ? 1 : 0);
 
   if (LooseMatch)
     Res = LooseMatch->CodePoint;

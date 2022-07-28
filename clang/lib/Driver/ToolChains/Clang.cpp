@@ -52,6 +52,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/TargetParser.h"
 #include "llvm/Support/YAMLParser.h"
+#include <cctype>
 
 using namespace clang::driver;
 using namespace clang::driver::tools;
@@ -954,6 +955,27 @@ static void addPGOAndCoverageFlags(const ToolChain &TC, Compilation &C,
   } else if (SanArgs.needsTsanRt()) {
     CmdArgs.push_back("-fprofile-update=atomic");
   }
+
+  int FunctionGroups = 1;
+  int SelectedFunctionGroup = 0;
+  if (const auto *A = Args.getLastArg(options::OPT_fprofile_function_groups)) {
+    StringRef Val = A->getValue();
+    if (Val.getAsInteger(0, FunctionGroups) || FunctionGroups < 1)
+      D.Diag(diag::err_drv_invalid_int_value) << A->getAsString(Args) << Val;
+  }
+  if (const auto *A =
+          Args.getLastArg(options::OPT_fprofile_selected_function_group)) {
+    StringRef Val = A->getValue();
+    if (Val.getAsInteger(0, SelectedFunctionGroup) ||
+        SelectedFunctionGroup < 0 || SelectedFunctionGroup >= FunctionGroups)
+      D.Diag(diag::err_drv_invalid_int_value) << A->getAsString(Args) << Val;
+  }
+  if (FunctionGroups != 1)
+    CmdArgs.push_back(Args.MakeArgString("-fprofile-function-groups=" +
+                                         Twine(FunctionGroups)));
+  if (SelectedFunctionGroup != 0)
+    CmdArgs.push_back(Args.MakeArgString("-fprofile-selected-function-group=" +
+                                         Twine(SelectedFunctionGroup)));
 
   // Leave -fprofile-dir= an unused argument unless .gcda emission is
   // enabled. To be polite, with '-fprofile-arcs -fno-profile-arcs' consider
@@ -1901,18 +1923,11 @@ void Clang::AddAArch64TargetArgs(const ArgList &Args,
   AddAAPCSVolatileBitfieldArgs(Args, CmdArgs);
 
   if (const Arg *A = Args.getLastArg(clang::driver::options::OPT_mtune_EQ)) {
-    StringRef Name = A->getValue();
-
-    std::string TuneCPU;
-    if (Name == "native")
-      TuneCPU = std::string(llvm::sys::getHostCPUName());
+    CmdArgs.push_back("-tune-cpu");
+    if (strcmp(A->getValue(), "native") == 0)
+      CmdArgs.push_back(Args.MakeArgString(llvm::sys::getHostCPUName()));
     else
-      TuneCPU = std::string(Name);
-
-    if (!TuneCPU.empty()) {
-      CmdArgs.push_back("-tune-cpu");
-      CmdArgs.push_back(Args.MakeArgString(TuneCPU));
-    }
+      CmdArgs.push_back(A->getValue());
   }
 
   AddUnalignedAccessWarning(CmdArgs);
@@ -2166,18 +2181,11 @@ void Clang::AddRISCVTargetArgs(const ArgList &Args,
 
   SetRISCVSmallDataLimit(getToolChain(), Args, CmdArgs);
 
-  std::string TuneCPU;
-
-  if (const Arg *A = Args.getLastArg(clang::driver::options::OPT_mtune_EQ)) {
-    StringRef Name = A->getValue();
-
-    Name = llvm::RISCV::resolveTuneCPUAlias(Name, Triple.isArch64Bit());
-    TuneCPU = std::string(Name);
-  }
-
-  if (!TuneCPU.empty()) {
+  if (const Arg *A = Args.getLastArg(options::OPT_mtune_EQ)) {
+    StringRef Name =
+        llvm::RISCV::resolveTuneCPUAlias(A->getValue(), Triple.isArch64Bit());
     CmdArgs.push_back("-tune-cpu");
-    CmdArgs.push_back(Args.MakeArgString(TuneCPU));
+    CmdArgs.push_back(Name.data());
   }
 }
 
@@ -2201,19 +2209,12 @@ void Clang::AddSparcTargetArgs(const ArgList &Args,
 
 void Clang::AddSystemZTargetArgs(const ArgList &Args,
                                  ArgStringList &CmdArgs) const {
-  if (const Arg *A = Args.getLastArg(clang::driver::options::OPT_mtune_EQ)) {
-    StringRef Name = A->getValue();
-
-    std::string TuneCPU;
-    if (Name == "native")
-      TuneCPU = std::string(llvm::sys::getHostCPUName());
+  if (const Arg *A = Args.getLastArg(options::OPT_mtune_EQ)) {
+    CmdArgs.push_back("-tune-cpu");
+    if (strcmp(A->getValue(), "native") == 0)
+      CmdArgs.push_back(Args.MakeArgString(llvm::sys::getHostCPUName()));
     else
-      TuneCPU = std::string(Name);
-
-    if (!TuneCPU.empty()) {
-      CmdArgs.push_back("-tune-cpu");
-      CmdArgs.push_back(Args.MakeArgString(TuneCPU));
-    }
+      CmdArgs.push_back(A->getValue());
   }
 
   bool HasBackchain =
@@ -2329,7 +2330,7 @@ void Clang::AddHexagonTargetArgs(const ArgList &Args,
   if (auto G = toolchains::HexagonToolChain::getSmallDataThreshold(Args)) {
     CmdArgs.push_back("-mllvm");
     CmdArgs.push_back(Args.MakeArgString("-hexagon-small-data-threshold=" +
-                                         Twine(G.getValue())));
+                                         Twine(G.value())));
   }
 
   if (!Args.hasArg(options::OPT_fno_short_enums))
@@ -3489,6 +3490,7 @@ static void RenderHLSLOptions(const ArgList &Args, ArgStringList &CmdArgs,
                               types::ID InputType) {
   const unsigned ForwardedArguments[] = {options::OPT_dxil_validator_version,
                                          options::OPT_D,
+                                         options::OPT_I,
                                          options::OPT_S,
                                          options::OPT_emit_llvm,
                                          options::OPT_disable_llvm_passes,
@@ -3984,6 +3986,9 @@ static void RenderDiagnosticsOptions(const Driver &D, const ArgList &Args,
   if (const Arg *A = Args.getLastArg(options::OPT_fdiagnostics_format_EQ)) {
     CmdArgs.push_back("-fdiagnostics-format");
     CmdArgs.push_back(A->getValue());
+    if (StringRef(A->getValue()) == "sarif" ||
+        StringRef(A->getValue()) == "SARIF")
+      D.Diag(diag::warn_drv_sarif_format_unstable);
   }
 
   if (const Arg *A = Args.getLastArg(
@@ -4029,9 +4034,7 @@ static void RenderDiagnosticsOptions(const Driver &D, const ArgList &Args,
                      options::OPT_fno_spell_checking);
 }
 
-enum class DwarfFissionKind { None, Split, Single };
-
-static DwarfFissionKind getDebugFissionKind(const Driver &D,
+DwarfFissionKind tools::getDebugFissionKind(const Driver &D,
                                             const ArgList &Args, Arg *&Arg) {
   Arg = Args.getLastArg(options::OPT_gsplit_dwarf, options::OPT_gsplit_dwarf_EQ,
                         options::OPT_gno_split_dwarf);
@@ -4441,12 +4444,14 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
        Args.hasFlag(options::OPT_offload_new_driver,
                     options::OPT_no_offload_new_driver, false));
 
+  bool IsRDCMode =
+      Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc, false);
   bool IsUsingLTO = D.isUsingLTO(IsDeviceOffloadAction);
   auto LTOMode = D.getLTOMode(IsDeviceOffloadAction);
 
   // A header module compilation doesn't have a main input file, so invent a
   // fake one as a placeholder.
-  const char *ModuleName = [&]{
+  const char *ModuleName = [&] {
     auto *ModuleNameArg = Args.getLastArg(options::OPT_fmodule_name_EQ);
     return ModuleNameArg ? ModuleNameArg->getValue() : "";
   }();
@@ -5107,6 +5112,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("-mabi=vec-default");
   }
 
+  if (Arg *A = Args.getLastArg(options::OPT_mabi_EQ_quadword_atomics)) {
+    if (!Triple.isOSAIX() || Triple.isPPC32())
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+        << A->getSpelling() << RawTriple.str();
+    CmdArgs.push_back("-mabi=quadword-atomics");
+  }
+
   if (Arg *A = Args.getLastArg(options::OPT_mlong_double_128)) {
     // Emit the unsupported option error until the Clang's library integration
     // support for 128-bit long double is available for AIX.
@@ -5384,9 +5396,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   TC.addClangTargetOptions(Args, CmdArgs, JA.getOffloadingDeviceKind());
-
-  // FIXME: Handle -mtune=.
-  (void)Args.hasArg(options::OPT_mtune_EQ);
 
   if (Arg *A = Args.getLastArg(options::OPT_mcmodel_EQ)) {
     StringRef CM = A->getValue();
@@ -5834,12 +5843,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(A->getValue());
   }
 
-  if (Args.hasArg(options::OPT_funstable)) {
-    CmdArgs.push_back("-funstable");
-    if (!Args.hasArg(options::OPT_fno_coroutines_ts))
-      CmdArgs.push_back("-fcoroutines-ts");
-    CmdArgs.push_back("-fmodules-ts");
-  }
+  Args.AddLastArg(CmdArgs, options::OPT_fexperimental_library);
 
   if (Args.hasArg(options::OPT_fexperimental_new_constant_interpreter))
     CmdArgs.push_back("-fexperimental-new-constant-interpreter");
@@ -5882,9 +5886,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(A->getValue());
   }
 
-  if (Args.hasFlag(options::OPT_fstack_size_section,
-                   options::OPT_fno_stack_size_section, RawTriple.isPS4()))
-    CmdArgs.push_back("-fstack-size-section");
+  Args.addOptInFlag(CmdArgs, options::OPT_fstack_size_section,
+                    options::OPT_fno_stack_size_section);
 
   if (Args.hasArg(options::OPT_fstack_usage)) {
     CmdArgs.push_back("-stack-usage-file");
@@ -6206,6 +6209,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_ftime_report_EQ);
   Args.AddLastArg(CmdArgs, options::OPT_ftime_trace);
   Args.AddLastArg(CmdArgs, options::OPT_ftime_trace_granularity_EQ);
+  Args.AddLastArg(CmdArgs, options::OPT_ftime_trace_EQ);
   Args.AddLastArg(CmdArgs, options::OPT_ftrapv);
   Args.AddLastArg(CmdArgs, options::OPT_malign_double);
   Args.AddLastArg(CmdArgs, options::OPT_fno_temp_file);
@@ -6239,6 +6243,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_fwritable_strings);
   Args.AddLastArg(CmdArgs, options::OPT_funroll_loops,
                   options::OPT_fno_unroll_loops);
+
+  Args.AddLastArg(CmdArgs, options::OPT_fstrict_flex_arrays_EQ);
 
   Args.AddLastArg(CmdArgs, options::OPT_pthread);
 
@@ -6304,10 +6310,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   if (IsCuda || IsHIP) {
-    if (!Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc, false) &&
-        Args.hasArg(options::OPT_offload_new_driver))
-      D.Diag(diag::err_drv_no_rdc_new_driver);
-    if (Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc, false))
+    if (IsRDCMode)
       CmdArgs.push_back("-fgpu-rdc");
     if (Args.hasFlag(options::OPT_fgpu_defer_diag,
                      options::OPT_fno_gpu_defer_diag, false))
@@ -6979,11 +6982,22 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
   }
 
-  // Host-side cuda compilation receives all device-side outputs in a single
-  // fatbin as Inputs[1]. Include the binary with -fcuda-include-gpubinary.
+  // Host-side offloading compilation receives all device-side outputs. Include
+  // them in the host compilation depending on the target. If the host inputs
+  // are not empty we use the new-driver scheme, otherwise use the old scheme.
   if ((IsCuda || IsHIP) && CudaDeviceInput) {
+    CmdArgs.push_back("-fcuda-include-gpubinary");
+    CmdArgs.push_back(CudaDeviceInput->getFilename());
+  } else if (!HostOffloadingInputs.empty()) {
+    if ((IsCuda || IsHIP) && !IsRDCMode) {
+      assert(HostOffloadingInputs.size() == 1 && "Only one input expected");
       CmdArgs.push_back("-fcuda-include-gpubinary");
-      CmdArgs.push_back(CudaDeviceInput->getFilename());
+      CmdArgs.push_back(HostOffloadingInputs.front().getFilename());
+    } else {
+      for (const InputInfo Input : HostOffloadingInputs)
+        CmdArgs.push_back(Args.MakeArgString("-fembed-offload-object=" +
+                                             TC.getInputFilename(Input)));
+    }
   }
 
   if (IsCuda) {
@@ -7031,12 +7045,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back(Args.MakeArgString(OpenMPDeviceInput->getFilename()));
     }
   }
-
-  // Host-side offloading recieves the device object files and embeds it in a
-  // named section including the associated target triple and architecture.
-  for (const InputInfo Input : HostOffloadingInputs)
-    CmdArgs.push_back(Args.MakeArgString("-fembed-offload-object=" +
-                                         TC.getInputFilename(Input)));
 
   if (Triple.isAMDGPU()) {
     handleAMDGPUCodeObjectVersionOptions(D, Args, CmdArgs);
@@ -8443,14 +8451,14 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Forward remarks passes to the LLVM backend in the wrapper.
   if (const Arg *A = Args.getLastArg(options::OPT_Rpass_EQ))
-    CmdArgs.push_back(
-        Args.MakeArgString(Twine("--pass-remarks=") + A->getValue()));
+    CmdArgs.push_back(Args.MakeArgString(Twine("--offload-opt=-pass-remarks=") +
+                                         A->getValue()));
   if (const Arg *A = Args.getLastArg(options::OPT_Rpass_missed_EQ))
-    CmdArgs.push_back(
-        Args.MakeArgString(Twine("--pass-remarks-missed=") + A->getValue()));
+    CmdArgs.push_back(Args.MakeArgString(
+        Twine("--offload-opt=-pass-remarks-missed=") + A->getValue()));
   if (const Arg *A = Args.getLastArg(options::OPT_Rpass_analysis_EQ))
-    CmdArgs.push_back(
-        Args.MakeArgString(Twine("--pass-remarks-analysis=") + A->getValue()));
+    CmdArgs.push_back(Args.MakeArgString(
+        Twine("--offload-opt=-pass-remarks-analysis=") + A->getValue()));
   if (Args.getLastArg(options::OPT_save_temps_EQ))
     CmdArgs.push_back("--save-temps");
 

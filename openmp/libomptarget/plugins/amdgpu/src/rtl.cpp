@@ -35,8 +35,12 @@
 #include "omptargetplugin.h"
 #include "print_tracing.h"
 
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include "llvm/Frontend/OpenMP/OMPGridValues.h"
+
+using namespace llvm;
 
 // hostrpc interface, FIXME: consider moving to its own include these are
 // statically linked into amdgpu/plugin if present from hostrpc_services.a,
@@ -465,6 +469,7 @@ public:
   std::vector<int> ThreadsPerGroup;
   std::vector<int> WarpSize;
   std::vector<std::string> GPUName;
+  std::vector<std::string> TargetID;
 
   // OpenMP properties
   std::vector<int> NumTeams;
@@ -858,7 +863,7 @@ public:
   }
 
   hsa_status_t addDeviceMemoryPool(hsa_amd_memory_pool_t MemoryPool,
-                                   int DeviceId) {
+                                   unsigned int DeviceId) {
     assert(DeviceId < DeviceFineGrainedMemoryPools.size() && "Error here.");
     uint32_t GlobalFlags = 0;
     hsa_status_t Err = hsa_amd_memory_pool_get_info(
@@ -878,7 +883,7 @@ public:
   }
 
   hsa_status_t setupDevicePools(const std::vector<hsa_agent_t> &Agents) {
-    for (int DeviceId = 0; DeviceId < Agents.size(); DeviceId++) {
+    for (unsigned int DeviceId = 0; DeviceId < Agents.size(); DeviceId++) {
       hsa_status_t Err = hsa::amd_agent_iterate_memory_pools(
           Agents[DeviceId], [&](hsa_amd_memory_pool_t MemoryPool) {
             hsa_status_t ValidStatus = core::isValidMemoryPool(MemoryPool);
@@ -942,7 +947,7 @@ public:
     return HSA_STATUS_ERROR;
   }
 
-  hsa_amd_memory_pool_t getDeviceMemoryPool(int DeviceId) {
+  hsa_amd_memory_pool_t getDeviceMemoryPool(unsigned int DeviceId) {
     assert(DeviceId >= 0 && DeviceId < DeviceCoarseGrainedMemoryPools.size() &&
            "Invalid device Id");
     return DeviceCoarseGrainedMemoryPools[DeviceId];
@@ -1205,7 +1210,7 @@ LaunchVals getLaunchVals(int WarpSize, EnvironmentVariables Env,
   int NumGroups = 0;
 
   int MaxTeams = Env.MaxTeamsDefault > 0 ? Env.MaxTeamsDefault : DeviceNumTeams;
-  if (MaxTeams > RTLDeviceInfoTy::HardTeamLimit)
+  if (MaxTeams > static_cast<int>(RTLDeviceInfoTy::HardTeamLimit))
     MaxTeams = RTLDeviceInfoTy::HardTeamLimit;
 
   if (print_kernel_trace & STARTUP_DETAILS) {
@@ -1893,9 +1898,154 @@ hsa_status_t allow_access_to_all_gpu_agents(void *Ptr) {
 }
 } // namespace core
 
+static hsa_status_t GetIsaInfo(hsa_isa_t isa, void *data) {
+  hsa_status_t err;
+  uint32_t name_len;
+  err = hsa_isa_get_info_alt(isa, HSA_ISA_INFO_NAME_LENGTH, &name_len);
+  if (err != HSA_STATUS_SUCCESS) {
+    DP("Error getting ISA info length\n");
+    return err;
+  }
+
+  char TargetID[name_len];
+  err = hsa_isa_get_info_alt(isa, HSA_ISA_INFO_NAME, TargetID);
+  if (err != HSA_STATUS_SUCCESS) {
+    DP("Error getting ISA info name\n");
+    return err;
+  }
+
+  auto TripleTargetID = llvm::StringRef(TargetID);
+  if (TripleTargetID.consume_front("amdgcn-amd-amdhsa")) {
+    DeviceInfo.TargetID.push_back(TripleTargetID.ltrim('-').str());
+  }
+  return HSA_STATUS_SUCCESS;
+}
+
+/// Parse a TargetID to get processor arch and feature map.
+/// Returns processor subarch.
+/// Returns TargetID features in \p FeatureMap argument.
+/// If the \p TargetID contains feature+, FeatureMap it to true.
+/// If the \p TargetID contains feature-, FeatureMap it to false.
+/// If the \p TargetID does not contain a feature (default), do not map it.
+StringRef parseTargetID(StringRef TargetID, StringMap<bool> &FeatureMap) {
+  if (TargetID.empty())
+    return llvm::StringRef();
+
+  auto ArchFeature = TargetID.split(":");
+  auto Arch = ArchFeature.first;
+  auto Features = ArchFeature.second;
+  if (Features.empty())
+    return Arch;
+
+  if (Features.contains("sramecc+")) {
+    FeatureMap.insert(std::pair<std::string, bool>("sramecc", true));
+  } else if (Features.contains("sramecc-")) {
+    FeatureMap.insert(std::pair<std::string, bool>("sramecc", false));
+  }
+  if (Features.contains("xnack+")) {
+    FeatureMap.insert(std::pair<std::string, bool>("xnack", true));
+  } else if (Features.contains("xnack-")) {
+    FeatureMap.insert(std::pair<std::string, bool>("xnack", false));
+  }
+
+  return Arch;
+}
+
+/// Checks if an image \p ImgInfo is compatible with current
+/// system's environment \p EnvInfo
+bool IsImageCompatibleWithEnv(const char *ImgInfo, std::string EnvInfo) {
+  llvm::StringRef ImgTID(ImgInfo), EnvTID(EnvInfo);
+
+  // Compatible in case of exact match
+  if (ImgTID == EnvTID) {
+    DP("Compatible: Exact match \t[Image: %s]\t:\t[Environment: %s]\n",
+       ImgTID.data(), EnvTID.data());
+    return true;
+  }
+
+  // Incompatible if Archs mismatch.
+  StringMap<bool> ImgMap, EnvMap;
+  StringRef ImgArch = parseTargetID(ImgTID, ImgMap);
+  StringRef EnvArch = parseTargetID(EnvTID, EnvMap);
+
+  // Both EnvArch and ImgArch can't be empty here.
+  if (EnvArch.empty() || ImgArch.empty() || !ImgArch.contains(EnvArch)) {
+    DP("Incompatible: Processor mismatch \t[Image: %s]\t:\t[Environment: %s]\n",
+       ImgTID.data(), EnvTID.data());
+    return false;
+  }
+
+  // Incompatible if image has more features than the environment, irrespective
+  // of type or sign of features.
+  if (ImgMap.size() > EnvMap.size()) {
+    DP("Incompatible: Image has more features than the environment \t[Image: "
+       "%s]\t:\t[Environment: %s]\n",
+       ImgTID.data(), EnvTID.data());
+    return false;
+  }
+
+  // Compatible if each target feature specified by the environment is
+  // compatible with target feature of the image. The target feature is
+  // compatible if the iamge does not specify it (meaning Any), or if it
+  // specifies it with the same value (meaning On or Off).
+  for (const auto &ImgFeature : ImgMap) {
+    auto EnvFeature = EnvMap.find(ImgFeature.first());
+    if (EnvFeature == EnvMap.end()) {
+      DP("Incompatible: Value of Image's non-ANY feature is not matching with "
+         "the Environment feature's ANY value \t[Image: %s]\t:\t[Environment: "
+         "%s]\n",
+         ImgTID.data(), EnvTID.data());
+      return false;
+    } else if (EnvFeature->first() == ImgFeature.first() &&
+               EnvFeature->second != ImgFeature.second) {
+      DP("Incompatible: Value of Image's non-ANY feature is not matching with "
+         "the Environment feature's non-ANY value \t[Image: "
+         "%s]\t:\t[Environment: %s]\n",
+         ImgTID.data(), EnvTID.data());
+      return false;
+    }
+  }
+
+  // Image is compatible if all features of Environment are:
+  //   - either, present in the Image's features map with the same sign,
+  //   - or, the feature is missing from Image's features map i.e. it is
+  //   set to ANY
+  DP("Compatible: Target IDs are compatible \t[Image: %s]\t:\t[Environment: "
+     "%s]\n",
+     ImgTID.data(), EnvTID.data());
+  return true;
+}
+
 extern "C" {
 int32_t __tgt_rtl_is_valid_binary(__tgt_device_image *Image) {
   return elfMachineIdIsAmdgcn(Image);
+}
+
+int32_t __tgt_rtl_is_valid_binary_info(__tgt_device_image *image,
+                                       __tgt_image_info *info) {
+  if (!__tgt_rtl_is_valid_binary(image))
+    return false;
+
+  // A subarchitecture was not specified. Assume it is compatible.
+  if (!info->Arch)
+    return true;
+
+  int32_t NumberOfDevices = __tgt_rtl_number_of_devices();
+
+  for (int32_t DeviceId = 0; DeviceId < NumberOfDevices; ++DeviceId) {
+    __tgt_rtl_init_device(DeviceId);
+    hsa_agent_t agent = DeviceInfo.HSAAgents[DeviceId];
+    hsa_status_t err = hsa_agent_iterate_isas(agent, GetIsaInfo, &DeviceId);
+    if (err != HSA_STATUS_SUCCESS) {
+      DP("Error iterating ISAs\n");
+      return false;
+    }
+    if (!IsImageCompatibleWithEnv(info->Arch, DeviceInfo.TargetID[DeviceId]))
+      return false;
+  }
+  DP("Image has Target ID compatible with the current environment: %s\n",
+     info->Arch);
+  return true;
 }
 
 int __tgt_rtl_number_of_devices() {
@@ -1914,8 +2064,11 @@ int64_t __tgt_rtl_init_requires(int64_t RequiresFlags) {
 }
 
 int32_t __tgt_rtl_init_device(int DeviceId) {
-  hsa_status_t Err;
-
+  hsa_status_t Err = hsa_init();
+  if (Err != HSA_STATUS_SUCCESS) {
+    DP("HSA Initialization Failed.\n");
+    return HSA_STATUS_ERROR;
+  }
   // this is per device id init
   DP("Initialize the device id: %d\n", DeviceId);
 

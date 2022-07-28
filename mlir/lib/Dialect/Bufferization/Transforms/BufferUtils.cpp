@@ -160,10 +160,8 @@ bufferization::getGlobalFor(arith::ConstantOp constantOp, uint64_t alignment) {
       continue;
     if (!globalOp.getInitialValue().has_value())
       continue;
-    uint64_t opAlignment = globalOp.getAlignment().has_value()
-                               ? globalOp.getAlignment().getValue()
-                               : 0;
-    Attribute initialValue = globalOp.getInitialValue().getValue();
+    uint64_t opAlignment = globalOp.getAlignment().value_or(0);
+    Attribute initialValue = globalOp.getInitialValue().value();
     if (opAlignment == alignment && initialValue == constantOp.getValue())
       return globalOp;
   }

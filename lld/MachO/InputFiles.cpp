@@ -263,11 +263,15 @@ static Optional<size_t> getRecordSize(StringRef segname, StringRef name) {
     if (segname == segment_names::ld)
       return target->wordSize == 8 ? 32 : 20;
   }
-  if (config->icfLevel == ICFLevel::none)
+  if (!config->dedupLiterals)
     return {};
 
   if (name == section_names::cfString && segname == segment_names::data)
     return target->wordSize == 8 ? 32 : 16;
+
+  if (config->icfLevel == ICFLevel::none)
+    return {};
+
   if (name == section_names::objcClassRefs && segname == segment_names::data)
     return target->wordSize;
   return {};
@@ -347,7 +351,7 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
       section.subsections.push_back({0, isec});
     } else if (auto recordSize = getRecordSize(segname, name)) {
       splitRecords(*recordSize);
-    } else if (config->parseEhFrames && name == section_names::ehFrame &&
+    } else if (name == section_names::ehFrame &&
                segname == segment_names::text) {
       splitEhFrames(data, *sections.back());
     } else if (segname == segment_names::llvm) {
@@ -359,6 +363,9 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
       // have the same name without causing duplicate symbol errors. To avoid
       // spurious duplicate symbol errors, we do not parse these sections.
       // TODO: Evaluate whether the bitcode metadata is needed.
+    } else if (name == section_names::objCImageInfo &&
+               segname == segment_names::data) {
+      objCImageInfo = data;
     } else {
       if (name == section_names::addrSig)
         addrSigSection = sections.back();
@@ -556,7 +563,7 @@ void ObjFile::parseOptimizationHints(ArrayRef<uint8_t> data) {
     if (section == sections.end())
       return;
     ++subsection;
-    if (subsection == (*section)->subsections.end()) {
+    while (subsection == (*section)->subsections.end()) {
       ++section;
       if (section == sections.end())
         return;
@@ -578,6 +585,7 @@ void ObjFile::parseOptimizationHints(ArrayRef<uint8_t> data) {
         if (section == sections.end())
           break;
         updateAddr();
+        assert(hintStart->offset0 >= subsectionBase);
       }
     }
 
@@ -760,7 +768,7 @@ void ObjFile::parseRelocations(ArrayRef<SectionHeader> sectionHeaders,
 template <class NList>
 static macho::Symbol *createDefined(const NList &sym, StringRef name,
                                     InputSection *isec, uint64_t value,
-                                    uint64_t size) {
+                                    uint64_t size, bool forceHidden) {
   // Symbol scope is determined by sym.n_type & (N_EXT | N_PEXT):
   // N_EXT: Global symbols. These go in the symbol table during the link,
   //        and also in the export table of the output so that the dynamic
@@ -779,7 +787,10 @@ static macho::Symbol *createDefined(const NList &sym, StringRef name,
       (sym.n_desc & (N_WEAK_DEF | N_WEAK_REF)) == (N_WEAK_DEF | N_WEAK_REF);
 
   if (sym.n_type & N_EXT) {
-    bool isPrivateExtern = sym.n_type & N_PEXT;
+    // -load_hidden makes us treat global symbols as linkage unit scoped.
+    // Duplicates are reported but the symbol does not go in the export trie.
+    bool isPrivateExtern = sym.n_type & N_PEXT || forceHidden;
+
     // lld's behavior for merging symbols is slightly different from ld64:
     // ld64 picks the winning symbol based on several criteria (see
     // pickBetweenRegularAtoms() in ld64's SymbolTable.cpp), while lld
@@ -836,11 +847,12 @@ static macho::Symbol *createDefined(const NList &sym, StringRef name,
 // InputSection. They cannot be weak.
 template <class NList>
 static macho::Symbol *createAbsolute(const NList &sym, InputFile *file,
-                                     StringRef name) {
+                                     StringRef name, bool forceHidden) {
   if (sym.n_type & N_EXT) {
+    bool isPrivateExtern = sym.n_type & N_PEXT || forceHidden;
     return symtab->addDefined(
         name, file, nullptr, sym.n_value, /*size=*/0,
-        /*isWeakDef=*/false, sym.n_type & N_PEXT, sym.n_desc & N_ARM_THUMB_DEF,
+        /*isWeakDef=*/false, isPrivateExtern, sym.n_desc & N_ARM_THUMB_DEF,
         /*isReferencedDynamically=*/false, sym.n_desc & N_NO_DEAD_STRIP,
         /*isWeakDefCanBeHidden=*/false);
   }
@@ -856,15 +868,16 @@ template <class NList>
 macho::Symbol *ObjFile::parseNonSectionSymbol(const NList &sym,
                                               StringRef name) {
   uint8_t type = sym.n_type & N_TYPE;
+  bool isPrivateExtern = sym.n_type & N_PEXT || forceHidden;
   switch (type) {
   case N_UNDF:
     return sym.n_value == 0
                ? symtab->addUndefined(name, this, sym.n_desc & N_WEAK_REF)
                : symtab->addCommon(name, this, sym.n_value,
                                    1 << GET_COMM_ALIGN(sym.n_desc),
-                                   sym.n_type & N_PEXT);
+                                   isPrivateExtern);
   case N_ABS:
-    return createAbsolute(sym, this, name);
+    return createAbsolute(sym, this, name, forceHidden);
   case N_PBUD:
   case N_INDR:
     error("TODO: support symbols of type " + std::to_string(type));
@@ -899,7 +912,6 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
     if (sym.n_type & N_STAB)
       continue;
 
-    StringRef name = strtab + sym.n_strx;
     if ((sym.n_type & N_TYPE) == N_SECT) {
       Subsections &subsections = sections[sym.n_sect - 1]->subsections;
       // parseSections() may have chosen not to parse this section.
@@ -909,7 +921,7 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
     } else if (isUndef(sym)) {
       undefineds.push_back(i);
     } else {
-      symbols[i] = parseNonSectionSymbol(sym, name);
+      symbols[i] = parseNonSectionSymbol(sym, StringRef(strtab + sym.n_strx));
     }
   }
 
@@ -937,7 +949,8 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
                 " at misaligned offset");
           continue;
         }
-        symbols[symIndex] = createDefined(sym, name, isec, 0, isec->getSize());
+        symbols[symIndex] =
+            createDefined(sym, name, isec, 0, isec->getSize(), forceHidden);
       }
       continue;
     }
@@ -972,8 +985,8 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
       //   4. If we have a literal section (e.g. __cstring and __literal4).
       if (!subsectionsViaSymbols || symbolOffset == 0 ||
           sym.n_desc & N_ALT_ENTRY || !isa<ConcatInputSection>(isec)) {
-        symbols[symIndex] =
-            createDefined(sym, name, isec, symbolOffset, symbolSize);
+        symbols[symIndex] = createDefined(sym, name, isec, symbolOffset,
+                                          symbolSize, forceHidden);
         continue;
       }
       auto *concatIsec = cast<ConcatInputSection>(isec);
@@ -991,8 +1004,8 @@ void ObjFile::parseSymbols(ArrayRef<typename LP::section> sectionHeaders,
 
       // By construction, the symbol will be at offset zero in the new
       // subsection.
-      symbols[symIndex] =
-          createDefined(sym, name, nextIsec, /*value=*/0, symbolSize);
+      symbols[symIndex] = createDefined(sym, name, nextIsec, /*value=*/0,
+                                        symbolSize, forceHidden);
       // TODO: ld64 appears to preserve the original alignment as well as each
       // subsection's offset from the last aligned address. We should consider
       // emulating that behavior.
@@ -1029,8 +1042,8 @@ OpaqueFile::OpaqueFile(MemoryBufferRef mb, StringRef segName,
 }
 
 ObjFile::ObjFile(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
-                 bool lazy)
-    : InputFile(ObjKind, mb, lazy), modTime(modTime) {
+                 bool lazy, bool forceHidden)
+    : InputFile(ObjKind, mb, lazy), modTime(modTime), forceHidden(forceHidden) {
   this->archiveName = std::string(archiveName);
   if (lazy) {
     if (target->wordSize == 8)
@@ -1117,7 +1130,7 @@ template <class LP> void ObjFile::parse() {
   }
   if (compactUnwindSection)
     registerCompactUnwind(*compactUnwindSection);
-  if (config->parseEhFrames && ehFrameSection)
+  if (ehFrameSection)
     registerEhFrames(*ehFrameSection);
 }
 
@@ -1186,14 +1199,27 @@ ArrayRef<data_in_code_entry> ObjFile::getDataInCode() const {
 void ObjFile::registerCompactUnwind(Section &compactUnwindSection) {
   for (const Subsection &subsection : compactUnwindSection.subsections) {
     ConcatInputSection *isec = cast<ConcatInputSection>(subsection.isec);
-    // Hack!! Since each CUE contains a different function address, if ICF
-    // operated naively and compared the entire contents of each CUE, entries
-    // with identical unwind info but belonging to different functions would
-    // never be considered equivalent. To work around this problem, we slice
-    // away the function address here. (Note that we do not adjust the offsets
-    // of the corresponding relocations.) We rely on `relocateCompactUnwind()`
-    // to correctly handle these truncated input sections.
-    isec->data = isec->data.slice(target->wordSize);
+    // Hack!! Each compact unwind entry (CUE) has its UNSIGNED relocations embed
+    // their addends in its data. Thus if ICF operated naively and compared the
+    // entire contents of each CUE, entries with identical unwind info but e.g.
+    // belonging to different functions would never be considered equivalent. To
+    // work around this problem, we remove some parts of the data containing the
+    // embedded addends. In particular, we remove the function address and LSDA
+    // pointers.  Since these locations are at the start and end of the entry,
+    // we can do this using a simple, efficient slice rather than performing a
+    // copy.  We are not losing any information here because the embedded
+    // addends have already been parsed in the corresponding Reloc structs.
+    //
+    // Removing these pointers would not be safe if they were pointers to
+    // absolute symbols. In that case, there would be no corresponding
+    // relocation. However, (AFAIK) MC cannot emit references to absolute
+    // symbols for either the function address or the LSDA. However, it *can* do
+    // so for the personality pointer, so we are not slicing that field away.
+    //
+    // Note that we do not adjust the offsets of the corresponding relocations;
+    // instead, we rely on `relocateCompactUnwind()` to correctly handle these
+    // truncated input sections.
+    isec->data = isec->data.slice(target->wordSize, 8 + target->wordSize);
     uint32_t encoding = read32le(isec->data.data() + sizeof(uint32_t));
     // llvm-mc omits CU entries for functions that need DWARF encoding, but
     // `ld -r` doesn't. We can ignore them because we will re-synthesize these
@@ -1240,11 +1266,23 @@ void ObjFile::registerCompactUnwind(Section &compactUnwindSection) {
         continue;
       }
       d->unwindEntry = isec;
-      // Since we've sliced away the functionAddress, we should remove the
-      // corresponding relocation too. Given that clang emits relocations in
-      // reverse order of address, this relocation should be at the end of the
-      // vector for most of our input object files, so this is typically an O(1)
-      // operation.
+      // Now that the symbol points to the unwind entry, we can remove the reloc
+      // that points from the unwind entry back to the symbol.
+      //
+      // First, the symbol keeps the unwind entry alive (and not vice versa), so
+      // this keeps dead-stripping simple.
+      //
+      // Moreover, it reduces the work that ICF needs to do to figure out if
+      // functions with unwind info are foldable.
+      //
+      // However, this does make it possible for ICF to fold CUEs that point to
+      // distinct functions (if the CUEs are otherwise identical).
+      // UnwindInfoSection takes care of this by re-duplicating the CUEs so that
+      // each one can hold a distinct functionAddress value.
+      //
+      // Given that clang emits relocations in reverse order of address, this
+      // relocation should be at the end of the vector for most of our input
+      // object files, so this erase() is typically an O(1) operation.
       it = isec->relocs.erase(it);
     }
   }
@@ -1500,6 +1538,14 @@ void ObjFile::registerEhFrames(Section &ehFrameSection) {
     Defined *funcSym;
     if (funcAddrRelocIt != isec->relocs.end()) {
       funcSym = targetSymFromCanonicalSubtractor(isec, funcAddrRelocIt);
+      // Canonicalize the symbol. If there are multiple symbols at the same
+      // address, we want both `registerEhFrame` and `registerCompactUnwind`
+      // to register the unwind entry under same symbol.
+      // This is not particularly efficient, but we should run into this case
+      // infrequently (only when handling the output of `ld -r`).
+      if (funcSym->isec)
+        funcSym = findSymbolAtOffset(cast<ConcatInputSection>(funcSym->isec),
+                                     funcSym->value);
     } else {
       funcSym = findSymbolAtAddress(sections, funcAddr);
       ehRelocator.makePcRel(funcAddrOff, funcSym, target->p2WordSize);
@@ -2021,26 +2067,27 @@ void DylibFile::checkAppExtensionSafety(bool dylibIsAppExtensionSafe) const {
     warn("using '-application_extension' with unsafe dylib: " + toString(this));
 }
 
-ArchiveFile::ArchiveFile(std::unique_ptr<object::Archive> &&f)
-    : InputFile(ArchiveKind, f->getMemoryBufferRef()), file(std::move(f)) {}
+ArchiveFile::ArchiveFile(std::unique_ptr<object::Archive> &&f, bool forceHidden)
+    : InputFile(ArchiveKind, f->getMemoryBufferRef()), file(std::move(f)),
+      forceHidden(forceHidden) {}
 
 void ArchiveFile::addLazySymbols() {
   for (const object::Archive::Symbol &sym : file->symbols())
     symtab->addLazyArchive(sym.getName(), this, sym);
 }
 
-static Expected<InputFile *> loadArchiveMember(MemoryBufferRef mb,
-                                               uint32_t modTime,
-                                               StringRef archiveName,
-                                               uint64_t offsetInArchive) {
+static Expected<InputFile *>
+loadArchiveMember(MemoryBufferRef mb, uint32_t modTime, StringRef archiveName,
+                  uint64_t offsetInArchive, bool forceHidden) {
   if (config->zeroModTime)
     modTime = 0;
 
   switch (identify_magic(mb.getBuffer())) {
   case file_magic::macho_object:
-    return make<ObjFile>(mb, modTime, archiveName);
+    return make<ObjFile>(mb, modTime, archiveName, /*lazy=*/false, forceHidden);
   case file_magic::bitcode:
-    return make<BitcodeFile>(mb, archiveName, offsetInArchive);
+    return make<BitcodeFile>(mb, archiveName, offsetInArchive, /*lazy=*/false,
+                             forceHidden);
   default:
     return createStringError(inconvertibleErrorCode(),
                              mb.getBufferIdentifier() +
@@ -2064,8 +2111,8 @@ Error ArchiveFile::fetch(const object::Archive::Child &c, StringRef reason) {
   if (!modTime)
     return modTime.takeError();
 
-  Expected<InputFile *> file =
-      loadArchiveMember(*mb, toTimeT(*modTime), getName(), c.getChildOffset());
+  Expected<InputFile *> file = loadArchiveMember(
+      *mb, toTimeT(*modTime), getName(), c.getChildOffset(), forceHidden);
 
   if (!file)
     return file.takeError();
@@ -2113,7 +2160,8 @@ static macho::Symbol *createBitcodeSymbol(const lto::InputFile::Symbol &objSym,
   case GlobalValue::DefaultVisibility:
     break;
   }
-  isPrivateExtern = isPrivateExtern || objSym.canBeOmittedFromSymbolTable();
+  isPrivateExtern = isPrivateExtern || objSym.canBeOmittedFromSymbolTable() ||
+                    file.forceHidden;
 
   if (objSym.isCommon())
     return symtab->addCommon(name, &file, objSym.getCommonSize(),
@@ -2128,8 +2176,8 @@ static macho::Symbol *createBitcodeSymbol(const lto::InputFile::Symbol &objSym,
 }
 
 BitcodeFile::BitcodeFile(MemoryBufferRef mb, StringRef archiveName,
-                         uint64_t offsetInArchive, bool lazy)
-    : InputFile(BitcodeKind, mb, lazy) {
+                         uint64_t offsetInArchive, bool lazy, bool forceHidden)
+    : InputFile(BitcodeKind, mb, lazy), forceHidden(forceHidden) {
   this->archiveName = std::string(archiveName);
   std::string path = mb.getBufferIdentifier().str();
   // ThinLTO assumes that all MemoryBufferRefs given to it have a unique
