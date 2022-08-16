@@ -487,7 +487,7 @@ cc_library(
         "lib/DebugInfo/Symbolize/*.cpp",
         "lib/DebugInfo/Symbolize/*.h",
     ]),
-    hdrs = glob(["include/llvm/DebugInfo/Symbolize/*.h"]),
+    hdrs = glob(["include/llvm/DebugInfo/Symbolize/*.h", "include/llvm/Debuginfod/*.h"]),
     copts = llvm_copts,
     deps = [
         ":BinaryFormat",
@@ -2308,6 +2308,14 @@ cc_library(
         "include/llvm-c/OrcEE.h",
     ],
     copts = llvm_copts,
+    linkopts = select({
+        "@bazel_tools//src/conditions:windows": [],
+        "@bazel_tools//src/conditions:freebsd": [],
+        "@bazel_tools//src/conditions:darwin": [],
+        "//conditions:default": [
+            "-lrt",
+        ],
+    }),
     deps = [
         ":BitReader",
         ":BitWriter",
@@ -2359,6 +2367,14 @@ cc_library(
         "include/llvm/ExecutionEngine/Orc/TargetProcess/*.h",
     ]),
     copts = llvm_copts,
+    linkopts = select({
+        "@bazel_tools//src/conditions:windows": [],
+        "@bazel_tools//src/conditions:freebsd": [],
+        "@bazel_tools//src/conditions:darwin": [],
+        "//conditions:default": [
+            "-lrt",
+        ],
+    }),
     deps = [
         ":BinaryFormat",
         ":CodeGen",

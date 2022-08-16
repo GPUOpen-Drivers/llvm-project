@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -968,7 +970,7 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
       return BinaryOperator::CreateAnd(NotX, ConstantInt::get(Ty, 1));
     }
   }
-
+/*
   // If all bits affected by the add are included in a high-bit-mask, do the
   // add before the mask op:
   // (X & 0xFF00) + xx00 --> (X + xx00) & 0xFF00
@@ -977,7 +979,7 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
     Value *NewAdd = Builder.CreateAdd(X, ConstantInt::get(Ty, *C));
     return BinaryOperator::CreateAnd(NewAdd, ConstantInt::get(Ty, *C2));
   }
-
+*/
   return nullptr;
 }
 
@@ -1966,12 +1968,14 @@ Instruction *InstCombinerImpl::visitSub(BinaryOperator &I) {
       return BinaryOperator::CreateAdd(X, ConstantExpr::getSub(C, C2));
   }
 
-  // If there's no chance any bit will need to borrow from an adjacent bit:
-  // sub C, X --> xor X, C
   const APInt *Op0C;
-  if (match(Op0, m_APInt(Op0C)) &&
-      (~computeKnownBits(Op1, 0, &I).Zero).isSubsetOf(*Op0C))
-    return BinaryOperator::CreateXor(Op1, Op0);
+  if (match(Op0, m_APInt(Op0C)) && Op0C->isMask()) {
+    // Turn this into a xor if LHS is 2^n-1 and the remaining bits are known
+    // zero.
+    KnownBits RHSKnown = computeKnownBits(Op1, 0, &I);
+    if ((*Op0C | RHSKnown.Zero).isAllOnes())
+      return BinaryOperator::CreateXor(Op1, Op0);
+  }
 
   {
     Value *Y;

@@ -359,8 +359,6 @@ int main(int argc, char **argv) {
   initializeCodeGen(*Registry);
   initializeLoopStrengthReducePass(*Registry);
   initializeLowerIntrinsicsPass(*Registry);
-  initializeEntryExitInstrumenterPass(*Registry);
-  initializePostInlineEntryExitInstrumenterPass(*Registry);
   initializeUnreachableBlockElimLegacyPassPass(*Registry);
   initializeConstantHoistingLegacyPassPass(*Registry);
   initializeScalarOpts(*Registry);
@@ -579,7 +577,7 @@ static int compileModule(char **argv, LLVMContext &Context) {
 
     Optional<CodeModel::Model> CM_IR = M->getCodeModel();
     if (!CM && CM_IR)
-      Target->setCodeModel(CM_IR.getValue());
+      Target->setCodeModel(CM_IR.value());
   } else {
     TheTriple = Triple(Triple::normalize(TargetTriple));
     if (TheTriple.getTriple().empty())

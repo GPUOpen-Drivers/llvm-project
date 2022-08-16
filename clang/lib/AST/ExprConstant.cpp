@@ -5266,10 +5266,14 @@ static EvalStmtResult EvaluateStmt(StmtResult &Result, EvalInfo &Info,
       }
     }
     bool Cond;
-    if (IS->isConsteval())
+    if (IS->isConsteval()) {
       Cond = IS->isNonNegatedConsteval();
-    else if (!EvaluateCond(Info, IS->getConditionVariable(), IS->getCond(),
-                           Cond))
+      // If we are not in a constant context, if consteval should not evaluate
+      // to true.
+      if (!Info.InConstantContext)
+        Cond = !Cond;
+    } else if (!EvaluateCond(Info, IS->getConditionVariable(), IS->getCond(),
+                             Cond))
       return ESR_Failed;
 
     if (const Stmt *SubStmt = Cond ? IS->getThen() : IS->getElse()) {
@@ -11592,9 +11596,15 @@ static bool isUserWritingOffTheEnd(const ASTContext &Ctx, const LValue &LVal) {
   //   conservative with the last element in structs (if it's an array), so our
   //   current behavior is more compatible than an explicit list approach would
   //   be.
+  int StrictFlexArraysLevel = Ctx.getLangOpts().StrictFlexArrays;
   return LVal.InvalidBase &&
          Designator.Entries.size() == Designator.MostDerivedPathLength &&
          Designator.MostDerivedIsArrayElement &&
+         (Designator.isMostDerivedAnUnsizedArray() ||
+          Designator.getMostDerivedArraySize() == 0 ||
+          (Designator.getMostDerivedArraySize() == 1 &&
+           StrictFlexArraysLevel < 2) ||
+          StrictFlexArraysLevel == 0) &&
          isDesignatorAtObjectEnd(Ctx, LVal);
 }
 

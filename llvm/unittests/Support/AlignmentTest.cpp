@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/Alignment.h"
+#include "llvm/ADT/STLExtras.h"
 #include "gtest/gtest.h"
 
 #include <vector>
@@ -150,8 +151,8 @@ TEST(AlignmentTest, isAligned_isAddrAligned) {
     MaybeAlign A(T.alignment);
     // Test Align
     if (A) {
-      EXPECT_EQ(isAligned(A.getValue(), T.offset), T.isAligned);
-      EXPECT_EQ(isAddrAligned(A.getValue(), T.forgedAddr()), T.isAligned);
+      EXPECT_EQ(isAligned(A.value(), T.offset), T.isAligned);
+      EXPECT_EQ(isAddrAligned(A.value(), T.forgedAddr()), T.isAligned);
     }
   }
 }
@@ -179,7 +180,7 @@ TEST(AlignmentTest, offsetToAlignment) {
 
 TEST(AlignmentTest, AlignComparisons) {
   std::vector<uint64_t> ValidAlignments = getValidAlignments();
-  std::sort(ValidAlignments.begin(), ValidAlignments.end());
+  llvm::sort(ValidAlignments);
   for (size_t I = 1; I < ValidAlignments.size(); ++I) {
     assert(I >= 1);
     const Align A(ValidAlignments[I - 1]);

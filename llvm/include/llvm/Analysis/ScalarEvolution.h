@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -1376,11 +1374,11 @@ private:
     /// Expression indicating the least constant maximum backedge-taken count of
     /// the loop that is known, or a SCEVCouldNotCompute. This expression is
     /// only valid if the redicates associated with all loop exits are true.
-    const SCEV *ConstantMax;
+    const SCEV *ConstantMax = nullptr;
 
     /// Indicating if \c ExitNotTaken has an element for every exiting block in
     /// the loop.
-    bool IsComplete;
+    bool IsComplete = false;
 
     /// Expression indicating the least maximum backedge-taken count of the loop
     /// that is known, or a SCEVCouldNotCompute. Lazily computed on first query.
@@ -1393,7 +1391,7 @@ private:
     const SCEV *getConstantMax() const { return ConstantMax; }
 
   public:
-    BackedgeTakenInfo() : ConstantMax(nullptr), IsComplete(false) {}
+    BackedgeTakenInfo() = default;
     BackedgeTakenInfo(BackedgeTakenInfo &&) = default;
     BackedgeTakenInfo &operator=(BackedgeTakenInfo &&) = default;
 
@@ -1579,8 +1577,16 @@ private:
   ConstantRange getRangeForUnknownRecurrence(const SCEVUnknown *U);
 
   /// We know that there is no SCEV for the specified value.  Analyze the
-  /// expression.
+  /// expression recursively.
   const SCEV *createSCEV(Value *V);
+
+  /// We know that there is no SCEV for the specified value. Create a new SCEV
+  /// for \p V iteratively.
+  const SCEV *createSCEVIter(Value *V);
+  /// Collect operands of \p V for which SCEV expressions should be constructed
+  /// first. Returns a SCEV directly if it can be constructed trivially for \p
+  /// V.
+  const SCEV *getOperandsToCreate(Value *V, SmallVectorImpl<Value *> &Ops);
 
   /// Provide the special handling we need to analyze PHI SCEVs.
   const SCEV *createNodeForPHI(PHINode *PN);

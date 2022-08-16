@@ -174,7 +174,7 @@ static cl::opt<bool> EnableEagerlyInvalidateAnalyses(
     cl::desc("Eagerly invalidate more analyses in default pipelines"));
 
 static cl::opt<bool> EnableNoRerunSimplificationPipeline(
-    "enable-no-rerun-simplification-pipeline", cl::init(false), cl::Hidden,
+    "enable-no-rerun-simplification-pipeline", cl::init(true), cl::Hidden,
     cl::desc(
         "Prevent running the simplification pipeline on a function more "
         "than once in the case that SCC mutations cause a function to be "
@@ -1236,6 +1236,9 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   // passes to avoid re-sinking, but before SimplifyCFG because it can allow
   // flattening of blocks.
   OptimizePM.addPass(DivRemPairsPass());
+
+  // Try to annotate calls that were created during optimization.
+  OptimizePM.addPass(TailCallElimPass());
 
   // LoopSink (and other loop passes since the last simplifyCFG) might have
   // resulted in single-entry-single-exit or empty blocks. Clean up the CFG.

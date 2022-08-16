@@ -2000,12 +2000,13 @@ static void emitBlob(llvm::BitstreamWriter &Stream, StringRef Blob,
 
   // Compress the buffer if possible. We expect that almost all PCM
   // consumers will not want its contents.
-  SmallString<0> CompressedBuffer;
+  SmallVector<uint8_t, 0> CompressedBuffer;
   if (llvm::compression::zlib::isAvailable()) {
-    llvm::compression::zlib::compress(Blob.drop_back(1), CompressedBuffer);
+    llvm::compression::zlib::compress(
+        llvm::arrayRefFromStringRef(Blob.drop_back(1)), CompressedBuffer);
     RecordDataType Record[] = {SM_SLOC_BUFFER_BLOB_COMPRESSED, Blob.size() - 1};
     Stream.EmitRecordWithBlob(SLocBufferBlobCompressedAbbrv, Record,
-                              CompressedBuffer);
+                              llvm::toStringRef(CompressedBuffer));
     return;
   }
 
@@ -4346,8 +4347,12 @@ void ASTWriter::WriteModuleFileExtension(Sema &SemaRef,
 
 void ASTRecordWriter::AddAttr(const Attr *A) {
   auto &Record = *this;
-  if (!A)
+  // FIXME: Clang can't handle the serialization/deserialization of
+  // preferred_name properly now. See
+  // https://github.com/llvm/llvm-project/issues/56490 for example.
+  if (!A || (isa<PreferredNameAttr>(A) && Writer->isWritingNamedModules()))
     return Record.push_back(0);
+
   Record.push_back(A->getKind() + 1); // FIXME: stable encoding, target attrs
 
   Record.AddIdentifierRef(A->getAttrName());

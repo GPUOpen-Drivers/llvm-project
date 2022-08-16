@@ -253,7 +253,7 @@ void TestAllForms() {
   EXPECT_TRUE((bool)FormValue);
   BlockDataOpt = FormValue->getAsBlock();
   EXPECT_TRUE(BlockDataOpt.has_value());
-  ExtractedBlockData = BlockDataOpt.getValue();
+  ExtractedBlockData = BlockDataOpt.value();
   EXPECT_EQ(ExtractedBlockData.size(), BlockSize);
   EXPECT_TRUE(memcmp(ExtractedBlockData.data(), BlockData, BlockSize) == 0);
 
@@ -261,7 +261,7 @@ void TestAllForms() {
   EXPECT_TRUE((bool)FormValue);
   BlockDataOpt = FormValue->getAsBlock();
   EXPECT_TRUE(BlockDataOpt.has_value());
-  ExtractedBlockData = BlockDataOpt.getValue();
+  ExtractedBlockData = BlockDataOpt.value();
   EXPECT_EQ(ExtractedBlockData.size(), BlockSize);
   EXPECT_TRUE(memcmp(ExtractedBlockData.data(), BlockData, BlockSize) == 0);
 
@@ -269,7 +269,7 @@ void TestAllForms() {
   EXPECT_TRUE((bool)FormValue);
   BlockDataOpt = FormValue->getAsBlock();
   EXPECT_TRUE(BlockDataOpt.has_value());
-  ExtractedBlockData = BlockDataOpt.getValue();
+  ExtractedBlockData = BlockDataOpt.value();
   EXPECT_EQ(ExtractedBlockData.size(), BlockSize);
   EXPECT_TRUE(memcmp(ExtractedBlockData.data(), BlockData, BlockSize) == 0);
 
@@ -277,7 +277,7 @@ void TestAllForms() {
   EXPECT_TRUE((bool)FormValue);
   BlockDataOpt = FormValue->getAsBlock();
   EXPECT_TRUE(BlockDataOpt.has_value());
-  ExtractedBlockData = BlockDataOpt.getValue();
+  ExtractedBlockData = BlockDataOpt.value();
   EXPECT_EQ(ExtractedBlockData.size(), BlockSize);
   EXPECT_TRUE(memcmp(ExtractedBlockData.data(), BlockData, BlockSize) == 0);
 
@@ -287,7 +287,7 @@ void TestAllForms() {
     EXPECT_TRUE((bool)FormValue);
     BlockDataOpt = FormValue->getAsBlock();
     EXPECT_TRUE(BlockDataOpt.has_value());
-    ExtractedBlockData = BlockDataOpt.getValue();
+    ExtractedBlockData = BlockDataOpt.value();
     EXPECT_EQ(ExtractedBlockData.size(), 16u);
     EXPECT_TRUE(memcmp(ExtractedBlockData.data(), Data16, 16) == 0);
   }
@@ -989,21 +989,21 @@ template <uint16_t Version, class AddrType> void TestAddresses() {
     EXPECT_FALSE((bool)OptU64);
   } else {
     EXPECT_TRUE((bool)OptU64);
-    EXPECT_EQ(OptU64.getValue(), ActualHighPC);
+    EXPECT_EQ(OptU64.value(), ActualHighPC);
   }
   // Get the high PC as an unsigned constant. This should succeed if the high PC
   // was encoded as an offset and fail if the high PC was encoded as an address.
   OptU64 = toUnsigned(SubprogramDieLowHighPC.find(DW_AT_high_pc));
   if (SupportsHighPCAsOffset) {
     EXPECT_TRUE((bool)OptU64);
-    EXPECT_EQ(OptU64.getValue(), ActualHighPCOffset);
+    EXPECT_EQ(OptU64.value(), ActualHighPCOffset);
   } else {
     EXPECT_FALSE((bool)OptU64);
   }
 
   OptU64 = SubprogramDieLowHighPC.getHighPC(ActualLowPC);
   EXPECT_TRUE((bool)OptU64);
-  EXPECT_EQ(OptU64.getValue(), ActualHighPC);
+  EXPECT_EQ(OptU64.value(), ActualHighPC);
 
   EXPECT_TRUE(SubprogramDieLowHighPC.getLowAndHighPC(LowPC, HighPC, SectionIndex));
   EXPECT_EQ(LowPC, ActualLowPC);
@@ -1946,40 +1946,6 @@ TEST(DWARFDebugInfo, TestImplicitConstAbbrevs) {
   for (auto it = Val1Range.first; it != Val1Range.second; ++it)
     EXPECT_EQ(it->second, AbbrevPtrVal1);
   EXPECT_EQ(DIEs.find(Val2)->second, AbbrevPtrVal2);
-}
-
-TEST(DWARFDebugInfo, TestErrorReporting) {
-  Triple Triple("x86_64-pc-linux");
-  if (!isConfigurationSupported(Triple))
-    GTEST_SKIP();
-
-  auto ExpectedDG = dwarfgen::Generator::create(Triple, 4 /*DwarfVersion*/);
-  ASSERT_THAT_EXPECTED(ExpectedDG, Succeeded());
-  dwarfgen::Generator *DG = ExpectedDG.get().get();
-  AsmPrinter *AP = DG->getAsmPrinter();
-  MCContext *MC = DG->getMCContext();
-
-  // Emit two compressed sections with broken headers.
-  AP->OutStreamer->switchSection(
-      MC->getELFSection(".zdebug_foo", 0 /*Type*/, 0 /*Flags*/));
-  AP->OutStreamer->emitBytes("0");
-  AP->OutStreamer->switchSection(
-      MC->getELFSection(".zdebug_bar", 0 /*Type*/, 0 /*Flags*/));
-  AP->OutStreamer->emitBytes("0");
-
-  MemoryBufferRef FileBuffer(DG->generate(), "dwarf");
-  auto Obj = object::ObjectFile::createObjectFile(FileBuffer);
-  EXPECT_TRUE((bool)Obj);
-
-  // DWARFContext parses whole file and finds the two errors we expect.
-  int Errors = 0;
-  std::unique_ptr<DWARFContext> Ctx1 = DWARFContext::create(
-      **Obj, DWARFContext::ProcessDebugRelocations::Process, nullptr, "",
-      [&](Error E) {
-        ++Errors;
-        consumeError(std::move(E));
-      });
-  EXPECT_TRUE(Errors == 2);
 }
 
 TEST(DWARFDebugInfo, TestDWARFDieRangeInfoContains) {
