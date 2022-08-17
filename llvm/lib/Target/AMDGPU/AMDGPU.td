@@ -1285,8 +1285,7 @@ def FeatureISAVersion11_Common : FeatureSet<
    FeatureAtomicFaddNoRtnInsts,
    FeatureImageInsts,
    FeaturePackedTID,
-   FeatureVcmpxPermlaneHazard,
-   FeatureBackOffBarrier]>;
+   FeatureVcmpxPermlaneHazard]>;
 
 def FeatureISAVersion11_0_0 : FeatureSet<
   !listconcat(FeatureISAVersion11_Common.Features,
