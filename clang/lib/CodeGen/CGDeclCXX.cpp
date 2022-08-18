@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CGCXXABI.h"
+#include "CGHLSLRuntime.h"
 #include "CGObjCRuntime.h"
 #include "CGOpenMPRuntime.h"
 #include "CodeGenFunction.h"
@@ -552,7 +553,18 @@ CodeGenModule::EmitCXXGlobalVarDeclInitFunc(const VarDecl *D,
     CXXThreadLocalInits.push_back(Fn);
     CXXThreadLocalInitVars.push_back(D);
   } else if (PerformInit && ISA) {
-    EmitPointerToInitFunc(D, Addr, Fn, ISA);
+    // Contract with backend that "init_seg(compiler)" corresponds to priority
+    // 200 and "init_seg(lib)" corresponds to priority 400.
+    int Priority = -1;
+    if (ISA->getSection() == ".CRT$XCC")
+      Priority = 200;
+    else if (ISA->getSection() == ".CRT$XCL")
+      Priority = 400;
+
+    if (Priority != -1)
+      AddGlobalCtor(Fn, Priority, COMDATKey);
+    else
+      EmitPointerToInitFunc(D, Addr, Fn, ISA);
   } else if (auto *IPA = D->getAttr<InitPriorityAttr>()) {
     OrderGlobalInitsOrStermFinalizers Key(IPA->getPriority(),
                                           PrioritizedCXXGlobalInits.size());
@@ -649,8 +661,8 @@ void CodeGenModule::EmitCXXModuleInitFunc(Module *Primary) {
 
   SmallVector<llvm::Function *, 8> ModuleInits;
   for (Module *M : AllImports) {
-    // No Itanium initializer in module map modules.
-    if (M->isModuleMapModule())
+    // No Itanium initializer in header like modules.
+    if (M->isHeaderLikeModule())
       continue; // TODO: warn of mixed use of module map modules and C++20?
     llvm::FunctionType *FTy = llvm::FunctionType::get(VoidTy, false);
     SmallString<256> FnName;
@@ -778,8 +790,8 @@ CodeGenModule::EmitCXXGlobalInitFunc() {
   SmallVector<llvm::Function *, 8> ModuleInits;
   if (CXX20ModuleInits)
     for (Module *M : ImportedModules) {
-      // No Itanium initializer in module map modules.
-      if (M->isModuleMapModule())
+      // No Itanium initializer in header like modules.
+      if (M->isHeaderLikeModule())
         continue;
       llvm::FunctionType *FTy = llvm::FunctionType::get(VoidTy, false);
       SmallString<256> FnName;
@@ -976,6 +988,9 @@ void CodeGenFunction::GenerateCXXGlobalVarDeclInitFunc(llvm::Function *Fn,
   } else {
     EmitCXXGlobalVarDeclInit(*D, Addr, PerformInit);
   }
+
+  if (getLangOpts().HLSL)
+    CGM.getHLSLRuntime().annotateHLSLResource(D, Addr);
 
   FinishFunction();
 }

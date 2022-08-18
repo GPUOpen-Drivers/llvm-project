@@ -345,10 +345,13 @@ Block &SymbolFileNativePDB::CreateBlock(PdbCompilandSymId block_id) {
     // This is a function.  It must be global.  Creating the Function entry
     // for it automatically creates a block for it.
     FunctionSP func = GetOrCreateFunction(block_id, *comp_unit);
-    Block &block = func->GetBlock(false);
-    if (block.GetNumRanges() == 0)
-      block.AddRange(Block::Range(0, func->GetAddressRange().GetByteSize()));
-    return block;
+    if (func) {
+      Block &block = func->GetBlock(false);
+      if (block.GetNumRanges() == 0)
+        block.AddRange(Block::Range(0, func->GetAddressRange().GetByteSize()));
+      return block;
+    }
+    break;
   }
   case S_BLOCK32: {
     // This is a block.  Its parent is either a function or another block.  In
@@ -774,7 +777,7 @@ VariableSP SymbolFileNativePDB::CreateGlobalVariable(PdbGlobalSymId var_id) {
   switch (sym.kind()) {
   case S_GDATA32:
     is_external = true;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case S_LDATA32: {
     DataSym ds(sym.kind());
     llvm::cantFail(SymbolDeserializer::deserializeAs<DataSym>(sym, ds));
@@ -789,7 +792,7 @@ VariableSP SymbolFileNativePDB::CreateGlobalVariable(PdbGlobalSymId var_id) {
   }
   case S_GTHREAD32:
     is_external = true;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case S_LTHREAD32: {
     ThreadLocalDataSym tlds(sym.kind());
     llvm::cantFail(
@@ -1024,11 +1027,13 @@ uint32_t SymbolFileNativePDB::ResolveSymbolContext(
         continue;
       if (type == PDB_SymType::Function) {
         sc.function = GetOrCreateFunction(csid, *sc.comp_unit).get();
-        Block &block = sc.function->GetBlock(true);
-        addr_t func_base =
-            sc.function->GetAddressRange().GetBaseAddress().GetFileAddress();
-        addr_t offset = file_addr - func_base;
-        sc.block = block.FindInnermostBlockByOffset(offset);
+        if (sc.function) {
+          Block &block = sc.function->GetBlock(true);
+          addr_t func_base =
+              sc.function->GetAddressRange().GetBaseAddress().GetFileAddress();
+          addr_t offset = file_addr - func_base;
+          sc.block = block.FindInnermostBlockByOffset(offset);
+        }
       }
 
       if (type == PDB_SymType::Block) {
@@ -1563,10 +1568,15 @@ void SymbolFileNativePDB::FindGlobalVariables(
 }
 
 void SymbolFileNativePDB::FindFunctions(
-    ConstString name, const CompilerDeclContext &parent_decl_ctx,
-    FunctionNameType name_type_mask, bool include_inlines,
+    const Module::LookupInfo &lookup_info,
+    const CompilerDeclContext &parent_decl_ctx, bool include_inlines,
     SymbolContextList &sc_list) {
   std::lock_guard<std::recursive_mutex> guard(GetModuleMutex());
+  ConstString name = lookup_info.GetLookupName();
+  FunctionNameType name_type_mask = lookup_info.GetNameTypeMask();
+  if (name_type_mask & eFunctionNameTypeFull)
+    name = lookup_info.GetName();
+
   // For now we only support lookup by method name or full name.
   if (!(name_type_mask & eFunctionNameTypeFull ||
         name_type_mask & eFunctionNameTypeMethod))
@@ -1708,6 +1718,8 @@ VariableSP SymbolFileNativePDB::CreateLocalVariable(PdbCompilandSymId scope_id,
   CompilandIndexItem *cii = m_index->compilands().GetCompiland(var_id.modi);
   CompUnitSP comp_unit_sp = GetOrCreateCompileUnit(*cii);
   TypeSP type_sp = GetOrCreateType(var_info.type);
+  if (!type_sp)
+    return nullptr;
   std::string name = var_info.name.str();
   Declaration decl;
   SymbolFileTypeSP sftype =
@@ -1903,6 +1915,8 @@ SymbolFileNativePDB::GetDeclContextForUID(lldb::user_id_t uid) {
 CompilerDeclContext
 SymbolFileNativePDB::GetDeclContextContainingUID(lldb::user_id_t uid) {
   clang::DeclContext *context = m_ast->GetParentDeclContext(PdbSymUid(uid));
+  if (!context)
+    return CompilerDeclContext();
   return m_ast->ToCompilerDeclContext(*context);
 }
 
@@ -1924,6 +1938,8 @@ Type *SymbolFileNativePDB::ResolveTypeUID(lldb::user_id_t type_uid) {
     return nullptr;
 
   TypeSP type_sp = CreateAndCacheType(type_id);
+  if (!type_sp)
+    return nullptr;
   return &*type_sp;
 }
 

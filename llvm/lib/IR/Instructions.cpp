@@ -960,12 +960,6 @@ void CallBrInst::init(FunctionType *FTy, Value *Fn, BasicBlock *Fallthrough,
   setName(NameStr);
 }
 
-BlockAddress *
-CallBrInst::getBlockAddressForIndirectDest(unsigned DestNo) const {
-  return BlockAddress::get(const_cast<Function *>(getFunction()),
-                           getIndirectDest(DestNo));
-}
-
 CallBrInst::CallBrInst(const CallBrInst &CBI)
     : CallBase(CBI.Attrs, CBI.FTy, CBI.getType(), Instruction::CallBr,
                OperandTraits<CallBase>::op_end(this) - CBI.getNumOperands(),
@@ -4662,9 +4656,8 @@ InsertValueInst *InsertValueInst::cloneImpl() const {
 }
 
 AllocaInst *AllocaInst::cloneImpl() const {
-  AllocaInst *Result =
-      new AllocaInst(getAllocatedType(), getType()->getAddressSpace(),
-                     getOperand(0), getAlign());
+  AllocaInst *Result = new AllocaInst(getAllocatedType(), getAddressSpace(),
+                                      getOperand(0), getAlign());
   Result->setUsedWithInAlloca(isUsedWithInAlloca());
   Result->setSwiftError(isSwiftError());
   return Result;

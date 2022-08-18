@@ -411,6 +411,8 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
   if (Subtarget.hasStdExtA()) {
     setMaxAtomicSizeInBitsSupported(Subtarget.getXLen());
     setMinCmpXchgSizeInBits(32);
+  } else if (Subtarget.hasForcedAtomics()) {
+    setMaxAtomicSizeInBitsSupported(Subtarget.getXLen());
   } else {
     setMaxAtomicSizeInBitsSupported(0);
   }
@@ -443,8 +445,8 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
         ISD::VP_SHL,         ISD::VP_REDUCE_ADD,  ISD::VP_REDUCE_AND,
         ISD::VP_REDUCE_OR,   ISD::VP_REDUCE_XOR,  ISD::VP_REDUCE_SMAX,
         ISD::VP_REDUCE_SMIN, ISD::VP_REDUCE_UMAX, ISD::VP_REDUCE_UMIN,
-        ISD::VP_MERGE,       ISD::VP_SELECT,      ISD::VP_FPTOSI,
-        ISD::VP_FPTOUI,      ISD::VP_SETCC,       ISD::VP_SIGN_EXTEND,
+        ISD::VP_MERGE,       ISD::VP_SELECT,      ISD::VP_FP_TO_SINT,
+        ISD::VP_FP_TO_UINT,  ISD::VP_SETCC,       ISD::VP_SIGN_EXTEND,
         ISD::VP_ZERO_EXTEND, ISD::VP_TRUNCATE};
 
     static const unsigned FloatingPointVPOps[] = {
@@ -454,7 +456,7 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
         ISD::VP_REDUCE_FADD, ISD::VP_REDUCE_SEQ_FADD,
         ISD::VP_REDUCE_FMIN, ISD::VP_REDUCE_FMAX,
         ISD::VP_MERGE,       ISD::VP_SELECT,
-        ISD::VP_SITOFP,      ISD::VP_UITOFP,
+        ISD::VP_SINT_TO_FP,  ISD::VP_UINT_TO_FP,
         ISD::VP_SETCC,       ISD::VP_FP_ROUND,
         ISD::VP_FP_EXTEND};
 
@@ -527,9 +529,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
                          VT, Expand);
       }
 
-      setOperationAction(
-          {ISD::VP_FPTOSI, ISD::VP_FPTOUI, ISD::VP_TRUNCATE, ISD::VP_SETCC}, VT,
-          Custom);
+      setOperationAction({ISD::VP_FP_TO_SINT, ISD::VP_FP_TO_UINT,
+                          ISD::VP_TRUNCATE, ISD::VP_SETCC},
+                         VT, Custom);
       setOperationAction(ISD::VECTOR_REVERSE, VT, Custom);
 
       setOperationPromotedToType(
@@ -596,8 +598,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
                          VT, Custom);
 
       setOperationAction(
-          {ISD::VP_LOAD, ISD::VP_STORE, ISD::VP_GATHER, ISD::VP_SCATTER}, VT,
-          Custom);
+          {ISD::VP_LOAD, ISD::VP_STORE, ISD::EXPERIMENTAL_VP_STRIDED_LOAD,
+           ISD::EXPERIMENTAL_VP_STRIDED_STORE, ISD::VP_GATHER, ISD::VP_SCATTER},
+          VT, Custom);
 
       setOperationAction(
           {ISD::CONCAT_VECTORS, ISD::INSERT_SUBVECTOR, ISD::EXTRACT_SUBVECTOR},
@@ -686,8 +689,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
                          VT, Custom);
 
       setOperationAction(
-          {ISD::VP_LOAD, ISD::VP_STORE, ISD::VP_GATHER, ISD::VP_SCATTER}, VT,
-          Custom);
+          {ISD::VP_LOAD, ISD::VP_STORE, ISD::EXPERIMENTAL_VP_STRIDED_LOAD,
+           ISD::EXPERIMENTAL_VP_STRIDED_STORE, ISD::VP_GATHER, ISD::VP_SCATTER},
+          VT, Custom);
 
       setOperationAction(ISD::SELECT, VT, Custom);
       setOperationAction(ISD::SELECT_CC, VT, Expand);
@@ -790,9 +794,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
                               ISD::OR, ISD::XOR},
                              VT, Custom);
 
-          setOperationAction(
-              {ISD::VP_FPTOSI, ISD::VP_FPTOUI, ISD::VP_SETCC, ISD::VP_TRUNCATE},
-              VT, Custom);
+          setOperationAction({ISD::VP_FP_TO_SINT, ISD::VP_FP_TO_UINT,
+                              ISD::VP_SETCC, ISD::VP_TRUNCATE},
+                             VT, Custom);
           continue;
         }
 
@@ -812,9 +816,11 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
         setOperationAction(
             {ISD::MLOAD, ISD::MSTORE, ISD::MGATHER, ISD::MSCATTER}, VT, Custom);
 
-        setOperationAction(
-            {ISD::VP_LOAD, ISD::VP_STORE, ISD::VP_GATHER, ISD::VP_SCATTER}, VT,
-            Custom);
+        setOperationAction({ISD::VP_LOAD, ISD::VP_STORE,
+                            ISD::EXPERIMENTAL_VP_STRIDED_LOAD,
+                            ISD::EXPERIMENTAL_VP_STRIDED_STORE, ISD::VP_GATHER,
+                            ISD::VP_SCATTER},
+                           VT, Custom);
 
         setOperationAction({ISD::ADD, ISD::MUL, ISD::SUB, ISD::AND, ISD::OR,
                             ISD::XOR, ISD::SDIV, ISD::SREM, ISD::UDIV,
@@ -885,9 +891,11 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
                             ISD::MGATHER, ISD::MSCATTER},
                            VT, Custom);
 
-        setOperationAction(
-            {ISD::VP_LOAD, ISD::VP_STORE, ISD::VP_GATHER, ISD::VP_SCATTER}, VT,
-            Custom);
+        setOperationAction({ISD::VP_LOAD, ISD::VP_STORE,
+                            ISD::EXPERIMENTAL_VP_STRIDED_LOAD,
+                            ISD::EXPERIMENTAL_VP_STRIDED_STORE, ISD::VP_GATHER,
+                            ISD::VP_SCATTER},
+                           VT, Custom);
 
         setOperationAction({ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV,
                             ISD::FNEG, ISD::FABS, ISD::FCOPYSIGN, ISD::FSQRT,
@@ -921,6 +929,16 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       if (Subtarget.hasStdExtD())
         setOperationAction(ISD::BITCAST, MVT::f64, Custom);
     }
+  }
+
+  if (Subtarget.hasForcedAtomics()) {
+    // Set atomic rmw/cas operations to expand to force __sync libcalls.
+    setOperationAction(
+        {ISD::ATOMIC_CMP_SWAP, ISD::ATOMIC_SWAP, ISD::ATOMIC_LOAD_ADD,
+         ISD::ATOMIC_LOAD_SUB, ISD::ATOMIC_LOAD_AND, ISD::ATOMIC_LOAD_OR,
+         ISD::ATOMIC_LOAD_XOR, ISD::ATOMIC_LOAD_NAND, ISD::ATOMIC_LOAD_MIN,
+         ISD::ATOMIC_LOAD_MAX, ISD::ATOMIC_LOAD_UMIN, ISD::ATOMIC_LOAD_UMAX},
+        XLenVT, Expand);
   }
 
   // Function alignments.
@@ -1086,6 +1104,8 @@ bool RISCVTargetLowering::isLegalAddImmediate(int64_t Imm) const {
 // On RV32, 64-bit integers are split into their high and low parts and held
 // in two different registers, so the trunc is free since the low register can
 // just be used.
+// FIXME: Should we consider i64->i32 free on RV64 to match the EVT version of
+// isTruncateFree?
 bool RISCVTargetLowering::isTruncateFree(Type *SrcTy, Type *DstTy) const {
   if (Subtarget.is64Bit() || !SrcTy->isIntegerTy() || !DstTy->isIntegerTy())
     return false;
@@ -1095,8 +1115,10 @@ bool RISCVTargetLowering::isTruncateFree(Type *SrcTy, Type *DstTy) const {
 }
 
 bool RISCVTargetLowering::isTruncateFree(EVT SrcVT, EVT DstVT) const {
-  if (Subtarget.is64Bit() || SrcVT.isVector() || DstVT.isVector() ||
-      !SrcVT.isInteger() || !DstVT.isInteger())
+  // We consider i64->i32 free on RV64 since we have good selection of W
+  // instructions that make promoting operations back to i64 free in many cases.
+  if (SrcVT.isVector() || DstVT.isVector() || !SrcVT.isInteger() ||
+      !DstVT.isInteger())
     return false;
   unsigned SrcBits = SrcVT.getSizeInBits();
   unsigned DestBits = DstVT.getSizeInBits();
@@ -3253,7 +3275,7 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
     MVT VT = Op.getSimpleValueType();
     SDLoc DL(Op);
     if (Subtarget.hasStdExtZbp()) {
-      // Convert BSWAP/BITREVERSE to GREVI to enable GREVI combinining.
+      // Convert BSWAP/BITREVERSE to GREVI to enable GREVI combining.
       // Start with the maximum immediate value which is the bitwidth - 1.
       unsigned Imm = VT.getSizeInBits() - 1;
       // If this is BSWAP rather than BITREVERSE, clear the lower 3 bits.
@@ -3361,7 +3383,7 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
       SDValue Powi =
           DAG.getNode(ISD::FPOWI, DL, MVT::f32, Op0, Op.getOperand(1));
       return DAG.getNode(ISD::FP_ROUND, DL, MVT::f16, Powi,
-                         DAG.getIntPtrConstant(0, DL));
+                         DAG.getIntPtrConstant(0, DL, /*isTarget=*/true));
     }
     return SDValue();
   }
@@ -3724,18 +3746,22 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
   case ISD::VP_FP_EXTEND:
   case ISD::VP_FP_ROUND:
     return lowerVectorFPExtendOrRoundLike(Op, DAG);
-  case ISD::VP_FPTOSI:
+  case ISD::VP_FP_TO_SINT:
     return lowerVPFPIntConvOp(Op, DAG, RISCVISD::FP_TO_SINT_VL);
-  case ISD::VP_FPTOUI:
+  case ISD::VP_FP_TO_UINT:
     return lowerVPFPIntConvOp(Op, DAG, RISCVISD::FP_TO_UINT_VL);
-  case ISD::VP_SITOFP:
+  case ISD::VP_SINT_TO_FP:
     return lowerVPFPIntConvOp(Op, DAG, RISCVISD::SINT_TO_FP_VL);
-  case ISD::VP_UITOFP:
+  case ISD::VP_UINT_TO_FP:
     return lowerVPFPIntConvOp(Op, DAG, RISCVISD::UINT_TO_FP_VL);
   case ISD::VP_SETCC:
     if (Op.getOperand(0).getSimpleValueType().getVectorElementType() == MVT::i1)
       return lowerVPSetCCMaskOp(Op, DAG);
     return lowerVPOp(Op, DAG, RISCVISD::SETCC_VL);
+  case ISD::EXPERIMENTAL_VP_STRIDED_LOAD:
+    return lowerVPStridedLoad(Op, DAG);
+  case ISD::EXPERIMENTAL_VP_STRIDED_STORE:
+    return lowerVPStridedStore(Op, DAG);
   }
 }
 
@@ -3964,18 +3990,16 @@ SDValue RISCVTargetLowering::lowerSELECT(SDValue Op, SelectionDAG &DAG) const {
     return DAG.getNode(ISD::VSELECT, DL, VT, CondSplat, TrueV, FalseV);
   }
 
-  // If the result type is XLenVT and CondV is the output of a SETCC node
-  // which also operated on XLenVT inputs, then merge the SETCC node into the
-  // lowered RISCVISD::SELECT_CC to take advantage of the integer
-  // compare+branch instructions. i.e.:
+  // If the CondV is the output of a SETCC node which operates on XLenVT inputs,
+  // then merge the SETCC node into the lowered RISCVISD::SELECT_CC to take
+  // advantage of the integer compare+branch instructions. i.e.:
   // (select (setcc lhs, rhs, cc), truev, falsev)
   // -> (riscvisd::select_cc lhs, rhs, cc, truev, falsev)
-  if (VT == XLenVT && CondV.getOpcode() == ISD::SETCC &&
+  if (CondV.getOpcode() == ISD::SETCC &&
       CondV.getOperand(0).getSimpleValueType() == XLenVT) {
     SDValue LHS = CondV.getOperand(0);
     SDValue RHS = CondV.getOperand(1);
-    const auto *CC = cast<CondCodeSDNode>(CondV.getOperand(2));
-    ISD::CondCode CCVal = CC->get();
+    ISD::CondCode CCVal = cast<CondCodeSDNode>(CondV.getOperand(2))->get();
 
     // Special case for a select of 2 constants that have a diffence of 1.
     // Normally this is done by DAGCombine, but if the select is introduced by
@@ -3989,16 +4013,16 @@ SDValue RISCVTargetLowering::lowerSELECT(SDValue Op, SelectionDAG &DAG) const {
       const APInt &TrueVal = cast<ConstantSDNode>(TrueV)->getAPIntValue();
       const APInt &FalseVal = cast<ConstantSDNode>(FalseV)->getAPIntValue();
       if (TrueVal - 1 == FalseVal)
-        return DAG.getNode(ISD::ADD, DL, Op.getValueType(), CondV, FalseV);
+        return DAG.getNode(ISD::ADD, DL, VT, CondV, FalseV);
       if (TrueVal + 1 == FalseVal)
-        return DAG.getNode(ISD::SUB, DL, Op.getValueType(), FalseV, CondV);
+        return DAG.getNode(ISD::SUB, DL, VT, FalseV, CondV);
     }
 
     translateSetCCForBranch(DL, LHS, RHS, CCVal, DAG);
 
     SDValue TargetCC = DAG.getCondCode(CCVal);
     SDValue Ops[] = {LHS, RHS, TargetCC, TrueV, FalseV};
-    return DAG.getNode(RISCVISD::SELECT_CC, DL, Op.getValueType(), Ops);
+    return DAG.getNode(RISCVISD::SELECT_CC, DL, VT, Ops);
   }
 
   // Otherwise:
@@ -4009,7 +4033,7 @@ SDValue RISCVTargetLowering::lowerSELECT(SDValue Op, SelectionDAG &DAG) const {
 
   SDValue Ops[] = {CondV, Zero, SetNE, TrueV, FalseV};
 
-  return DAG.getNode(RISCVISD::SELECT_CC, DL, Op.getValueType(), Ops);
+  return DAG.getNode(RISCVISD::SELECT_CC, DL, VT, Ops);
 }
 
 SDValue RISCVTargetLowering::lowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
@@ -6557,6 +6581,89 @@ SDValue RISCVTargetLowering::lowerLogicVPOp(SDValue Op, SelectionDAG &DAG,
   return convertFromScalableVector(VT, Val, DAG, Subtarget);
 }
 
+SDValue RISCVTargetLowering::lowerVPStridedLoad(SDValue Op,
+                                                SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  MVT XLenVT = Subtarget.getXLenVT();
+  MVT VT = Op.getSimpleValueType();
+  MVT ContainerVT = VT;
+  if (VT.isFixedLengthVector())
+    ContainerVT = getContainerForFixedLengthVector(VT);
+
+  SDVTList VTs = DAG.getVTList({ContainerVT, MVT::Other});
+
+  auto *VPNode = cast<VPStridedLoadSDNode>(Op);
+  // Check if the mask is known to be all ones
+  SDValue Mask = VPNode->getMask();
+  bool IsUnmasked = ISD::isConstantSplatVectorAllOnes(Mask.getNode());
+
+  SDValue IntID = DAG.getTargetConstant(IsUnmasked ? Intrinsic::riscv_vlse
+                                                   : Intrinsic::riscv_vlse_mask,
+                                        DL, XLenVT);
+  SmallVector<SDValue, 8> Ops{VPNode->getChain(), IntID,
+                              DAG.getUNDEF(ContainerVT), VPNode->getBasePtr(),
+                              VPNode->getStride()};
+  if (!IsUnmasked) {
+    if (VT.isFixedLengthVector()) {
+      MVT MaskVT = ContainerVT.changeVectorElementType(MVT::i1);
+      Mask = convertToScalableVector(MaskVT, Mask, DAG, Subtarget);
+    }
+    Ops.push_back(Mask);
+  }
+  Ops.push_back(VPNode->getVectorLength());
+  if (!IsUnmasked) {
+    SDValue Policy = DAG.getTargetConstant(RISCVII::TAIL_AGNOSTIC, DL, XLenVT);
+    Ops.push_back(Policy);
+  }
+
+  SDValue Result =
+      DAG.getMemIntrinsicNode(ISD::INTRINSIC_W_CHAIN, DL, VTs, Ops,
+                              VPNode->getMemoryVT(), VPNode->getMemOperand());
+  SDValue Chain = Result.getValue(1);
+
+  if (VT.isFixedLengthVector())
+    Result = convertFromScalableVector(VT, Result, DAG, Subtarget);
+
+  return DAG.getMergeValues({Result, Chain}, DL);
+}
+
+SDValue RISCVTargetLowering::lowerVPStridedStore(SDValue Op,
+                                                 SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  MVT XLenVT = Subtarget.getXLenVT();
+
+  auto *VPNode = cast<VPStridedStoreSDNode>(Op);
+  SDValue StoreVal = VPNode->getValue();
+  MVT VT = StoreVal.getSimpleValueType();
+  MVT ContainerVT = VT;
+  if (VT.isFixedLengthVector()) {
+    ContainerVT = getContainerForFixedLengthVector(VT);
+    StoreVal = convertToScalableVector(ContainerVT, StoreVal, DAG, Subtarget);
+  }
+
+  // Check if the mask is known to be all ones
+  SDValue Mask = VPNode->getMask();
+  bool IsUnmasked = ISD::isConstantSplatVectorAllOnes(Mask.getNode());
+
+  SDValue IntID = DAG.getTargetConstant(IsUnmasked ? Intrinsic::riscv_vsse
+                                                   : Intrinsic::riscv_vsse_mask,
+                                        DL, XLenVT);
+  SmallVector<SDValue, 8> Ops{VPNode->getChain(), IntID, StoreVal,
+                              VPNode->getBasePtr(), VPNode->getStride()};
+  if (!IsUnmasked) {
+    if (VT.isFixedLengthVector()) {
+      MVT MaskVT = ContainerVT.changeVectorElementType(MVT::i1);
+      Mask = convertToScalableVector(MaskVT, Mask, DAG, Subtarget);
+    }
+    Ops.push_back(Mask);
+  }
+  Ops.push_back(VPNode->getVectorLength());
+
+  return DAG.getMemIntrinsicNode(ISD::INTRINSIC_VOID, DL, VPNode->getVTList(),
+                                 Ops, VPNode->getMemoryVT(),
+                                 VPNode->getMemOperand());
+}
+
 // Custom lower MGATHER/VP_GATHER to a legalized form for RVV. It will then be
 // matched to a RVV indexed load. The RVV indexed load instructions only
 // support the "unsigned unscaled" addressing mode; indices are implicitly
@@ -7017,7 +7124,7 @@ void RISCVTargetLowering::ReplaceNodeResults(SDNode *N,
 
       return;
     }
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   }
   case ISD::ADD:
   case ISD::SUB:
@@ -8170,7 +8277,51 @@ static SDValue performADDCombine(SDNode *N, SelectionDAG &DAG,
   return combineSelectAndUseCommutative(N, DAG, /*AllOnes*/ false);
 }
 
+// Try to turn a sub boolean RHS and constant LHS into an addi.
+static SDValue combineSubOfBoolean(SDNode *N, SelectionDAG &DAG) {
+  SDValue N0 = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
+  EVT VT = N->getValueType(0);
+  SDLoc DL(N);
+
+  // Require a constant LHS.
+  auto *N0C = dyn_cast<ConstantSDNode>(N0);
+  if (!N0C)
+    return SDValue();
+
+  // All our optimizations involve subtracting 1 from the immediate and forming
+  // an ADDI. Make sure the new immediate is valid for an ADDI.
+  APInt ImmValMinus1 = N0C->getAPIntValue() - 1;
+  if (!ImmValMinus1.isSignedIntN(12))
+    return SDValue();
+
+  SDValue NewLHS;
+  if (N1.getOpcode() == ISD::SETCC && N1.hasOneUse()) {
+    // (sub constant, (setcc x, y, eq/neq)) ->
+    // (add (setcc x, y, neq/eq), constant - 1)
+    ISD::CondCode CCVal = cast<CondCodeSDNode>(N1.getOperand(2))->get();
+    EVT SetCCOpVT = N1.getOperand(0).getValueType();
+    if (!isIntEqualitySetCC(CCVal) || !SetCCOpVT.isInteger())
+      return SDValue();
+    CCVal = ISD::getSetCCInverse(CCVal, SetCCOpVT);
+    NewLHS =
+        DAG.getSetCC(SDLoc(N1), VT, N1.getOperand(0), N1.getOperand(1), CCVal);
+  } else if (N1.getOpcode() == ISD::XOR && isOneConstant(N1.getOperand(1)) &&
+             N1.getOperand(0).getOpcode() == ISD::SETCC) {
+    // (sub C, (xor (setcc), 1)) -> (add (setcc), C-1).
+    // Since setcc returns a bool the xor is equivalent to 1-setcc.
+    NewLHS = N1.getOperand(0);
+  } else
+    return SDValue();
+
+  SDValue NewRHS = DAG.getConstant(ImmValMinus1, DL, VT);
+  return DAG.getNode(ISD::ADD, DL, VT, NewLHS, NewRHS);
+}
+
 static SDValue performSUBCombine(SDNode *N, SelectionDAG &DAG) {
+  if (SDValue V = combineSubOfBoolean(N, DAG))
+    return V;
+
   // fold (sub x, (select lhs, rhs, cc, 0, y)) ->
   //      (select lhs, rhs, cc, x, (sub x, y))
   SDValue N0 = N->getOperand(0);
@@ -8277,7 +8428,13 @@ static SDValue performSETCCCombine(SDNode *N, SelectionDAG &DAG,
   if (!isIntEqualitySetCC(Cond))
     return SDValue();
 
-  const APInt &C1 = cast<ConstantSDNode>(N1)->getAPIntValue();
+  // Don't do this if the sign bit is provably zero, it will be turned back into
+  // an AND.
+  APInt SignMask = APInt::getOneBitSet(64, 31);
+  if (DAG.MaskedValueIsZero(N0.getOperand(0), SignMask))
+    return SDValue();
+
+  const APInt &C1 = N1C->getAPIntValue();
 
   SDLoc dl(N);
   // If the constant is larger than 2^32 - 1 it is impossible for both sides
@@ -8775,8 +8932,6 @@ static SDValue performSRACombine(SDNode *N, SelectionDAG &DAG,
   // We might have an ADD or SUB between the SRA and SHL.
   bool IsAdd = N0.getOpcode() == ISD::ADD;
   if ((IsAdd || N0.getOpcode() == ISD::SUB)) {
-    if (!N0.hasOneUse())
-      return SDValue();
     // Other operand needs to be a constant we can modify.
     AddC = dyn_cast<ConstantSDNode>(N0.getOperand(IsAdd ? 1 : 0));
     if (!AddC)
@@ -8786,6 +8941,16 @@ static SDValue performSRACombine(SDNode *N, SelectionDAG &DAG,
     if (AddC->getAPIntValue().countTrailingZeros() < 32)
       return SDValue();
 
+    // All users should be a shift by constant less than or equal to 32. This
+    // ensures we'll do this optimization for each of them to produce an
+    // add/sub+sext_inreg they can all share.
+    for (SDNode *U : N0->uses()) {
+      if (U->getOpcode() != ISD::SRA ||
+          !isa<ConstantSDNode>(U->getOperand(1)) ||
+          cast<ConstantSDNode>(U->getOperand(1))->getZExtValue() > 32)
+        return SDValue();
+    }
+
     Shl = N0.getOperand(IsAdd ? 0 : 1);
   } else {
     // Not an ADD or SUB.
@@ -8793,9 +8958,15 @@ static SDValue performSRACombine(SDNode *N, SelectionDAG &DAG,
   }
 
   // Look for a shift left by 32.
-  if (Shl.getOpcode() != ISD::SHL || !Shl.hasOneUse() ||
-      !isa<ConstantSDNode>(Shl.getOperand(1)) ||
+  if (Shl.getOpcode() != ISD::SHL || !isa<ConstantSDNode>(Shl.getOperand(1)) ||
       Shl.getConstantOperandVal(1) != 32)
+    return SDValue();
+
+  // We if we didn't look through an add/sub, then the shl should have one use.
+  // If we did look through an add/sub, the sext_inreg we create is free so
+  // we're only creating 2 new instructions. It's enough to only remove the
+  // original sra+add/sub.
+  if (!AddC && !Shl.hasOneUse())
     return SDValue();
 
   SDLoc DL(N);
@@ -9293,7 +9464,7 @@ SDValue RISCVTargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::SRA:
     if (SDValue V = performSRACombine(N, DAG, Subtarget))
       return V;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case ISD::SRL:
   case ISD::SHL: {
     SDValue ShAmt = N->getOperand(1);
@@ -9788,6 +9959,31 @@ unsigned RISCVTargetLowering::ComputeNumSignBitsForTargetNode(
     if (EltBits <= XLen)
       return XLen - EltBits + 1;
     break;
+  }
+  case ISD::INTRINSIC_W_CHAIN: {
+    unsigned IntNo = Op.getConstantOperandVal(1);
+    switch (IntNo) {
+    default:
+      break;
+    case Intrinsic::riscv_masked_atomicrmw_xchg_i64:
+    case Intrinsic::riscv_masked_atomicrmw_add_i64:
+    case Intrinsic::riscv_masked_atomicrmw_sub_i64:
+    case Intrinsic::riscv_masked_atomicrmw_nand_i64:
+    case Intrinsic::riscv_masked_atomicrmw_max_i64:
+    case Intrinsic::riscv_masked_atomicrmw_min_i64:
+    case Intrinsic::riscv_masked_atomicrmw_umax_i64:
+    case Intrinsic::riscv_masked_atomicrmw_umin_i64:
+    case Intrinsic::riscv_masked_cmpxchg_i64:
+      // riscv_masked_{atomicrmw_*,cmpxchg} intrinsics represent an emulated
+      // narrow atomic operation. These are implemented using atomic
+      // operations at the minimum supported atomicrmw/cmpxchg width whose
+      // result is then sign extended to XLEN. With +A, the minimum width is
+      // 32 for both 64 and 32.
+      assert(Subtarget.getXLen() == 64);
+      assert(getMinCmpXchgSizeInBits() == 32);
+      assert(Subtarget.hasStdExtA());
+      return 33;
+    }
   }
   }
 
@@ -11662,6 +11858,40 @@ void RISCVTargetLowering::validateCCReservedRegs(
         F, "Argument register required, but has been reserved."});
 }
 
+// Check if the result of the node is only used as a return value, as
+// otherwise we can't perform a tail-call.
+bool RISCVTargetLowering::isUsedByReturnOnly(SDNode *N, SDValue &Chain) const {
+  if (N->getNumValues() != 1)
+    return false;
+  if (!N->hasNUsesOfValue(1, 0))
+    return false;
+
+  SDNode *Copy = *N->use_begin();
+  // TODO: Handle additional opcodes in order to support tail-calling libcalls
+  // with soft float ABIs.
+  if (Copy->getOpcode() != ISD::CopyToReg) {
+    return false;
+  }
+
+  // If the ISD::CopyToReg has a glue operand, we conservatively assume it
+  // isn't safe to perform a tail call.
+  if (Copy->getOperand(Copy->getNumOperands() - 1).getValueType() == MVT::Glue)
+    return false;
+
+  // The copy must be used by a RISCVISD::RET_FLAG, and nothing else.
+  bool HasRet = false;
+  for (SDNode *Node : Copy->uses()) {
+    if (Node->getOpcode() != RISCVISD::RET_FLAG)
+      return false;
+    HasRet = true;
+  }
+  if (!HasRet)
+    return false;
+
+  Chain = Copy->getOperand(0);
+  return true;
+}
+
 bool RISCVTargetLowering::mayBeEmittedAsTailCall(const CallInst *CI) const {
   return CI->isTailCall();
 }
@@ -12148,6 +12378,10 @@ RISCVTargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const {
   if (AI->isFloatingPointOperation())
     return AtomicExpansionKind::CmpXChg;
 
+  // Don't expand forced atomics, we want to have __sync libcalls instead.
+  if (Subtarget.hasForcedAtomics())
+    return AtomicExpansionKind::None;
+
   unsigned Size = AI->getType()->getPrimitiveSizeInBits();
   if (Size == 8 || Size == 16)
     return AtomicExpansionKind::MaskedIntrinsic;
@@ -12251,6 +12485,10 @@ Value *RISCVTargetLowering::emitMaskedAtomicRMWIntrinsic(
 TargetLowering::AtomicExpansionKind
 RISCVTargetLowering::shouldExpandAtomicCmpXchgInIR(
     AtomicCmpXchgInst *CI) const {
+  // Don't expand forced atomics, we want to have __sync libcalls instead.
+  if (Subtarget.hasForcedAtomics())
+    return AtomicExpansionKind::None;
+
   unsigned Size = CI->getCompareOperand()->getType()->getPrimitiveSizeInBits();
   if (Size == 8 || Size == 16)
     return AtomicExpansionKind::MaskedIntrinsic;
@@ -12641,12 +12879,9 @@ RISCVTargetLowering::getRegisterByName(const char *RegName, LLT VT,
   return Reg;
 }
 
-namespace llvm {
-namespace RISCVVIntrinsicsTable {
+namespace llvm::RISCVVIntrinsicsTable {
 
 #define GET_RISCVVIntrinsicsTable_IMPL
 #include "RISCVGenSearchableTables.inc"
 
-} // namespace RISCVVIntrinsicsTable
-
-} // namespace llvm
+} // namespace llvm::RISCVVIntrinsicsTable

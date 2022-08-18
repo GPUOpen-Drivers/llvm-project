@@ -2473,7 +2473,8 @@ SDValue AMDGPUTargetLowering::LowerUINT_TO_FP(SDValue Op,
     SDLoc DL(Op);
 
     SDValue IntToFp32 = DAG.getNode(Op.getOpcode(), DL, MVT::f32, Src);
-    SDValue FPRoundFlag = DAG.getIntPtrConstant(0, SDLoc(Op));
+    SDValue FPRoundFlag =
+        DAG.getIntPtrConstant(0, SDLoc(Op), /*isTarget=*/true);
     SDValue FPRound =
         DAG.getNode(ISD::FP_ROUND, DL, MVT::f16, IntToFp32, FPRoundFlag);
 
@@ -2513,7 +2514,8 @@ SDValue AMDGPUTargetLowering::LowerSINT_TO_FP(SDValue Op,
     SDValue Src = Op.getOperand(0);
 
     SDValue IntToFp32 = DAG.getNode(Op.getOpcode(), DL, MVT::f32, Src);
-    SDValue FPRoundFlag = DAG.getIntPtrConstant(0, SDLoc(Op));
+    SDValue FPRoundFlag =
+        DAG.getIntPtrConstant(0, SDLoc(Op), /*isTarget=*/true);
     SDValue FPRound =
         DAG.getNode(ISD::FP_ROUND, DL, MVT::f16, IntToFp32, FPRoundFlag);
 
@@ -4618,9 +4620,16 @@ void AMDGPUTargetLowering::computeKnownBitsForTargetNode(
     case Intrinsic::amdgcn_mbcnt_hi: {
       const GCNSubtarget &ST =
           DAG.getMachineFunction().getSubtarget<GCNSubtarget>();
-      // These return at most the wavefront size - 1.
+      // These return at most the (wavefront size - 1) + src1
+      // As long as src1 is an immediate we can calc known bits
+      KnownBits Src1Known = DAG.computeKnownBits(Op.getOperand(2), Depth + 1);
+      unsigned Src1ValBits = Src1Known.countMaxActiveBits();
+      unsigned MaxActiveBits = std::max(Src1ValBits, ST.getWavefrontSizeLog2());
+      // Cater for potential carry
+      MaxActiveBits += Src1ValBits ? 1 : 0;
       unsigned Size = Op.getValueType().getSizeInBits();
-      Known.Zero.setHighBits(Size - ST.getWavefrontSizeLog2());
+      if (MaxActiveBits < Size)
+        Known.Zero.setHighBits(Size - MaxActiveBits);
       break;
     }
     case Intrinsic::amdgcn_workitem_id_x:

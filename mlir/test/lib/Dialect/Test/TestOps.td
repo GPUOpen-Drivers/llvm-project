@@ -170,15 +170,15 @@ def AnyAttrOfOp : TEST_Op<"any_attr_of_i32_str"> {
 
 def NonNegIntAttrOp : TEST_Op<"non_negative_int_attr"> {
   let arguments = (ins
-      Confined<I32Attr, [IntNonNegative]>:$i32attr,
-      Confined<I64Attr, [IntNonNegative]>:$i64attr
+      ConfinedAttr<I32Attr, [IntNonNegative]>:$i32attr,
+      ConfinedAttr<I64Attr, [IntNonNegative]>:$i64attr
   );
 }
 
 def PositiveIntAttrOp : TEST_Op<"positive_int_attr"> {
   let arguments = (ins
-      Confined<I32Attr, [IntPositive]>:$i32attr,
-      Confined<I64Attr, [IntPositive]>:$i64attr
+      ConfinedAttr<I32Attr, [IntPositive]>:$i32attr,
+      ConfinedAttr<I64Attr, [IntPositive]>:$i64attr
   );
 }
 
@@ -272,6 +272,7 @@ def StringElementsAttrOp : TEST_Op<"string_elements_attr"> {
 
 def DenseArrayAttrOp : TEST_Op<"dense_array_attr"> {
   let arguments = (ins
+    DenseBoolArrayAttr:$i1attr,
     DenseI8ArrayAttr:$i8attr,
     DenseI16ArrayAttr:$i16attr,
     DenseI32ArrayAttr:$i32attr,
@@ -281,10 +282,9 @@ def DenseArrayAttrOp : TEST_Op<"dense_array_attr"> {
     DenseI32ArrayAttr:$emptyattr
   );
   let assemblyFormat = [{
-   `i8attr` `=` $i8attr `i16attr` `=` $i16attr `i32attr` `=` $i32attr
-   `i64attr` `=` $i64attr  `f32attr` `=` $f32attr `f64attr` `=` $f64attr
-   `emptyattr` `=` $emptyattr
-   attr-dict
+   `i1attr` `=` $i1attr `i8attr` `=` $i8attr `i16attr` `=` $i16attr
+   `i32attr` `=` $i32attr `i64attr` `=` $i64attr  `f32attr` `=` $f32attr
+   `f64attr` `=` $f64attr `emptyattr` `=` $emptyattr attr-dict
   }];
 }
 
@@ -377,7 +377,7 @@ def OpWithBitEnumVerticalBar : TEST_Op<"op_with_bit_enum_vbar"> {
 
 def SymbolRefOp : TEST_Op<"symbol_ref_attr"> {
   let arguments = (ins
-    Confined<FlatSymbolRefAttr, [ReferToOp<"func::FuncOp">]>:$symbol
+    ConfinedAttr<FlatSymbolRefAttr, [ReferToOp<"func::FuncOp">]>:$symbol
   );
 }
 
@@ -554,7 +554,7 @@ def OperandsHaveSameType :
 def ResultHasSameTypeAsAttr :
     TEST_Op<"result_has_same_type_as_attr",
             [AllTypesMatch<["attr", "result"]>]> {
-  let arguments = (ins AnyAttr:$attr);
+  let arguments = (ins TypedAttrInterface:$attr);
   let results = (outs AnyType:$result);
   let assemblyFormat = "$attr `->` type($result) attr-dict";
 }
@@ -716,14 +716,14 @@ def AttrSizedOperandOp : TEST_Op<"attr_sized_operands",
     Variadic<I32>:$b,
     I32:$c,
     Variadic<I32>:$d,
-    I32ElementsAttr:$operand_segment_sizes
+    DenseI32ArrayAttr:$operand_segment_sizes
   );
 }
 
 def AttrSizedResultOp : TEST_Op<"attr_sized_results",
                                 [AttrSizedResultSegments]> {
   let arguments = (ins
-    I32ElementsAttr:$result_segment_sizes
+    DenseI32ArrayAttr:$result_segment_sizes
   );
   let results = (outs
     Variadic<I32>:$a,
@@ -1127,7 +1127,7 @@ def : Pattern<(OpNativeCodeCall6 $arg1, $arg2),
               [(OpNativeCodeCall7 (BindMultipleNativeCodeCallResult:$native__0 $arg1, $arg2)),
                (OpNativeCodeCall7 $native__1)]>;
 
-// Test AllAttrConstraintsOf.
+// Test AllAttrOf.
 def OpAllAttrConstraint1 : TEST_Op<"all_attr_constraint_of1"> {
   let arguments = (ins I64ArrayAttr:$attr);
   let results = (outs I32);
@@ -1144,7 +1144,7 @@ def Constraint1 : AttrConstraint<
     CPred<"$_self.cast<ArrayAttr>()[1].cast<::mlir::IntegerAttr>().getInt() == 1">,
     "[1] == 1">;
 def : Pat<(OpAllAttrConstraint1
-            AllAttrConstraintsOf<[Constraint0, Constraint1]>:$attr),
+            AllAttrOf<[Constraint0, Constraint1]>:$attr),
           (OpAllAttrConstraint2 $attr)>;
 
 // Op for testing RewritePattern removing op with inner ops.
@@ -2056,7 +2056,7 @@ def FormatVariadicOfVariadicOperand
    : TEST_Op<"format_variadic_of_variadic_operand"> {
   let arguments = (ins
     VariadicOfVariadic<I64, "operand_segments">:$operand,
-    I32ElementsAttr:$operand_segments
+    DenseI32ArrayAttr:$operand_segments
   );
   let assemblyFormat = [{ $operand `:` type($operand) attr-dict}];
 }
@@ -2310,7 +2310,7 @@ def FormatAllTypesMatchVarOp : TEST_Op<"format_all_types_match_var", [
 def FormatAllTypesMatchAttrOp : TEST_Op<"format_all_types_match_attr", [
     AllTypesMatch<["value1", "value2", "result"]>
   ]> {
-  let arguments = (ins AnyAttr:$value1, AnyType:$value2);
+  let arguments = (ins TypedAttrInterface:$value1, AnyType:$value2);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value1 `,` $value2";
 }
@@ -2338,7 +2338,7 @@ def FormatTypesMatchVariadicOp : TEST_Op<"format_types_match_variadic", [
 def FormatTypesMatchAttrOp : TEST_Op<"format_types_match_attr", [
     TypesMatchWith<"result type matches constant", "value", "result", "$_self">
   ]> {
-  let arguments = (ins AnyAttr:$value);
+  let arguments = (ins TypedAttrInterface:$value);
   let results = (outs AnyType:$result);
   let assemblyFormat = "attr-dict $value";
 }

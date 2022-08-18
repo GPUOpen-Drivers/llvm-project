@@ -28,8 +28,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Threading.h"
 
-namespace lld {
-namespace elf {
+namespace lld::elf {
 class Defined;
 struct PhdrEntry;
 class SymbolTableBaseSection;
@@ -51,8 +50,6 @@ public:
   static bool classof(const SectionBase *d) {
     return SyntheticSection::classof(d) && d->name == ".eh_frame";
   }
-
-  void addSection(EhInputSection *sec);
 
   SmallVector<EhInputSection *, 0> sections;
   size_t numFdes = 0;
@@ -1178,6 +1175,15 @@ public:
   size_t getSize() const override;
 };
 
+class PackageMetadataNote : public SyntheticSection {
+public:
+  PackageMetadataNote()
+      : SyntheticSection(llvm::ELF::SHF_ALLOC, llvm::ELF::SHT_NOTE,
+                         /*alignment=*/4, ".note.package") {}
+  void writeTo(uint8_t *buf) override;
+  size_t getSize() const override;
+};
+
 InputSection *createInterpSection();
 MergeInputSection *createCommentSection();
 template <class ELFT> void splitSections();
@@ -1210,6 +1216,7 @@ struct Partition {
   std::unique_ptr<GnuHashTableSection> gnuHashTab;
   std::unique_ptr<HashTableSection> hashTab;
   std::unique_ptr<MemtagAndroidNote> memtagAndroidNote;
+  std::unique_ptr<PackageMetadataNote> packageMetadataNote;
   std::unique_ptr<RelocationBaseSection> relaDyn;
   std::unique_ptr<RelrBaseSection> relrDyn;
   std::unique_ptr<VersionDefinitionSection> verDef;
@@ -1259,7 +1266,6 @@ struct InStruct {
 
 extern InStruct in;
 
-} // namespace elf
-} // namespace lld
+} // namespace lld::elf
 
 #endif

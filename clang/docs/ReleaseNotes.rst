@@ -49,19 +49,58 @@ Major New Features
 
 Bug Fixes
 ---------
-- ``-Wtautological-compare`` missed warnings for tautological comparisons
-  involving a negative integer literal. This fixes
-  `Issue 42918 <https://github.com/llvm/llvm-project/issues/42918>`_.
 - Fixes an accepts-invalid bug in C when using a ``_Noreturn`` function
   specifier on something other than a function declaration. This fixes
   `Issue 56800 <https://github.com/llvm/llvm-project/issues/56800>`_.
+- Fix `#56772 <https://github.com/llvm/llvm-project/issues/56772>`_ - invalid
+  destructor names were incorrectly accepted on template classes.
+- Improve compile-times with large dynamic array allocations with trivial
+  constructors. This fixes
+  `Issue 56774 <https://github.com/llvm/llvm-project/issues/56774>`_.
+- No longer assert/miscompile when trying to make a vectorized ``_BitInt`` type
+  using the ``ext_vector_type`` attribute (the ``vector_size`` attribute was
+  already properly diagnosing this case).
+- Fix clang not properly diagnosing the failing subexpression when chained
+  binary operators are used in a ``static_assert`` expression.
+- Fix a crash when evaluating a multi-dimensional array's array filler
+  expression is element-dependent. This fixes
+  `Issue 50601 <https://github.com/llvm/llvm-project/issues/56016>`_.
+- Fixed a crash-on-valid with consteval evaluation of a list-initialized
+  constructor for a temporary object. This fixes
+  `Issue 55871 <https://github.com/llvm/llvm-project/issues/55871>`_.
+- Fix `#57008 <https://github.com/llvm/llvm-project/issues/57008>`_ - Builtin
+  C++ language extension type traits instantiated by a template with unexpected
+  number of arguments cause an assertion fault.
+- Fix multi-level pack expansion of undeclared function parameters.
+  This fixes `Issue 56094 <https://github.com/llvm/llvm-project/issues/56094>`_.
+- Fix `#57151 <https://github.com/llvm/llvm-project/issues/57151>`_.
+  ``-Wcomma`` is emitted for void returning functions.
 
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 - Clang will now correctly diagnose as ill-formed a constant expression where an
   enum without a fixed underlying type is set to a value outside the range of
-  the enumeration's values. Fixes
+  the enumeration's values. Due to the extended period of time this bug was
+  present in major C++ implementations (including Clang), this error has the
+  ability to be downgraded into a warning (via: -Wno-error=enum-constexpr-conversion)
+  to provide a transition period for users. This diagnostic is expected to turn
+  into an error-only diagnostic in the next Clang release. Fixes
   `Issue 50055: <https://github.com/llvm/llvm-project/issues/50055>`_.
+- Clang will now check compile-time determinable string literals as format strings.
+  Fixes `Issue 55805: <https://github.com/llvm/llvm-project/issues/55805>`_.
+- ``-Wformat`` now recognizes ``%b`` for the ``printf``/``scanf`` family of
+  functions and ``%B`` for the ``printf`` family of functions. Fixes
+  `Issue 56885: <https://github.com/llvm/llvm-project/issues/56885>`_.
+- ``-Wbitfield-constant-conversion`` now diagnoses implicit truncation when 1 is
+  assigned to a 1-bit signed integer bitfield. This fixes
+  `Issue 53253 <https://github.com/llvm/llvm-project/issues/53253>`_.
+- ``-Wincompatible-function-pointer-types`` now defaults to an error in all C
+  language modes. It may be downgraded to a warning with
+  ``-Wno-error=incompatible-function-pointer-types`` or disabled entirely with
+  ``-Wno-implicit-function-pointer-types``.
+- Clang will now print more information about failed static assertions. In
+  particular, simple static assertion expressions are evaluated to their
+  compile-time value and printed out if the assertion fails.
 
 Non-comprehensive list of changes in this release
 -------------------------------------------------
@@ -100,8 +139,28 @@ C2x Feature Support
 C++ Language Changes in Clang
 -----------------------------
 
+- Implemented DR692, DR1395 and DR1432. Use the ``-fclang-abi-compat=14`` option
+  to get the old partial ordering behavior regarding packs.
+
 C++20 Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
+- Clang now correctly delays the instantiation of function constraints until
+  the time of checking, which should now allow the libstdc++ ranges implementation
+  to work for at least trivial examples.  This fixes
+  `Issue 44178 <https://github.com/llvm/llvm-project/issues/44178>`_.
+
+- Support capturing structured bindings in lambdas
+  (`P1091R3 <https://wg21.link/p1091r3>`_ and `P1381R1 <https://wg21.link/P1381R1>`).
+  This fixes issues `GH52720 <https://github.com/llvm/llvm-project/issues/52720>`_,
+  `GH54300 <https://github.com/llvm/llvm-project/issues/54300>`_,
+  `GH54301 <https://github.com/llvm/llvm-project/issues/54301>`_,
+  and `GH49430 <https://github.com/llvm/llvm-project/issues/49430>`_.
+- Consider explicitly defaulted constexpr/consteval special member function
+  template instantiation to be constexpr/consteval even though a call to such
+  a function cannot appear in a constant expression.
+  (C++14 [dcl.constexpr]p6 (CWG DR647/CWG DR1358))
+
+
 
 C++2b Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
@@ -132,6 +191,8 @@ CUDA Support in Clang
 
 X86 Support in Clang
 --------------------
+
+- Support ``-mindirect-branch-cs-prefix`` for call and jmp to indirect thunk.
 
 DWARF Support in Clang
 ----------------------

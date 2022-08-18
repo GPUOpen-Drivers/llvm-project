@@ -529,7 +529,7 @@ bool AsmPrinter::doInitialization(Module &M) {
   switch (MAI->getExceptionHandlingType()) {
   case ExceptionHandling::None:
     // We may want to emit CFI for debug.
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case ExceptionHandling::SjLj:
   case ExceptionHandling::DwarfCFI:
   case ExceptionHandling::ARM:
@@ -553,7 +553,7 @@ bool AsmPrinter::doInitialization(Module &M) {
   case ExceptionHandling::None:
     if (!needsCFIForDebug())
       break;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case ExceptionHandling::SjLj:
   case ExceptionHandling::DwarfCFI:
     ES = new DwarfCFIException(this);
@@ -2761,7 +2761,7 @@ const MCExpr *AsmPrinter::lowerConstant(const Constant *CV) {
     // expression properly.  This is important for differences between
     // blockaddress labels.  Since the two labels are in the same function, it
     // is reasonable to treat their delta as a 32-bit value.
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case Instruction::BitCast:
     return lowerConstant(CE->getOperand(0));
 
@@ -3545,21 +3545,21 @@ void AsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {
   // reference the block.  It is possible that there is more than one label
   // here, because multiple LLVM BB's may have been RAUW'd to this block after
   // the references were generated.
-  const BasicBlock *BB = MBB.getBasicBlock();
-  if (MBB.hasAddressTaken()) {
+  if (MBB.isIRBlockAddressTaken()) {
     if (isVerbose())
       OutStreamer->AddComment("Block address taken");
 
-    // MBBs can have their address taken as part of CodeGen without having
-    // their corresponding BB's address taken in IR
-    if (BB && BB->hasAddressTaken())
-      for (MCSymbol *Sym : getAddrLabelSymbolToEmit(BB))
-        OutStreamer->emitLabel(Sym);
+    BasicBlock *BB = MBB.getAddressTakenIRBlock();
+    assert(BB && BB->hasAddressTaken() && "Missing BB");
+    for (MCSymbol *Sym : getAddrLabelSymbolToEmit(BB))
+      OutStreamer->emitLabel(Sym);
+  } else if (isVerbose() && MBB.isMachineBlockAddressTaken()) {
+    OutStreamer->AddComment("Block address taken");
   }
 
   // Print some verbose block comments.
   if (isVerbose()) {
-    if (BB) {
+    if (const BasicBlock *BB = MBB.getBasicBlock()) {
       if (BB->hasName()) {
         BB->printAsOperand(OutStreamer->getCommentOS(),
                            /*PrintType=*/false, BB->getModule());
