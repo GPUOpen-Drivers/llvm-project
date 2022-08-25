@@ -1315,7 +1315,11 @@ public:
   ExtValue genval(const Fortran::evaluate::SetLength<KIND> &x) {
     mlir::Value newLenValue = genunbox(x.right());
     fir::ExtendedValue lhs = gen(x.left());
-    return replaceScalarCharacterLength(lhs, newLenValue);
+    fir::factory::CharacterExprHelper charHelper(builder, getLoc());
+    fir::CharBoxValue temp = charHelper.createCharacterTemp(
+        charHelper.getCharacterType(fir::getBase(lhs).getType()), newLenValue);
+    charHelper.createAssign(temp, lhs);
+    return fir::ExtendedValue{temp};
   }
 
   template <int KIND>
@@ -2504,8 +2508,9 @@ public:
 
     mlir::IndexType idxTy = builder.getIndexType();
     auto lowerSpecExpr = [&](const auto &expr) -> mlir::Value {
-      return builder.createConvert(
+      mlir::Value convertExpr = builder.createConvert(
           loc, idxTy, fir::getBase(converter.genExprValue(expr, stmtCtx)));
+      return fir::factory::genMaxWithZero(builder, loc, convertExpr);
     };
     llvm::SmallVector<mlir::Value> resultLengths;
     auto allocatedResult = [&]() -> llvm::Optional<ExtValue> {

@@ -535,6 +535,7 @@ struct IntrinsicLibrary {
   mlir::Value genNot(mlir::Type, llvm::ArrayRef<mlir::Value>);
   fir::ExtendedValue genNull(mlir::Type, llvm::ArrayRef<fir::ExtendedValue>);
   fir::ExtendedValue genPack(mlir::Type, llvm::ArrayRef<fir::ExtendedValue>);
+  fir::ExtendedValue genParity(mlir::Type, llvm::ArrayRef<fir::ExtendedValue>);
   mlir::Value genPopcnt(mlir::Type, llvm::ArrayRef<mlir::Value>);
   mlir::Value genPoppar(mlir::Type, llvm::ArrayRef<mlir::Value>);
   fir::ExtendedValue genPresent(mlir::Type, llvm::ArrayRef<fir::ExtendedValue>);
@@ -542,6 +543,7 @@ struct IntrinsicLibrary {
   void genRandomInit(llvm::ArrayRef<fir::ExtendedValue>);
   void genRandomNumber(llvm::ArrayRef<fir::ExtendedValue>);
   void genRandomSeed(llvm::ArrayRef<fir::ExtendedValue>);
+  fir::ExtendedValue genReduce(mlir::Type, llvm::ArrayRef<fir::ExtendedValue>);
   fir::ExtendedValue genRepeat(mlir::Type, llvm::ArrayRef<fir::ExtendedValue>);
   fir::ExtendedValue genReshape(mlir::Type, llvm::ArrayRef<fir::ExtendedValue>);
   mlir::Value genRRSpacing(mlir::Type resultType,
@@ -881,6 +883,10 @@ static constexpr IntrinsicHandler handlers[]{
        {"mask", asBox},
        {"vector", asBox, handleDynamicOptional}}},
      /*isElemental=*/false},
+    {"parity",
+     &I::genParity,
+     {{{"mask", asBox}, {"dim", asValue}}},
+     /*isElemental=*/false},
     {"popcnt", &I::genPopcnt},
     {"poppar", &I::genPoppar},
     {"present",
@@ -906,6 +912,15 @@ static constexpr IntrinsicHandler handlers[]{
      {{{"size", asBox, handleDynamicOptional},
        {"put", asBox, handleDynamicOptional},
        {"get", asBox, handleDynamicOptional}}},
+     /*isElemental=*/false},
+    {"reduce",
+     &I::genReduce,
+     {{{"array", asBox},
+       {"operation", asAddr},
+       {"dim", asValue},
+       {"mask", asBox, handleDynamicOptional},
+       {"identity", asValue},
+       {"ordered", asValue}}},
      /*isElemental=*/false},
     {"repeat",
      &I::genRepeat,
@@ -3318,7 +3333,7 @@ IntrinsicLibrary::genLenTrim(mlir::Type resultType,
   assert(args.size() == 1 || args.size() == 2);
   const fir::CharBoxValue *charBox = args[0].getCharBox();
   if (!charBox)
-    TODO(loc, "character array len_trim");
+    TODO(loc, "intrinsic: len_trim for character array");
   auto len =
       fir::factory::CharacterExprHelper(builder, loc).createLenTrim(*charBox);
   return builder.createConvert(loc, resultType, len);
@@ -3476,6 +3491,9 @@ mlir::Value IntrinsicLibrary::genModulo(mlir::Type resultType,
                                                  remainder);
   }
   // Real case
+  if (resultType == mlir::FloatType::getF128(builder.getContext()))
+
+    TODO(loc, "intrinsic: modulo for floating point of KIND=16");
   auto remainder = builder.create<mlir::arith::RemFOp>(loc, args[0], args[1]);
   mlir::Value zero = builder.createRealZeroConstant(loc, remainder.getType());
   auto remainderIsNotZero = builder.create<mlir::arith::CmpFOp>(
@@ -3618,6 +3636,52 @@ IntrinsicLibrary::genPack(mlir::Type resultType,
                            "unexpected result for PACK");
 }
 
+// PARITY
+fir::ExtendedValue
+IntrinsicLibrary::genParity(mlir::Type resultType,
+                            llvm::ArrayRef<fir::ExtendedValue> args) {
+
+  assert(args.size() == 2);
+  // Handle required mask argument
+  mlir::Value mask = builder.createBox(loc, args[0]);
+
+  fir::BoxValue maskArry = builder.createBox(loc, args[0]);
+  int rank = maskArry.rank();
+  assert(rank >= 1);
+
+  // Handle optional dim argument
+  bool absentDim = isStaticallyAbsent(args[1]);
+  mlir::Value dim =
+      absentDim ? builder.createIntegerConstant(loc, builder.getIndexType(), 1)
+                : fir::getBase(args[1]);
+
+  if (rank == 1 || absentDim)
+    return builder.createConvert(
+        loc, resultType, fir::runtime::genParity(builder, loc, mask, dim));
+
+  // else use the result descriptor ParityDim() intrinsic
+
+  // Create mutable fir.box to be passed to the runtime for the result.
+
+  mlir::Type resultArrayType = builder.getVarLenSeqTy(resultType, rank - 1);
+  fir::MutableBoxValue resultMutableBox =
+      fir::factory::createTempMutableBox(builder, loc, resultArrayType);
+  mlir::Value resultIrBox =
+      fir::factory::getMutableIRBox(builder, loc, resultMutableBox);
+
+  // Call runtime. The runtime is allocating the result.
+  fir::runtime::genParityDescriptor(builder, loc, resultIrBox, mask, dim);
+  return fir::factory::genMutableBoxRead(builder, loc, resultMutableBox)
+      .match(
+          [&](const fir::ArrayBoxValue &box) -> fir::ExtendedValue {
+            addCleanUpForTemp(loc, box.getAddr());
+            return box;
+          },
+          [&](const auto &) -> fir::ExtendedValue {
+            fir::emitFatalError(loc, "Invalid result for PARITY");
+          });
+}
+
 // POPCNT
 mlir::Value IntrinsicLibrary::genPopcnt(mlir::Type resultType,
                                         llvm::ArrayRef<mlir::Value> args) {
@@ -3686,6 +3750,13 @@ void IntrinsicLibrary::genRandomSeed(llvm::ArrayRef<fir::ExtendedValue> args) {
   Fortran::lower::genRandomSeed(builder, loc, size, put, get);
 }
 
+// REDUCE
+fir::ExtendedValue
+IntrinsicLibrary::genReduce(mlir::Type resultType,
+                            llvm::ArrayRef<fir::ExtendedValue> args) {
+  TODO(loc, "intrinsic: reduce");
+}
+
 // REPEAT
 fir::ExtendedValue
 IntrinsicLibrary::genRepeat(mlir::Type resultType,
@@ -3722,7 +3793,7 @@ IntrinsicLibrary::genReshape(mlir::Type resultType,
   auto resultRank = shapeArrTy.cast<fir::SequenceType>().getShape()[0];
 
   if (resultRank == fir::SequenceType::getUnknownExtent())
-    TODO(loc, "RESHAPE intrinsic requires computing rank of result");
+    TODO(loc, "intrinsic: reshape requires computing rank of result");
 
   // Handle optional pad argument
   mlir::Value pad = isStaticallyAbsent(args[2])
@@ -3954,7 +4025,7 @@ IntrinsicLibrary::genSize(mlir::Type resultType,
   assert(args.size() == 3);
   if (const auto *boxValue = args[0].getBoxOf<fir::BoxValue>())
     if (boxValue->hasAssumedRank())
-      TODO(loc, "SIZE intrinsic with assumed rank argument");
+      TODO(loc, "intrinsic: size with assumed rank argument");
 
   // Get the ARRAY argument
   mlir::Value array = builder.createBox(loc, args[0]);
@@ -4089,7 +4160,7 @@ IntrinsicLibrary::genLbound(mlir::Type resultType,
   const fir::ExtendedValue &array = args[0];
   if (const auto *boxValue = array.getBoxOf<fir::BoxValue>())
     if (boxValue->hasAssumedRank())
-      TODO(loc, "LBOUND intrinsic with assumed rank argument");
+      TODO(loc, "intrinsic: lbound with assumed rank argument");
 
   //===----------------------------------------------------------------------===//
   mlir::Type indexType = builder.getIndexType();
@@ -4374,7 +4445,7 @@ static mlir::Value createExtremumCompare(mlir::Location loc,
     // TODO: ! character min and max is tricky because the result
     // length is the length of the longest argument!
     // So we may need a temp.
-    TODO(loc, "CHARACTER min and max");
+    TODO(loc, "intrinsic: min and max for CHARACTER");
   }
   assert(result && "result must be defined");
   return result;

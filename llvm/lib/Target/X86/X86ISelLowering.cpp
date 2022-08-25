@@ -1520,7 +1520,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     // Extract subvector is special because the value type
     // (result) is 128-bit but the source is 256-bit wide.
     for (auto VT : { MVT::v16i8, MVT::v8i16, MVT::v4i32, MVT::v2i64,
-                     MVT::v4f32, MVT::v2f64 }) {
+                     MVT::v8f16, MVT::v4f32, MVT::v2f64 }) {
       setOperationAction(ISD::EXTRACT_SUBVECTOR, VT, Legal);
     }
 
@@ -1860,7 +1860,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
     // (result) is 256-bit but the source is 512-bit wide.
     // 128-bit was made Legal under AVX1.
     for (auto VT : { MVT::v32i8, MVT::v16i16, MVT::v8i32, MVT::v4i64,
-                     MVT::v8f32, MVT::v4f64 })
+                     MVT::v16f16, MVT::v8f32, MVT::v4f64 })
       setOperationAction(ISD::EXTRACT_SUBVECTOR, VT, Legal);
 
     for (auto VT : { MVT::v64i8, MVT::v32i16, MVT::v16i32, MVT::v8i64,
@@ -5820,12 +5820,13 @@ bool X86TargetLowering::shouldFormOverflowOp(unsigned Opcode, EVT VT,
   return VT.isSimple() || !isOperationExpand(Opcode, VT);
 }
 
-bool X86TargetLowering::isCheapToSpeculateCttz() const {
-  // Speculate cttz only if we can directly use TZCNT.
-  return Subtarget.hasBMI();
+bool X86TargetLowering::isCheapToSpeculateCttz(Type *Ty) const {
+  // Speculate cttz only if we can directly use TZCNT or can promote to i32.
+  return Subtarget.hasBMI() ||
+         (!Ty->isVectorTy() && Ty->getScalarSizeInBits() < 32);
 }
 
-bool X86TargetLowering::isCheapToSpeculateCtlz() const {
+bool X86TargetLowering::isCheapToSpeculateCtlz(Type *Ty) const {
   // Speculate ctlz only if we can directly use LZCNT.
   return Subtarget.hasLZCNT();
 }
@@ -28877,6 +28878,10 @@ static SDValue LowerCTTZ(SDValue Op, const X86Subtarget &Subtarget,
   SDVTList VTs = DAG.getVTList(VT, MVT::i32);
   Op = DAG.getNode(X86ISD::BSF, dl, VTs, N0);
 
+  // If src is known never zero we can skip the CMOV.
+  if (DAG.isKnownNeverZero(N0))
+    return Op;
+
   // If src is zero (i.e. bsf sets ZF), returns NumBits.
   SDValue Ops[] = {Op, DAG.getConstant(NumBits, dl, VT),
                    DAG.getTargetConstant(X86::COND_E, dl, MVT::i8),
@@ -41705,7 +41710,7 @@ bool X86TargetLowering::SimplifyDemandedBitsForTargetNode(
   case X86ISD::PMULDQ:
   case X86ISD::PMULUDQ: {
     // PMULDQ/PMULUDQ only uses lower 32 bits from each vector element.
-    KnownBits KnownOp;
+    KnownBits KnownLHS, KnownRHS;
     SDValue LHS = Op.getOperand(0);
     SDValue RHS = Op.getOperand(1);
 
@@ -41722,11 +41727,20 @@ bool X86TargetLowering::SimplifyDemandedBitsForTargetNode(
       DemandedMaskRHS = DemandedMask;
 
     if (SimplifyDemandedBits(LHS, DemandedMaskLHS, OriginalDemandedElts,
-                             KnownOp, TLO, Depth + 1))
+                             KnownLHS, TLO, Depth + 1))
       return true;
     if (SimplifyDemandedBits(RHS, DemandedMaskRHS, OriginalDemandedElts,
-                             KnownOp, TLO, Depth + 1))
+                             KnownRHS, TLO, Depth + 1))
       return true;
+
+    // PMULUDQ(X,1) -> AND(X,(1<<32)-1) 'getZeroExtendInReg'.
+    KnownRHS = KnownRHS.trunc(32);
+    if (Opc == X86ISD::PMULUDQ && KnownRHS.isConstant() &&
+        KnownRHS.getConstant().isOne()) {
+      SDLoc DL(Op);
+      SDValue Mask = TLO.DAG.getConstant(DemandedMask, DL, VT);
+      return TLO.CombineTo(Op, TLO.DAG.getNode(ISD::AND, DL, VT, LHS, Mask));
+    }
 
     // Aggressively peek through ops to get at the demanded low bits.
     SDValue DemandedLHS = SimplifyMultipleUseDemandedBits(
@@ -56476,35 +56490,6 @@ X86TargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
   }
 
   return Res;
-}
-
-InstructionCost X86TargetLowering::getScalingFactorCost(const DataLayout &DL,
-                                                        const AddrMode &AM,
-                                                        Type *Ty,
-                                                        unsigned AS) const {
-  // Scaling factors are not free at all.
-  // An indexed folded instruction, i.e., inst (reg1, reg2, scale),
-  // will take 2 allocations in the out of order engine instead of 1
-  // for plain addressing mode, i.e. inst (reg1).
-  // E.g.,
-  // vaddps (%rsi,%rdx), %ymm0, %ymm1
-  // Requires two allocations (one for the load, one for the computation)
-  // whereas:
-  // vaddps (%rsi), %ymm0, %ymm1
-  // Requires just 1 allocation, i.e., freeing allocations for other operations
-  // and having less micro operations to execute.
-  //
-  // For some X86 architectures, this is even worse because for instance for
-  // stores, the complex addressing mode forces the instruction to use the
-  // "load" ports instead of the dedicated "store" port.
-  // E.g., on Haswell:
-  // vmovaps %ymm1, (%r8, %rdi) can use port 2 or 3.
-  // vmovaps %ymm1, (%r8) can use port 2, 3, or 7.
-  if (isLegalAddressingMode(DL, AM, Ty, AS))
-    // Scale represents reg2 * scale, thus account for 1
-    // as soon as we use a second register.
-    return AM.Scale != 0;
-  return -1;
 }
 
 bool X86TargetLowering::isIntDivCheap(EVT VT, AttributeList Attr) const {

@@ -176,6 +176,13 @@ private:
                            llvm::DenseSet<const Module *> &AddedModules);
   void addModuleDep(const Module *M, ModuleDeps &MD,
                     llvm::DenseSet<const Module *> &AddedModules);
+
+  /// Traverses the affecting modules and updates \c MD with references to the
+  /// parent \c ModuleDepCollector info.
+  void addAllAffectingModules(const Module *M, ModuleDeps &MD,
+                              llvm::DenseSet<const Module *> &AddedModules);
+  void addAffectingModule(const Module *M, ModuleDeps &MD,
+                          llvm::DenseSet<const Module *> &AddedModules);
 };
 
 /// Collects modular and non-modular dependencies of the main file by attaching
@@ -184,7 +191,8 @@ class ModuleDepCollector final : public DependencyCollector {
 public:
   ModuleDepCollector(std::unique_ptr<DependencyOutputOptions> Opts,
                      CompilerInstance &ScanInstance, DependencyConsumer &C,
-                     CompilerInvocation &&OriginalCI, bool OptimizeArgs);
+                     CompilerInvocation &&OriginalCI, bool OptimizeArgs,
+                     bool EagerLoadModules);
 
   void attachToPreprocessor(Preprocessor &PP) override;
   void attachToASTReader(ASTReader &R) override;
@@ -211,6 +219,8 @@ private:
   CompilerInvocation OriginalInvocation;
   /// Whether to optimize the modules' command-line arguments.
   bool OptimizeArgs;
+  /// Whether to set up command-lines to load PCM files eagerly.
+  bool EagerLoadModules;
 
   /// Checks whether the module is known as being prebuilt.
   bool isPrebuiltModule(const Module *M);

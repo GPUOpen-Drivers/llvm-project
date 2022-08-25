@@ -3287,7 +3287,7 @@ void SelectionDAGBuilder::visitSelect(const User &I) {
     Flags.copyFMF(*FPOp);
 
   // Min/max matching is only viable if all output VTs are the same.
-  if (is_splat(ValueVTs)) {
+  if (all_equal(ValueVTs)) {
     EVT VT = ValueVTs[0];
     LLVMContext &Ctx = *DAG.getContext();
     auto &TLI = DAG.getTargetLoweringInfo();
@@ -10489,7 +10489,7 @@ void SelectionDAGISel::LowerArguments(const Function &F) {
                     ValueVTs);
     MVT VT = ValueVTs[0].getSimpleVT();
     MVT RegVT = TLI->getRegisterType(*CurDAG->getContext(), VT);
-    Optional<ISD::NodeType> AssertOp = None;
+    Optional<ISD::NodeType> AssertOp;
     SDValue ArgValue = getCopyFromParts(DAG, dl, &InVals[0], 1, RegVT, VT,
                                         nullptr, F.getCallingConv(), AssertOp);
 

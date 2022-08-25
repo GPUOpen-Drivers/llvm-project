@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -970,16 +968,7 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
       return BinaryOperator::CreateAnd(NotX, ConstantInt::get(Ty, 1));
     }
   }
-/*
-  // If all bits affected by the add are included in a high-bit-mask, do the
-  // add before the mask op:
-  // (X & 0xFF00) + xx00 --> (X + xx00) & 0xFF00
-  if (match(Op0, m_OneUse(m_And(m_Value(X), m_APInt(C2)))) &&
-      C2->isNegative() && C2->isShiftedMask() && *C == (*C & *C2)) {
-    Value *NewAdd = Builder.CreateAdd(X, ConstantInt::get(Ty, *C));
-    return BinaryOperator::CreateAnd(NewAdd, ConstantInt::get(Ty, *C2));
-  }
-*/
+
   return nullptr;
 }
 
@@ -1424,6 +1413,17 @@ Instruction *InstCombinerImpl::visitAdd(BinaryOperator &I) {
     replaceOperand(I, 0, A);
     replaceOperand(I, 1, B);
     return &I;
+  }
+
+  // Canonicalize ((A & -A) - 1) --> ((A - 1) & ~A)
+  // Forms all commutable operations, and simplifies ctpop -> cttz folds.
+  if (match(&I,
+            m_Add(m_OneUse(m_c_And(m_Value(A), m_OneUse(m_Neg(m_Deferred(A))))),
+                  m_AllOnes()))) {
+    Constant *AllOnes = ConstantInt::getAllOnesValue(RHS->getType());
+    Value *Dec = Builder.CreateAdd(A, AllOnes);
+    Value *Not = Builder.CreateXor(A, AllOnes);
+    return BinaryOperator::CreateAnd(Dec, Not);
   }
 
   // TODO(jingyue): Consider willNotOverflowSignedAdd and

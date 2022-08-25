@@ -63,7 +63,7 @@ spv.func @select_vector(%arg0: vector<2xi1>, %arg1: vector<2xi32>) "None" {
 //===----------------------------------------------------------------------===//
 
 spv.func @vector_shuffle_same_size(%vector1: vector<2xf32>, %vector2: vector<2xf32>) -> vector<3xf32> "None" {
-  //      CHECK: %[[res:.*]] = llvm.shufflevector {{.*}} [0 : i32, 2 : i32, -1 : i32] : vector<2xf32>, vector<2xf32>
+  //      CHECK: %[[res:.*]] = llvm.shufflevector {{.*}} [0, 2, -1] : vector<2xf32>
   // CHECK-NEXT: return %[[res]] : vector<3xf32>
   %0 = spv.VectorShuffle [0: i32, 2: i32, 0xffffffff: i32] %vector1: vector<2xf32>, %vector2: vector<2xf32> -> vector<3xf32>
   spv.ReturnValue %0: vector<3xf32>
@@ -89,7 +89,7 @@ spv.func @vector_shuffle_different_size(%vector1: vector<3xf32>, %vector2: vecto
 //===----------------------------------------------------------------------===//
 
 //      CHECK: module {
-// CHECK-NEXT:   llvm.mlir.global external constant @{{.*}}() : !llvm.struct<(i32)> {
+// CHECK-NEXT:   llvm.mlir.global external constant @{{.*}}() {addr_space = 0 : i32} : !llvm.struct<(i32)> {
 // CHECK-NEXT:     %[[UNDEF:.*]] = llvm.mlir.undef : !llvm.struct<(i32)>
 // CHECK-NEXT:     %[[VAL:.*]] = llvm.mlir.constant(31 : i32) : i32
 // CHECK-NEXT:     %[[RET:.*]] = llvm.insertvalue %[[VAL]], %[[UNDEF]][0] : !llvm.struct<(i32)>
@@ -108,7 +108,7 @@ spv.module Logical OpenCL {
 }
 
 //      CHECK: module {
-// CHECK-NEXT:   llvm.mlir.global external constant @{{.*}}() : !llvm.struct<(i32, array<3 x i32>)> {
+// CHECK-NEXT:   llvm.mlir.global external constant @{{.*}}() {addr_space = 0 : i32} : !llvm.struct<(i32, array<3 x i32>)> {
 // CHECK-NEXT:     %[[UNDEF:.*]] = llvm.mlir.undef : !llvm.struct<(i32, array<3 x i32>)>
 // CHECK-NEXT:     %[[EM:.*]] = llvm.mlir.constant(18 : i32) : i32
 // CHECK-NEXT:     %[[T0:.*]] = llvm.insertvalue %[[EM]], %[[UNDEF]][0] : !llvm.struct<(i32, array<3 x i32>)>
@@ -120,7 +120,7 @@ spv.module Logical OpenCL {
 // CHECK-NEXT:     %[[RET:.*]] = llvm.insertvalue %[[C2]], %[[T2]][1, 2] : !llvm.struct<(i32, array<3 x i32>)>
 // CHECK-NEXT:     llvm.return %[[RET]] : !llvm.struct<(i32, array<3 x i32>)>
 // CHECK-NEXT:   }
-// CHECK-NEXT:   llvm.mlir.global external constant @{{.*}}() : !llvm.struct<(i32)> {
+// CHECK-NEXT:   llvm.mlir.global external constant @{{.*}}() {addr_space = 0 : i32} : !llvm.struct<(i32)> {
 //      CHECK:   llvm.func @bar
 // CHECK-NEXT:     llvm.return
 // CHECK-NEXT:   }

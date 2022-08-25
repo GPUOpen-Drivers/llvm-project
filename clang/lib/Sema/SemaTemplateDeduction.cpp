@@ -1107,9 +1107,9 @@ DeduceTemplateArguments(Sema &S,
   // During partial ordering, if Ai was originally a function parameter pack:
   // - if P does not contain a function parameter type corresponding to Ai then
   //   Ai is ignored;
-  bool ClangABICompat14 = S.Context.getLangOpts().getClangABICompat() <=
-                          LangOptions::ClangABI::Ver14;
-  if (!ClangABICompat14 && PartialOrdering && ArgIdx + 1 == NumArgs &&
+  bool ClangABICompat15 = S.Context.getLangOpts().getClangABICompat() <=
+                          LangOptions::ClangABI::Ver15;
+  if (!ClangABICompat15 && PartialOrdering && ArgIdx + 1 == NumArgs &&
       isa<PackExpansionType>(Args[ArgIdx]))
     return Sema::TDK_Success;
 
@@ -2445,8 +2445,8 @@ static bool isSameTemplateArg(ASTContext &Context,
   if (X.getKind() != Y.getKind())
     return false;
 
-  bool ClangABICompat14 =
-      Context.getLangOpts().getClangABICompat() <= LangOptions::ClangABI::Ver14;
+  bool ClangABICompat15 =
+      Context.getLangOpts().getClangABICompat() <= LangOptions::ClangABI::Ver15;
 
   switch (X.getKind()) {
     case TemplateArgument::Null:
@@ -2480,7 +2480,7 @@ static bool isSameTemplateArg(ASTContext &Context,
     }
 
     case TemplateArgument::Pack:
-      if (ClangABICompat14) {
+      if (ClangABICompat15) {
         if (X.pack_size() != Y.pack_size())
           return false;
 
@@ -2827,20 +2827,6 @@ template<>
 struct IsPartialSpecialization<VarTemplatePartialSpecializationDecl> {
   static constexpr bool value = true;
 };
-template <typename TemplateDeclT>
-static bool DeducedArgsNeedReplacement(TemplateDeclT *Template) {
-  return false;
-}
-template <>
-bool DeducedArgsNeedReplacement<VarTemplatePartialSpecializationDecl>(
-    VarTemplatePartialSpecializationDecl *Spec) {
-  return !Spec->isClassScopeExplicitSpecialization();
-}
-template <>
-bool DeducedArgsNeedReplacement<ClassTemplatePartialSpecializationDecl>(
-    ClassTemplatePartialSpecializationDecl *Spec) {
-  return !Spec->isClassScopeExplicitSpecialization();
-}
 
 template<typename TemplateDeclT>
 static Sema::TemplateDeductionResult
@@ -2849,25 +2835,13 @@ CheckDeducedArgumentConstraints(Sema& S, TemplateDeclT *Template,
                                 TemplateDeductionInfo& Info) {
   llvm::SmallVector<const Expr *, 3> AssociatedConstraints;
   Template->getAssociatedConstraints(AssociatedConstraints);
+  // FIXME: This will change quite a bit once deferred concept instantiation is
+  // implemented.
   MultiLevelTemplateArgumentList MLTAL;
+  MLTAL.addOuterTemplateArguments(DeducedArgs);
 
-  bool NeedsReplacement = DeducedArgsNeedReplacement(Template);
-  TemplateArgumentList DeducedTAL{TemplateArgumentList::OnStack, DeducedArgs};
-
-  MLTAL = S.getTemplateInstantiationArgs(
-      Template, /*InnerMost*/ NeedsReplacement ? nullptr : &DeducedTAL,
-      /*RelativeToPrimary*/ true, /*Pattern*/
-      nullptr, /*LookBeyondLambda*/ true);
-
-  // getTemplateInstantiationArgs picks up the non-deduced version of the
-  // template args when this is a variable template partial specialization and
-  // not class-scope explicit specialization, so replace with Deduced Args
-  // instead of adding to inner-most.
-  if (NeedsReplacement)
-    MLTAL.replaceInnermostTemplateArguments(DeducedArgs);
-
-  if (S.CheckConstraintSatisfaction(Template, AssociatedConstraints, MLTAL,
-                                    Info.getLocation(),
+  if (S.CheckConstraintSatisfaction(Template, AssociatedConstraints,
+                                    MLTAL, Info.getLocation(),
                                     Info.AssociatedConstraintsSatisfaction) ||
       !Info.AssociatedConstraintsSatisfaction.IsSatisfied) {
     Info.reset(TemplateArgumentList::CreateCopy(S.Context, DeducedArgs));
@@ -5490,9 +5464,9 @@ getMoreSpecialized(Sema &S, QualType T1, QualType T2, TemplateLikeDecl *P1,
     return nullptr;
 
   if (Better1 && Better2) {
-    bool ClangABICompat14 = S.Context.getLangOpts().getClangABICompat() <=
-                            LangOptions::ClangABI::Ver14;
-    if (!ClangABICompat14) {
+    bool ClangABICompat15 = S.Context.getLangOpts().getClangABICompat() <=
+                            LangOptions::ClangABI::Ver15;
+    if (!ClangABICompat15) {
       // Consider this a fix for CWG1432. Similar to the fix for CWG1395.
       auto *TST1 = T1->castAs<TemplateSpecializationType>();
       auto *TST2 = T2->castAs<TemplateSpecializationType>();

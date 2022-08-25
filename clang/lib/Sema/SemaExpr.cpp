@@ -283,8 +283,7 @@ bool Sema::DiagnoseUseOfDecl(NamedDecl *D, ArrayRef<SourceLocation> Locs,
     // definition.
     if (FD->getTrailingRequiresClause()) {
       ConstraintSatisfaction Satisfaction;
-      if (CheckFunctionConstraints(FD, Satisfaction, Loc,
-                                   /*ForOverloadResolution*/ true))
+      if (CheckFunctionConstraints(FD, Satisfaction, Loc))
         // A diagnostic will have already been generated (non-constant
         // constraint expression, for example)
         return true;
@@ -2947,7 +2946,7 @@ ExprResult Sema::BuildIvarRefExpr(Scope *S, SourceLocation Loc,
         !Diags.isIgnored(diag::warn_arc_repeated_use_of_weak, Loc))
       getCurFunction()->recordUseOfWeak(Result);
   }
-  if (getLangOpts().ObjCAutoRefCount)
+  if (getLangOpts().ObjCAutoRefCount && !isUnevaluatedContext())
     if (const BlockDecl *BD = CurContext->getInnermostBlockDecl())
       ImplicitlyRetainedSelfLocs.push_back({Loc, BD});
 
@@ -19676,7 +19675,8 @@ void Sema::MarkDeclRefReferenced(DeclRefExpr *E, const Expr *Base) {
 
   if (auto *FD = dyn_cast<FunctionDecl>(E->getDecl()))
     if (!isUnevaluatedContext() && !isConstantEvaluated() &&
-        FD->isConsteval() && !RebuildingImmediateInvocation)
+        FD->isConsteval() && !RebuildingImmediateInvocation &&
+        !FD->isDependentContext())
       ExprEvalContexts.back().ReferenceToConsteval.insert(E);
   MarkExprReferenced(*this, E->getLocation(), E->getDecl(), E, OdrUse,
                      RefsMinusAssignments);

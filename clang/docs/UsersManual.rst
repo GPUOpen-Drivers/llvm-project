@@ -1631,12 +1631,15 @@ Note that floating-point operations performed as part of constant initialization
 
 A note about ``__FLT_EVAL_METHOD__``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-The macro ``__FLT_EVAL_METHOD__`` will expand to either the value set from the
-command line option ``ffp-eval-method`` or to the value from the target info
-setting. The ``__FLT_EVAL_METHOD__`` macro cannot expand to the correct
-evaluation method in the presence of a ``#pragma`` which alters the evaluation
-method. An error is issued if ``__FLT_EVAL_METHOD__`` is expanded inside a scope
-modified by ``#pragma clang fp eval_method``.
+The ``__FLT_EVAL_METHOD__`` is not defined as a traditional macro, and so it
+will not appear when dumping preprocessor macros. Instead, the value
+``__FLT_EVAL_METHOD__`` expands to is determined at the point of expansion
+either from the value set by the ``-ffp-eval-method`` command line option or
+from the target. This is because the ``__FLT_EVAL_METHOD__`` macro
+cannot expand to the correct evaluation method in the presence of a ``#pragma``
+which alters the evaluation method. An error is issued if
+``__FLT_EVAL_METHOD__`` is expanded inside a scope modified by
+``#pragma clang fp eval_method``.
 
 .. _fp-constant-eval:
 
@@ -3999,7 +4002,7 @@ Execute ``clang-cl /?`` to see a list of supported options:
       /Zl                     Don't mention any default libraries in the object file
       /Zp                     Set the default maximum struct packing alignment to 1
       /Zp<value>              Specify the default maximum struct packing alignment
-      /Zs                     Syntax-check only
+      /Zs                     Run the preprocessor, parser and semantic analysis stages
 
     OPTIONS:
       -###                    Print (but do not run) the commands to run for this compilation
@@ -4130,6 +4133,7 @@ Execute ``clang-cl /?`` to see a list of supported options:
                               behavior. See user manual for available checks
       -fsplit-lto-unit        Enables splitting of the LTO unit.
       -fstandalone-debug      Emit full debug info for all types used by the program
+      -fsyntax-only           Run the preprocessor, parser and semantic analysis stages
       -fwhole-program-vtables Enables whole-program vtable optimization. Requires -flto
       -gcodeview-ghash        Emit type record hashes in a .debug$H section
       -gcodeview              Generate CodeView debug information

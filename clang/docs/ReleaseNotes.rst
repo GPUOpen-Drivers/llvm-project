@@ -75,6 +75,9 @@ Bug Fixes
   This fixes `Issue 56094 <https://github.com/llvm/llvm-project/issues/56094>`_.
 - Fix `#57151 <https://github.com/llvm/llvm-project/issues/57151>`_.
   ``-Wcomma`` is emitted for void returning functions.
+- ``-Wtautological-compare`` missed warnings for tautological comparisons
+  involving a negative integer literal. This fixes
+  `Issue 42918 <https://github.com/llvm/llvm-project/issues/42918>`_.
 
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -101,6 +104,8 @@ Improvements to Clang's diagnostics
 - Clang will now print more information about failed static assertions. In
   particular, simple static assertion expressions are evaluated to their
   compile-time value and printed out if the assertion fails.
+- Diagnostics about uninitialized ``constexpr`` varaibles have been improved
+  to mention the missing constant initializer.
 
 Non-comprehensive list of changes in this release
 -------------------------------------------------
@@ -123,6 +128,11 @@ New Pragmas in Clang
 
 Attribute Changes in Clang
 --------------------------
+- Added support for ``__attribute__((guard(nocf)))`` and C++-style
+  ``[[clang::guard(nocf)]]``, which is equivalent to ``__declspec(guard(nocf))``
+  when using the MSVC environment. This is to support enabling Windows Control
+  Flow Guard checks with the ability to disable them for specific functions when
+  using the MinGW environment.
 
 Windows Support
 ---------------
@@ -139,15 +149,11 @@ C2x Feature Support
 C++ Language Changes in Clang
 -----------------------------
 
-- Implemented DR692, DR1395 and DR1432. Use the ``-fclang-abi-compat=14`` option
+- Implemented DR692, DR1395 and DR1432. Use the ``-fclang-abi-compat=15`` option
   to get the old partial ordering behavior regarding packs.
 
 C++20 Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
-- Clang now correctly delays the instantiation of function constraints until
-  the time of checking, which should now allow the libstdc++ ranges implementation
-  to work for at least trivial examples.  This fixes
-  `Issue 44178 <https://github.com/llvm/llvm-project/issues/44178>`_.
 
 - Support capturing structured bindings in lambdas
   (`P1091R3 <https://wg21.link/p1091r3>`_ and `P1381R1 <https://wg21.link/P1381R1>`).
@@ -159,6 +165,12 @@ C++20 Feature Support
   template instantiation to be constexpr/consteval even though a call to such
   a function cannot appear in a constant expression.
   (C++14 [dcl.constexpr]p6 (CWG DR647/CWG DR1358))
+- Correctly defer dependent immediate function invocations until template instantiation.
+  This fixes `GH55601 <https://github.com/llvm/llvm-project/issues/55601>`_.
+- Implemented "Conditionally Trivial Special Member Functions" (`P0848 <https://wg21.link/p0848r3>`_).
+  Note: The handling of deleted functions is not yet compliant, as Clang
+  does not implement `DR1496 <https://www.open-std.org/jtc1/sc22/wg21/docs/cwg_defects.html#1496>`_
+  and `DR1734 <https://www.open-std.org/jtc1/sc22/wg21/docs/cwg_defects.html#1734>`_.
 
 
 
@@ -188,6 +200,12 @@ CUDA Support in Clang
 ---------------------
 
 - ...
+
+RISC-V Support in Clang
+-----------------------
+
+- ``sifive-7-rv32`` and ``sifive-7-rv64`` are no longer supported for `-mcpu`.
+  Use `sifive-e76`, `sifive-s76`, or `sifive-u74` instead.
 
 X86 Support in Clang
 --------------------
@@ -223,6 +241,11 @@ libclang
 
 Static Analyzer
 ---------------
+
+- Removed the deprecated ``-analyzer-store`` and
+  ``-analyzer-opt-analyze-nested-blocks`` analyzer flags.
+  ``scanbuild`` was also updated accordingly.
+  Passing these flags will result in a hard error.
 
 .. _release-notes-ubsan:
 

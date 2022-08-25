@@ -4954,6 +4954,25 @@ TEST_F(FormatTest, IndentsPPDirectiveWithPPIndentWidth) {
                "    int y = 0;\n"
                "}\n",
                style);
+  verifyFormat("#if 1\n"
+               " // some comments\n"
+               " // another\n"
+               " #define foo 1\n"
+               "// not a define comment\n"
+               "void bar() {\n"
+               "    // comment\n"
+               "    int y = 0;\n"
+               "}",
+               "#if 1\n"
+               "// some comments\n"
+               "// another\n"
+               "#define foo 1\n"
+               "// not a define comment\n"
+               "void bar() {\n"
+               "  // comment\n"
+               "  int y = 0;\n"
+               "}",
+               style);
 }
 
 TEST_F(FormatTest, IndentsPPDirectiveInReducedSpace) {
@@ -23807,6 +23826,10 @@ TEST_F(FormatTest, WhitespaceSensitiveMacros) {
   FormatStyle Style = getLLVMStyle();
   Style.WhitespaceSensitiveMacros.push_back("FOO");
 
+  // Newlines are important here.
+  verifyFormat("FOO(1+2 )\n", Style);
+  verifyFormat("FOO(a:b:c)\n", Style);
+
   // Don't use the helpers here, since 'mess up' will change the whitespace
   // and these are all whitespace sensitive by definition
   EXPECT_EQ("FOO(String-ized&Messy+But(: :Still)=Intentional);",
@@ -24887,7 +24910,7 @@ TEST_F(FormatTest, FormatDecayCopy) {
                                 // the user's own fault
   verifyFormat("integral auto(x) = y;"); // actually a declaration, but this is
                                          // clearly the user's own fault
-  verifyFormat("auto(*p)() = f;");       // actually a declaration; TODO FIXME
+  verifyFormat("auto (*p)() = f;");
 }
 
 TEST_F(FormatTest, Cpp20ModulesSupport) {

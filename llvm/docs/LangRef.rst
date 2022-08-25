@@ -11657,7 +11657,8 @@ This instruction requires several arguments:
    should perform tail call optimization. The ``tail`` marker is a hint that
    `can be ignored <CodeGenerator.html#sibcallopt>`_. The ``musttail`` marker
    means that the call must be tail call optimized in order for the program to
-   be correct. The ``musttail`` marker provides these guarantees:
+   be correct. This is true even in the presence of attributes like
+   "disable-tail-calls". The ``musttail`` marker provides these guarantees:
 
    #. The call will not cause unbounded stack growth if it is part of a
       recursive cycle in the call graph.
@@ -20532,7 +20533,7 @@ Semantics:
 
 The '``llvm.vp.sext``' intrinsic performs a sign extension by copying the sign
 bit (highest order bit) of the value until it reaches the size of the return
-type. When zero extending from i1, the result will always be either -1 or 0.
+type. When sign extending from i1, the result will always be either -1 or 0.
 The conversion is performed on lane positions below the explicit vector length
 and where the vector mask is true. Masked-off lanes are undefined.
 

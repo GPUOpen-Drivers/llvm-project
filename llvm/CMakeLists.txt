@@ -55,7 +55,15 @@ project(LLVM
   VERSION ${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}
   LANGUAGES C CXX ASM)
 
-# Must go after project(..)
+if (NOT DEFINED CMAKE_INSTALL_LIBDIR AND DEFINED LLVM_LIBDIR_SUFFIX)
+  # Must go before `include(GNUInstallDirs)`.
+  set(CMAKE_INSTALL_LIBDIR "lib${LLVM_LIBDIR_SUFFIX}")
+endif()
+
+# Must go after `DEFINED LLVM_LIBDIR_SUFFIX` check.
+set(LLVM_LIBDIR_SUFFIX "" CACHE STRING "Define suffix of library directory name (32/64)" )
+
+# Must go after `project(..)`.
 include(GNUInstallDirs)
 
 # This C++ standard is required to build LLVM.
@@ -108,8 +116,12 @@ set(LLVM_EXTRA_PROJECTS "flang")
 set(LLVM_KNOWN_PROJECTS "${LLVM_ALL_PROJECTS};${LLVM_EXTRA_PROJECTS}")
 set(LLVM_ENABLE_PROJECTS "" CACHE STRING
     "Semicolon-separated list of projects to build (${LLVM_KNOWN_PROJECTS}), or \"all\".")
+# Make sure expansion happens first to not handle "all" in rest of the checks.
+if( LLVM_ENABLE_PROJECTS STREQUAL "all" )
+  set( LLVM_ENABLE_PROJECTS ${LLVM_ALL_PROJECTS})
+endif()
 foreach(proj ${LLVM_ENABLE_PROJECTS})
-  if (NOT proj STREQUAL "all" AND NOT proj STREQUAL "llvm" AND NOT "${proj}" IN_LIST LLVM_KNOWN_PROJECTS)
+  if (NOT proj STREQUAL "llvm" AND NOT "${proj}" IN_LIST LLVM_KNOWN_PROJECTS)
      MESSAGE(FATAL_ERROR "${proj} isn't a known project: ${LLVM_KNOWN_PROJECTS}")
   endif()
 endforeach()
@@ -119,10 +131,6 @@ foreach(proj "libcxx" "libcxxabi" "libunwind")
                     "see the instructions at https://libcxx.llvm.org/BuildingLibcxx.html for building the runtimes.")
   endif()
 endforeach()
-
-if( LLVM_ENABLE_PROJECTS STREQUAL "all" )
-  set( LLVM_ENABLE_PROJECTS ${LLVM_ALL_PROJECTS})
-endif()
 
 if ("flang" IN_LIST LLVM_ENABLE_PROJECTS)
   if (NOT "mlir" IN_LIST LLVM_ENABLE_PROJECTS)
@@ -134,6 +142,20 @@ if ("flang" IN_LIST LLVM_ENABLE_PROJECTS)
     message(FATAL_ERROR "Clang is not enabled, but is required for the Flang driver")
   endif()
 endif()
+
+# Select the runtimes to build
+set(LLVM_DEFAULT_RUNTIMES "compiler-rt;libc;libcxx;libcxxabi;libunwind;openmp")
+set(LLVM_SUPPORTED_RUNTIMES "libc;libunwind;libcxxabi;pstl;libcxx;compiler-rt;openmp;llvm-libgcc")
+set(LLVM_ENABLE_RUNTIMES "" CACHE STRING
+  "Semicolon-separated list of runtimes to build, or \"all\" (${LLVM_DEFAULT_RUNTIMES}). Supported runtimes are ${LLVM_SUPPORTED_RUNTIMES}.")
+if(LLVM_ENABLE_RUNTIMES STREQUAL "all")
+  set(LLVM_ENABLE_RUNTIMES ${LLVM_DEFAULT_RUNTIMES})
+endif()
+foreach(proj IN LISTS LLVM_ENABLE_RUNTIMES)
+  if (NOT "${proj}" IN_LIST LLVM_SUPPORTED_RUNTIMES)
+    message(FATAL_ERROR "Runtime ${proj} is not a supported runtime. Supported runtimes are: ${LLVM_SUPPORTED_RUNTIMES}")
+  endif()
+endforeach()
 
 # LLVM_ENABLE_PROJECTS_USED is `ON` if the user has ever used the
 # `LLVM_ENABLE_PROJECTS` CMake cache variable.  This exists for
@@ -336,8 +358,6 @@ if (CMAKE_BUILD_TYPE AND
     NOT uppercase_CMAKE_BUILD_TYPE MATCHES "^(DEBUG|RELEASE|RELWITHDEBINFO|MINSIZEREL)$")
   message(FATAL_ERROR "Invalid value for CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 endif()
-
-set(LLVM_LIBDIR_SUFFIX "" CACHE STRING "Define suffix of library directory name (32/64)" )
 
 # LLVM_INSTALL_PACKAGE_DIR needs to be declared prior to adding the tools
 # subdirectory in order to have the value available for llvm-config.
@@ -915,9 +935,9 @@ configure_file(
   )
 
 # They are not referenced. See set_output_directory().
-set( CMAKE_RUNTIME_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/bin )
-set( CMAKE_LIBRARY_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/lib${LLVM_LIBDIR_SUFFIX} )
-set( CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${LLVM_BINARY_DIR}/lib${LLVM_LIBDIR_SUFFIX} )
+set( CMAKE_RUNTIME_OUTPUT_DIRECTORY ${LLVM_TOOLS_BINARY_DIR} )
+set( CMAKE_LIBRARY_OUTPUT_DIRECTORY ${LLVM_LIBRARY_DIR} )
+set( CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${LLVM_LIBRARY_DIR} )
 
 if(LLVM_INCLUDE_TESTS)
   include(GetErrcMessages)
@@ -942,15 +962,13 @@ if (TENSORFLOW_C_LIB_PATH)
   if (NOT TF_PROTO_HEADERS)
     message(STATUS "TF_PROTO_HEADERS not defined. Looking for tensorflow pip package.")
     execute_process(COMMAND
-      ${Python3_EXECUTABLE} "-m" "pip" "show" "tensorflow"
-      OUTPUT_VARIABLE TF_PIP_OUT)
-    if ("${TF_PIP_OUT}" STREQUAL "")
+      ${Python3_EXECUTABLE} "-c" "import tensorflow as tf; import os; print(os.path.dirname(tf.__file__))"
+      OUTPUT_VARIABLE TF_PIP)
+    if ("${TF_PIP}" STREQUAL "")
       message(FATAL ERROR "Tensorflow pip package is also required for 'development' mode (protobuf headers)")
     endif()
-    string(REGEX MATCH "Location: ([^\n]*\n)" TF_PIP_LOC "${TF_PIP_OUT}")
-    string(REPLACE "Location: " "" TF_PIP ${TF_PIP_LOC})
     string(STRIP ${TF_PIP} TF_PIP)
-    set(TF_PROTO_HEADERS "${TF_PIP}/tensorflow/include")
+    set(TF_PROTO_HEADERS "${TF_PIP}/include")
   endif()
   message(STATUS "Using Tensorflow headers under: ${TF_PROTO_HEADERS}")
   include_directories(${TF_PROTO_HEADERS})

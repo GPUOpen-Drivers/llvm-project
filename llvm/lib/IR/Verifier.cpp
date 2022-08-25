@@ -4526,8 +4526,8 @@ void Verifier::visitMemProfMetadata(Instruction &I, MDNode *MD) {
     visitCallStackMetadata(StackMD);
 
     // Check that remaining operands are MDString.
-    Check(std::all_of(MIB->op_begin() + 1, MIB->op_end(),
-                      [](const MDOperand &Op) { return isa<MDString>(Op); }),
+    Check(llvm::all_of(llvm::drop_begin(MIB->operands()),
+                       [](const MDOperand &Op) { return isa<MDString>(Op); }),
           "Not all !memprof MemInfoBlock operands 1 to N are MDString", MIB);
   }
 }
@@ -5121,9 +5121,12 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
           Call);
     break;
   case Intrinsic::prefetch:
-    Check(cast<ConstantInt>(Call.getArgOperand(1))->getZExtValue() < 2 &&
-              cast<ConstantInt>(Call.getArgOperand(2))->getZExtValue() < 4,
-          "invalid arguments to llvm.prefetch", Call);
+    Check(cast<ConstantInt>(Call.getArgOperand(1))->getZExtValue() < 2,
+          "rw argument to llvm.prefetch must be 0-1", Call);
+    Check(cast<ConstantInt>(Call.getArgOperand(2))->getZExtValue() < 4,
+          "locality argument to llvm.prefetch must be 0-4", Call);
+    Check(cast<ConstantInt>(Call.getArgOperand(3))->getZExtValue() < 2,
+          "cache type argument to llvm.prefetch must be 0-1", Call);
     break;
   case Intrinsic::stackprotector:
     Check(isa<AllocaInst>(Call.getArgOperand(1)->stripPointerCasts()),

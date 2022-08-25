@@ -11,6 +11,7 @@
 #include "Arch/AArch64.h"
 #include "Arch/ARM.h"
 #include "Arch/CSKY.h"
+#include "Arch/LoongArch.h"
 #include "Arch/M68k.h"
 #include "Arch/Mips.h"
 #include "Arch/PPC.h"
@@ -536,6 +537,8 @@ static bool useFramePointerForTargetByDefault(const ArgList &Args,
   case llvm::Triple::amdgcn:
   case llvm::Triple::r600:
   case llvm::Triple::csky:
+  case llvm::Triple::loongarch32:
+  case llvm::Triple::loongarch64:
     return !areOptimizationsEnabled(Args);
   default:
     break;
@@ -1152,23 +1155,6 @@ static void RenderDebugInfoCompressionArgs(const ArgList &Args,
   }
 }
 
-static const char *RelocationModelName(llvm::Reloc::Model Model) {
-  switch (Model) {
-  case llvm::Reloc::Static:
-    return "static";
-  case llvm::Reloc::PIC_:
-    return "pic";
-  case llvm::Reloc::DynamicNoPIC:
-    return "dynamic-no-pic";
-  case llvm::Reloc::ROPI:
-    return "ropi";
-  case llvm::Reloc::RWPI:
-    return "rwpi";
-  case llvm::Reloc::ROPI_RWPI:
-    return "ropi-rwpi";
-  }
-  llvm_unreachable("Unknown Reloc::Model kind");
-}
 static void handleAMDGPUCodeObjectVersionOptions(const Driver &D,
                                                  const ArgList &Args,
                                                  ArgStringList &CmdArgs,
@@ -1794,6 +1780,11 @@ void Clang::RenderTargetOptions(const llvm::Triple &EffectiveTriple,
     CmdArgs.push_back("-fallow-half-arguments-and-returns");
     break;
 
+  case llvm::Triple::loongarch32:
+  case llvm::Triple::loongarch64:
+    AddLoongArchTargetArgs(Args, CmdArgs);
+    break;
+
   case llvm::Triple::mips:
   case llvm::Triple::mipsel:
   case llvm::Triple::mips64:
@@ -1931,6 +1922,13 @@ void Clang::AddAArch64TargetArgs(const ArgList &Args,
   }
 
   AddUnalignedAccessWarning(CmdArgs);
+}
+
+void Clang::AddLoongArchTargetArgs(const ArgList &Args,
+                                   ArgStringList &CmdArgs) const {
+  CmdArgs.push_back("-target-abi");
+  CmdArgs.push_back(
+      loongarch::getLoongArchABI(Args, getToolChain().getTriple()).data());
 }
 
 void Clang::AddMIPSTargetArgs(const ArgList &Args,
@@ -2190,10 +2188,8 @@ void Clang::AddRISCVTargetArgs(const ArgList &Args,
   SetRISCVSmallDataLimit(getToolChain(), Args, CmdArgs);
 
   if (const Arg *A = Args.getLastArg(options::OPT_mtune_EQ)) {
-    StringRef Name =
-        llvm::RISCV::resolveTuneCPUAlias(A->getValue(), Triple.isArch64Bit());
     CmdArgs.push_back("-tune-cpu");
-    CmdArgs.push_back(Name.data());
+    CmdArgs.push_back(A->getValue());
   }
 }
 
@@ -6132,6 +6128,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         CmdArgs.push_back("-fopenmp-assume-threads-oversubscription");
       if (Args.hasArg(options::OPT_fopenmp_assume_no_thread_state))
         CmdArgs.push_back("-fopenmp-assume-no-thread-state");
+      if (Args.hasArg(options::OPT_fopenmp_assume_no_nested_parallelism))
+        CmdArgs.push_back("-fopenmp-assume-no-nested-parallelism");
       if (Args.hasArg(options::OPT_fopenmp_offload_mandatory))
         CmdArgs.push_back("-fopenmp-offload-mandatory");
       break;
@@ -6591,6 +6589,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   } else if (InlineArg) {
     InlineArg->render(Args, CmdArgs);
   }
+
+  Args.AddLastArg(CmdArgs, options::OPT_finline_max_stacksize_EQ);
 
   // FIXME: Find a better way to determine whether the language has modules
   // support by default, or just assume that all languages do.
@@ -8428,8 +8428,9 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
 
     for (StringRef LibName : BCLibs)
       CmdArgs.push_back(Args.MakeArgString(
-          "--bitcode-library=" + Action::GetOffloadKindName(Action::OFK_OpenMP) +
-          "-" + TC->getTripleString() + "-" + Arch + "=" + LibName));
+          "--bitcode-library=" +
+          Action::GetOffloadKindName(Action::OFK_OpenMP) + "-" +
+          TC->getTripleString() + "-" + Arch + "=" + LibName));
   }
 
   if (D.isUsingLTO(/* IsOffload */ true)) {

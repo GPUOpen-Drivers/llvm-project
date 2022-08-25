@@ -94,6 +94,8 @@ static std::vector<std::string> ArchFlags;
 static bool ArchAll = false;
 static std::string ThumbTripleName;
 
+static StringRef ordinalName(const object::MachOObjectFile *, int);
+
 void objdump::parseMachOOptions(const llvm::opt::InputArgList &InputArgs) {
   FirstPrivateHeader = InputArgs.hasArg(OBJDUMP_private_header);
   ExportsTrie = InputArgs.hasArg(OBJDUMP_exports_trie);
@@ -1195,6 +1197,20 @@ static void printMachOChainedFixups(object::MachOObjectFile *Obj) {
     reportError(std::move(Err), Obj->getFileName());
 }
 
+static SmallVector<std::string> GetSegmentNames(object::MachOObjectFile *O) {
+  SmallVector<std::string> Ret;
+  for (const MachOObjectFile::LoadCommandInfo &Command : O->load_commands()) {
+    if (Command.C.cmd == MachO::LC_SEGMENT) {
+      MachO::segment_command SLC = O->getSegmentLoadCommand(Command);
+      Ret.push_back(SLC.segname);
+    } else if (Command.C.cmd == MachO::LC_SEGMENT_64) {
+      MachO::segment_command_64 SLC = O->getSegment64LoadCommand(Command);
+      Ret.push_back(SLC.segname);
+    }
+  }
+  return Ret;
+}
+
 static void
 PrintChainedFixupsHeader(const MachO::dyld_chained_fixups_header &H) {
   outs() << "chained fixups header (LC_DYLD_CHAINED_FIXUPS)\n";
@@ -1224,6 +1240,70 @@ PrintChainedFixupsHeader(const MachO::dyld_chained_fixups_header &H) {
   outs() << '\n';
 }
 
+static constexpr std::array<StringRef, 13> PointerFormats{
+    "DYLD_CHAINED_PTR_ARM64E",
+    "DYLD_CHAINED_PTR_64",
+    "DYLD_CHAINED_PTR_32",
+    "DYLD_CHAINED_PTR_32_CACHE",
+    "DYLD_CHAINED_PTR_32_FIRMWARE",
+    "DYLD_CHAINED_PTR_64_OFFSET",
+    "DYLD_CHAINED_PTR_ARM64E_KERNEL",
+    "DYLD_CHAINED_PTR_64_KERNEL_CACHE",
+    "DYLD_CHAINED_PTR_ARM64E_USERLAND",
+    "DYLD_CHAINED_PTR_ARM64E_FIRMWARE",
+    "DYLD_CHAINED_PTR_X86_64_KERNEL_CACHE",
+    "DYLD_CHAINED_PTR_ARM64E_USERLAND24",
+};
+
+static void
+PrintChainedFixupsSegment(const MachOObjectFile::ChainedFixupsSegment &Segment,
+                          StringRef SegName) {
+  outs() << "chained starts in segment " << Segment.SegIdx << " (" << SegName
+         << ")\n";
+  outs() << "  size = " << Segment.Header.size << '\n';
+  outs() << "  page_size = " << format("0x%0" PRIx16, Segment.Header.page_size)
+         << '\n';
+
+  outs() << "  pointer_format = " << Segment.Header.pointer_format;
+  if ((Segment.Header.pointer_format - 1) <
+      MachO::DYLD_CHAINED_PTR_ARM64E_USERLAND24)
+    outs() << " (" << PointerFormats[Segment.Header.pointer_format - 1] << ")";
+  outs() << '\n';
+
+  outs() << "  segment_offset = "
+         << format("0x%0" PRIx64, Segment.Header.segment_offset) << '\n';
+  outs() << "  max_valid_pointer = " << Segment.Header.max_valid_pointer
+         << '\n';
+  outs() << "  page_count = " << Segment.Header.page_count << '\n';
+  for (auto [Index, PageStart] : enumerate(Segment.PageStarts)) {
+    outs() << "    page_start[" << Index << "] = " << PageStart;
+    // FIXME: Support DYLD_CHAINED_PTR_START_MULTI (32-bit only)
+    if (PageStart == MachO::DYLD_CHAINED_PTR_START_NONE)
+      outs() << " (DYLD_CHAINED_PTR_START_NONE)";
+    outs() << '\n';
+  }
+}
+
+static void PrintChainedFixupTarget(ChainedFixupTarget &Target, size_t Idx,
+                                    int Format, MachOObjectFile *O) {
+  if (Format == MachO::DYLD_CHAINED_IMPORT)
+    outs() << "dyld chained import";
+  else if (Format == MachO::DYLD_CHAINED_IMPORT_ADDEND)
+    outs() << "dyld chained import addend";
+  else if (Format == MachO::DYLD_CHAINED_IMPORT_ADDEND64)
+    outs() << "dyld chained import addend64";
+  // FIXME: otool prints the encoded value as well.
+  outs() << '[' << Idx << "]\n";
+
+  outs() << "  lib_ordinal = " << Target.libOrdinal() << " ("
+         << ordinalName(O, Target.libOrdinal()) << ")\n";
+  outs() << "  weak_import = " << Target.weakImport() << '\n';
+  outs() << "  name_offset = " << Target.nameOffset() << " ("
+         << Target.symbolName() << ")\n";
+  if (Format != MachO::DYLD_CHAINED_IMPORT)
+    outs() << "  addend      = " << (int64_t)Target.addend() << '\n';
+}
+
 static void PrintChainedFixups(MachOObjectFile *O) {
   // MachOObjectFile::getChainedFixupsHeader() reads LC_DYLD_CHAINED_FIXUPS.
   // FIXME: Support chained fixups in __TEXT,__chain_starts section too.
@@ -1234,7 +1314,34 @@ static void PrintChainedFixups(MachOObjectFile *O) {
 
   PrintChainedFixupsHeader(*ChainedFixupHeader);
 
-  // FIXME: Print more things.
+  auto [SegCount, Segments] =
+      unwrapOrError(O->getChainedFixupsSegments(), O->getFileName());
+
+  auto SegNames = GetSegmentNames(O);
+
+  size_t StartsIdx = 0;
+  outs() << "chained starts in image\n";
+  outs() << "  seg_count = " << SegCount << '\n';
+  for (size_t I = 0; I < SegCount; ++I) {
+    uint64_t SegOffset = 0;
+    if (StartsIdx < Segments.size() && I == Segments[StartsIdx].SegIdx) {
+      SegOffset = Segments[StartsIdx].Offset;
+      ++StartsIdx;
+    }
+
+    outs() << "    seg_offset[" << I << "] = " << SegOffset << " ("
+           << SegNames[I] << ")\n";
+  }
+
+  for (const MachOObjectFile::ChainedFixupsSegment &S : Segments)
+    PrintChainedFixupsSegment(S, SegNames[S.SegIdx]);
+
+  auto FixupTargets =
+      unwrapOrError(O->getDyldChainedFixupTargets(), O->getFileName());
+
+  uint32_t ImportsFormat = ChainedFixupHeader->imports_format;
+  for (auto [Idx, Target] : enumerate(FixupTargets))
+    PrintChainedFixupTarget(Target, Idx, ImportsFormat, O);
 }
 
 static void PrintDyldInfo(MachOObjectFile *O) {
@@ -10428,6 +10535,8 @@ static StringRef ordinalName(const object::MachOObjectFile *Obj, int Ordinal) {
     return "main-executable";
   case MachO::BIND_SPECIAL_DYLIB_FLAT_LOOKUP:
     return "flat-namespace";
+  case MachO::BIND_SPECIAL_DYLIB_WEAK_LOOKUP:
+    return "weak";
   default:
     if (Ordinal > 0) {
       std::error_code EC =

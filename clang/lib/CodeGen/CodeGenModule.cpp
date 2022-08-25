@@ -47,6 +47,7 @@
 #include "clang/CodeGen/BackendUtil.h"
 #include "clang/CodeGen/ConstantInitBuilder.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -560,6 +561,9 @@ void CodeGenModule::Release() {
     if (PGOStats.hasDiagnostics())
       PGOStats.reportDiagnostics(getDiags(), getCodeGenOpts().MainFileName);
   }
+  llvm::stable_sort(GlobalCtors, [](const Structor &L, const Structor &R) {
+    return L.LexOrder < R.LexOrder;
+  });
   EmitCtorList(GlobalCtors, "llvm.global_ctors");
   EmitCtorList(GlobalDtors, "llvm.global_dtors");
   EmitGlobalAnnotations();
@@ -968,14 +972,9 @@ void CodeGenModule::EmitOpenCLMetadata() {
 
 void CodeGenModule::EmitBackendOptionsMetadata(
     const CodeGenOptions CodeGenOpts) {
-  switch (getTriple().getArch()) {
-  default:
-    break;
-  case llvm::Triple::riscv32:
-  case llvm::Triple::riscv64:
+  if (getTriple().isRISCV()) {
     getModule().addModuleFlag(llvm::Module::Error, "SmallDataLimit",
                               CodeGenOpts.SmallDataLimit);
-    break;
   }
 }
 
@@ -1584,9 +1583,10 @@ llvm::GlobalValue *CodeGenModule::GetGlobalValue(StringRef Name) {
 /// AddGlobalCtor - Add a function to the list that will be called before
 /// main() runs.
 void CodeGenModule::AddGlobalCtor(llvm::Function *Ctor, int Priority,
+                                  unsigned LexOrder,
                                   llvm::Constant *AssociatedData) {
   // FIXME: Type coercion of void()* types.
-  GlobalCtors.push_back(Structor(Priority, Ctor, AssociatedData));
+  GlobalCtors.push_back(Structor(Priority, LexOrder, Ctor, AssociatedData));
 }
 
 /// AddGlobalDtor - Add a function to the list that will be called
@@ -1600,7 +1600,7 @@ void CodeGenModule::AddGlobalDtor(llvm::Function *Dtor, int Priority,
   }
 
   // FIXME: Type coercion of void()* types.
-  GlobalDtors.push_back(Structor(Priority, Dtor, nullptr));
+  GlobalDtors.push_back(Structor(Priority, ~0U, Dtor, nullptr));
 }
 
 void CodeGenModule::EmitCtorList(CtorList &Fns, const char *GlobalName) {
@@ -2371,6 +2371,9 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
 
   if (getLangOpts().OpenMP && FD->hasAttr<OMPDeclareSimdDeclAttr>())
     getOpenMPRuntime().emitDeclareSimdFunction(FD, F);
+
+  if (CodeGenOpts.InlineMaxStackSize != UINT_MAX)
+    F->addFnAttr("inline-max-stacksize", llvm::utostr(CodeGenOpts.InlineMaxStackSize));
 
   if (const auto *CB = FD->getAttr<CallbackAttr>()) {
     // Annotate the callback behavior as metadata:

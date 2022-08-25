@@ -952,7 +952,7 @@ static void emitAttrGetterWithReturnType(FmtContext &fctx,
   ERROR_IF_PRUNED(method, name, op);
   auto &body = method->body();
   body << "  auto attr = " << name << "Attr();\n";
-  if (attr.hasDefaultValue()) {
+  if (attr.hasDefaultValue() && attr.isOptional()) {
     // Returns the default value if not set.
     // TODO: this is inefficient, we are recreating the attribute for every
     // call. This should be set instead.
@@ -1611,7 +1611,7 @@ void OpEmitter::genPopulateDefaultAttributes() {
   }
   for (const NamedAttribute &namedAttr : op.getAttributes()) {
     auto &attr = namedAttr.attr;
-    if (!attr.hasDefaultValue())
+    if (!attr.hasDefaultValue() || attr.isOptional())
       continue;
     auto index = attrIndex[namedAttr.name];
     body << "if (!attributes.get(attrNames[" << index << "])) {\n";
@@ -2095,8 +2095,10 @@ void OpEmitter::genCodeForAddingArgAndRegionForBuilder(
     if (attr.isDerivedAttr() || inferredAttributes.contains(namedAttr.name))
       continue;
 
-    bool emitNotNullCheck =
-        attr.isOptional() || (attr.hasDefaultValue() && !isRawValueAttr);
+    // TODO(jpienaar): The wrapping of optional is different for default or not,
+    // so don't unwrap for default ones that would fail below.
+    bool emitNotNullCheck = (attr.isOptional() && !attr.hasDefaultValue()) ||
+                            (attr.hasDefaultValue() && !isRawValueAttr);
     if (emitNotNullCheck)
       body << formatv("  if ({0}) ", namedAttr.name) << "{\n";
 
@@ -2910,7 +2912,7 @@ OpOperandAdaptorEmitter::OpOperandAdaptorEmitter(
                         : "cast",
                     attr.getStorageType());
 
-    if (attr.hasDefaultValue()) {
+    if (attr.hasDefaultValue() && attr.isOptional()) {
       // Use the default value if attribute is not set.
       // TODO: this is inefficient, we are recreating the attribute for every
       // call. This should be set instead.

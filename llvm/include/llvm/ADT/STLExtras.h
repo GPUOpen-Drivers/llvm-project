@@ -77,12 +77,11 @@ template <typename T> struct make_const_ref {
 };
 
 namespace detail {
-template <typename...> using void_t = void;
 template <class, template <class...> class Op, class... Args> struct detector {
   using value_t = std::false_type;
 };
 template <template <class...> class Op, class... Args>
-struct detector<void_t<Op<Args...>>, Op, Args...> {
+struct detector<std::void_t<Op<Args...>>, Op, Args...> {
   using value_t = std::true_type;
 };
 } // end namespace detail
@@ -96,16 +95,6 @@ struct detector<void_t<Op<Args...>>, Op, Args...> {
 ///   bool fooHasCopyAssign = is_detected<has_copy_assign_t, FooClass>::value;
 template <template <class...> class Op, class... Args>
 using is_detected = typename detail::detector<void, Op, Args...>::value_t;
-
-namespace detail {
-template <typename Callable, typename... Args>
-using is_invocable =
-    decltype(std::declval<Callable &>()(std::declval<Args>()...));
-} // namespace detail
-
-/// Check if a Callable type can be invoked with the given set of arg types.
-template <typename Callable, typename... Args>
-using is_invocable = is_detected<detail::is_invocable, Callable, Args...>;
 
 /// This class provides various trait information about a callable object.
 ///   * To access the number of arguments: Traits::num_args
@@ -376,21 +365,12 @@ struct has_rbegin : has_rbegin_impl<typename std::remove_reference<Ty>::type> {
 };
 
 // Returns an iterator_range over the given container which iterates in reverse.
-// Note that the container must have rbegin()/rend() methods for this to work.
-template <typename ContainerTy>
-auto reverse(ContainerTy &&C,
-             std::enable_if_t<has_rbegin<ContainerTy>::value> * = nullptr) {
-  return make_range(C.rbegin(), C.rend());
-}
-
-// Returns an iterator_range over the given container which iterates in reverse.
-// Note that the container must have begin()/end() methods which return
-// bidirectional iterators for this to work.
-template <typename ContainerTy>
-auto reverse(ContainerTy &&C,
-             std::enable_if_t<!has_rbegin<ContainerTy>::value> * = nullptr) {
-  return make_range(std::make_reverse_iterator(std::end(C)),
-                    std::make_reverse_iterator(std::begin(C)));
+template <typename ContainerTy> auto reverse(ContainerTy &&C) {
+  if constexpr (has_rbegin<ContainerTy>::value)
+    return make_range(C.rbegin(), C.rend());
+  else
+    return make_range(std::make_reverse_iterator(std::end(C)),
+                      std::make_reverse_iterator(std::begin(C)));
 }
 
 /// An iterator adaptor that filters the elements of given inner iterators.
@@ -1557,23 +1537,18 @@ using sort_trivially_copyable = std::conjunction<
 
 // Provide wrappers to std::sort which shuffle the elements before sorting
 // to help uncover non-deterministic behavior (PR35135).
-template <typename IteratorTy,
-          std::enable_if_t<!detail::sort_trivially_copyable<IteratorTy>::value,
-                           int> = 0>
+template <typename IteratorTy>
 inline void sort(IteratorTy Start, IteratorTy End) {
+  if constexpr (detail::sort_trivially_copyable<IteratorTy>::value) {
+    // Forward trivially copyable types to array_pod_sort. This avoids a large
+    // amount of code bloat for a minor performance hit.
+    array_pod_sort(Start, End);
+  } else {
 #ifdef EXPENSIVE_CHECKS
-  detail::presortShuffle<IteratorTy>(Start, End);
+    detail::presortShuffle<IteratorTy>(Start, End);
 #endif
-  std::sort(Start, End);
-}
-
-// Forward trivially copyable types to array_pod_sort. This avoids a large
-// amount of code bloat for a minor performance hit.
-template <typename IteratorTy,
-          std::enable_if_t<detail::sort_trivially_copyable<IteratorTy>::value,
-                           int> = 0>
-inline void sort(IteratorTy Start, IteratorTy End) {
-  array_pod_sort(Start, End);
+    std::sort(Start, End);
+  }
 }
 
 template <typename Container> inline void sort(Container &&C) {
@@ -1668,6 +1643,24 @@ OutputIt copy_if(R &&Range, OutputIt Out, UnaryPredicate P) {
 template <typename R, typename OutputIt>
 OutputIt copy(R &&Range, OutputIt Out) {
   return std::copy(adl_begin(Range), adl_end(Range), Out);
+}
+
+/// Provide wrappers to std::replace_copy_if which take ranges instead of having
+/// to pass begin/end explicitly.
+template <typename R, typename OutputIt, typename UnaryPredicate, typename T>
+OutputIt replace_copy_if(R &&Range, OutputIt Out, UnaryPredicate P,
+                         const T &NewValue) {
+  return std::replace_copy_if(adl_begin(Range), adl_end(Range), Out, P,
+                              NewValue);
+}
+
+/// Provide wrappers to std::replace_copy which take ranges instead of having to
+/// pass begin/end explicitly.
+template <typename R, typename OutputIt, typename T>
+OutputIt replace_copy(R &&Range, OutputIt Out, const T &OldValue,
+                      const T &NewValue) {
+  return std::replace_copy(adl_begin(Range), adl_end(Range), Out, OldValue,
+                           NewValue);
 }
 
 /// Provide wrappers to std::move which take ranges instead of having to
@@ -1788,17 +1781,34 @@ template <typename L, typename R> bool equal(L &&LRange, R &&RRange) {
                     adl_end(RRange));
 }
 
-/// Wrapper function around std::equal to detect if all elements
-/// in a container are same.
-template <typename R>
-bool is_splat(R &&Range) {
-  size_t range_size = size(Range);
-  return range_size != 0 && (range_size == 1 ||
-         std::equal(adl_begin(Range) + 1, adl_end(Range), adl_begin(Range)));
+/// Returns true if all elements in Range are equal or when the Range is empty.
+template <typename R> bool all_equal(R &&Range) {
+  auto Begin = adl_begin(Range);
+  auto End = adl_end(Range);
+  return Begin == End || std::equal(Begin + 1, End, Begin);
 }
 
-/// Returns true iff all Values in the initializer lists are same.
-template <typename T> bool is_splat(std::initializer_list<T> Values) {
+/// Returns true if all Values in the initializer lists are equal or the list
+// is empty.
+template <typename T> bool all_equal(std::initializer_list<T> Values) {
+  return all_equal<std::initializer_list<T>>(std::move(Values));
+}
+
+/// Returns true if Range consists of the same value repeated multiple times.
+template <typename R>
+LLVM_DEPRECATED(
+    "Use 'all_equal(Range)' or '!empty(Range) && all_equal(Range)' instead.",
+    "all_equal")
+bool is_splat(R &&Range) {
+  return !llvm::empty(Range) && all_equal(Range);
+}
+
+/// Returns true if Values consists of the same value repeated multiple times.
+template <typename T>
+LLVM_DEPRECATED(
+    "Use 'all_equal(Values)' or '!empty(Values) && all_equal(Values)' instead.",
+    "all_equal")
+bool is_splat(std::initializer_list<T> Values) {
   return is_splat<std::initializer_list<T>>(std::move(Values));
 }
 

@@ -51,7 +51,7 @@ target_link_libraries(LibcMemoryHelpers LibcUnitTest)
 add_dependencies(
   LibcMemoryHelpers
   LibcUnitTest
-  libc.src.__support.CPP.array_ref
+  libc.src.__support.CPP.span
 )
 
 add_library(
@@ -64,7 +64,7 @@ target_link_libraries(LibcPrintfHelpers LibcUnitTest)
 add_dependencies(
   LibcPrintfHelpers
   LibcUnitTest
-  libc.src.__support.CPP.uint128
+  libc.src.__support.FPUtil.fputil #FPBits
   libc.src.stdio.printf_core.core_structs
   libc.utils.UnitTest.string_utils
 )

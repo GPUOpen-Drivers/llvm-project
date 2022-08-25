@@ -185,7 +185,15 @@ check-generated-output)
 
     # Reject patches that introduce non-ASCII characters or hard tabs.
     # Depends on LC_COLLATE set at the top of this script.
-    ! grep -rn '[^ -~]' libcxx/include/ || false
+    ! grep -rn '[^ -~]' libcxx/include libcxx/src libcxx/test libcxx/benchmarks \
+           --exclude '*.dat' \
+           --exclude 'std_format_spec_string_unicode.bench.cpp' \
+           --exclude 'grep.pass.cpp' \
+           --exclude 'locale-specific_form.pass.cpp' \
+           --exclude 'format_tests.h' || false
+
+    # Reject code with trailing whitespace
+    ! grep -rn '[[:blank:]]$' libcxx/include libcxx/src libcxx/test libcxx/benchmarks || false
 
     # Reject patches that introduce dependency cycles in the headers.
     python3 libcxx/utils/graph_header_deps.py >/dev/null
@@ -574,6 +582,17 @@ clang-cl-dll)
 clang-cl-static)
     clean
     generate-cmake-libcxx-win -DLIBCXX_ENABLE_SHARED=OFF
+    echo "+++ Running the libc++ tests"
+    ${NINJA} -vC "${BUILD_DIR}" check-cxx
+;;
+clang-cl-no-vcruntime)
+    clean
+    # Building libc++ in the same way as in clang-cl-dll above, but running
+    # tests with -D_HAS_EXCEPTIONS=0, which users might set in certain
+    # translation units while using libc++, even if libc++ is built with
+    # exceptions enabled.
+    generate-cmake-libcxx-win -DLIBCXX_TEST_PARAMS="enable_experimental=False" \
+                              -DLIBCXX_TEST_CONFIG="llvm-libc++-shared-no-vcruntime-clangcl.cfg.in"
     echo "+++ Running the libc++ tests"
     ${NINJA} -vC "${BUILD_DIR}" check-cxx
 ;;

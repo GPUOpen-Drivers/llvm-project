@@ -8674,6 +8674,10 @@ def err_typecheck_expect_flt_or_vector : Error<
   "a vector of such types is required">;
 def err_cast_selector_expr : Error<
   "cannot type cast @selector expression">;
+def err_make_signed_integral_only : Error<
+  "'%select{make_unsigned|make_signed}0' is only compatible with "
+  "non-%select{bool|_BitInt(1)}1 integers and enum types, but was given "
+  "%2%select{| whose underlying type is %4}3">;
 def ext_typecheck_cond_incompatible_pointers : ExtWarn<
   "pointer type mismatch%diff{ ($ and $)|}0,1">,
   InGroup<DiagGroup<"pointer-type-mismatch">>;
@@ -11141,6 +11145,8 @@ def err_export_using_internal : Error<
 def err_export_not_in_module_interface : Error<
   "export declaration can only be used within a module interface unit"
   "%select{ after the module declaration|}0">;
+def err_export_inline_not_defined : Error<
+  "inline function not defined%select{| before the private module fragment}0">;
 def err_export_partition_impl : Error<
   "module partition implementations cannot be exported">;
 def err_export_in_private_module_fragment : Error<
@@ -11637,6 +11643,9 @@ def err_hlsl_numthreads_argument_oor : Error<"argument '%select{X|Y|Z}0' to numt
 def err_hlsl_numthreads_invalid : Error<"total number of threads cannot exceed %0">;
 def err_hlsl_missing_numthreads : Error<"missing numthreads attribute for %0 shader entry">;
 def err_hlsl_attribute_param_mismatch : Error<"%0 attribute parameters do not match the previous declaration">;
+def err_hlsl_missing_semantic_annotation : Error<
+  "semantic annotations must be present for all parameters of an entry "
+  "function or patch constant function">;
 
 def err_hlsl_pointers_unsupported : Error<
   "%select{pointers|references}0 are unsupported in HLSL">;
