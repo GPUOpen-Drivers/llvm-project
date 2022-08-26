@@ -11,7 +11,7 @@
 #include "llvm/ExecutionEngine/Orc/Shared/OrcRTBridge.h"
 #include "llvm/Support/WindowsError.h"
 
-#if defined(LLVM_ON_UNIX)
+#if defined(LLVM_ON_UNIX) && !defined(__ANDROID__)
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -60,6 +60,7 @@ char *InProcessMemoryMapper::prepare(ExecutorAddr Addr, size_t ContentSize) {
 void InProcessMemoryMapper::initialize(MemoryMapper::AllocInfo &AI,
                                        OnInitializedFunction OnInitialized) {
   ExecutorAddr MinAddr(~0ULL);
+  ExecutorAddr MaxAddr(0);
 
   for (auto &Segment : AI.Segments) {
     auto Base = AI.MappingBase + Segment.Offset;
@@ -67,6 +68,9 @@ void InProcessMemoryMapper::initialize(MemoryMapper::AllocInfo &AI,
 
     if (Base < MinAddr)
       MinAddr = Base;
+
+    if (Base + Size > MaxAddr)
+      MaxAddr = Base + Size;
 
     std::memset((Base + Segment.ContentSize).toPtr<void *>(), 0,
                 Segment.ZeroFillSize);
@@ -85,6 +89,9 @@ void InProcessMemoryMapper::initialize(MemoryMapper::AllocInfo &AI,
 
   {
     std::lock_guard<std::mutex> Lock(Mutex);
+
+    // This is the maximum range whose permission have been possibly modified
+    Allocations[MinAddr].Size = MaxAddr - MinAddr;
     Allocations[MinAddr].DeinitializationActions =
         std::move(*DeinitializeActions);
     Reservations[AI.MappingBase.toPtr<void *>()].Allocations.push_back(MinAddr);
@@ -106,6 +113,14 @@ void InProcessMemoryMapper::deinitialize(
       if (Error Err = shared::runDeallocActions(
               Allocations[Base].DeinitializationActions)) {
         AllErr = joinErrors(std::move(AllErr), std::move(Err));
+      }
+
+      // Reset protections to read/write so the area can be reused
+      if (auto EC = sys::Memory::protectMappedMemory(
+              {Base.toPtr<void *>(), Allocations[Base].Size},
+              sys::Memory::ProtectionFlags::MF_READ |
+                  sys::Memory::ProtectionFlags::MF_WRITE)) {
+        AllErr = joinErrors(std::move(AllErr), errorCodeToError(EC));
       }
 
       Allocations.erase(Base);
@@ -173,20 +188,30 @@ InProcessMemoryMapper::~InProcessMemoryMapper() {
 
 SharedMemoryMapper::SharedMemoryMapper(ExecutorProcessControl &EPC,
                                        SymbolAddrs SAs, size_t PageSize)
-    : EPC(EPC), SAs(SAs), PageSize(PageSize) {}
+    : EPC(EPC), SAs(SAs), PageSize(PageSize) {
+#if (!defined(LLVM_ON_UNIX) || defined(__ANDROID__)) && !defined(_WIN32)
+  llvm_unreachable("SharedMemoryMapper is not supported on this platform yet");
+#endif
+}
 
 Expected<std::unique_ptr<SharedMemoryMapper>>
 SharedMemoryMapper::Create(ExecutorProcessControl &EPC, SymbolAddrs SAs) {
+#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
   auto PageSize = sys::Process::getPageSize();
   if (!PageSize)
     return PageSize.takeError();
 
   return std::make_unique<SharedMemoryMapper>(EPC, SAs, *PageSize);
+#else
+  return make_error<StringError>(
+      "SharedMemoryMapper is not supported on this platform yet",
+      inconvertibleErrorCode());
+#endif
 }
 
 void SharedMemoryMapper::reserve(size_t NumBytes,
                                  OnReservedFunction OnReserved) {
-#if defined(LLVM_ON_UNIX) || defined(_WIN32)
+#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
 
   EPC.callSPSWrapperAsync<
       rt::SPSExecutorSharedMemoryMapperServiceReserveSignature>(
@@ -334,7 +359,7 @@ void SharedMemoryMapper::deinitialize(
 
 void SharedMemoryMapper::release(ArrayRef<ExecutorAddr> Bases,
                                  OnReleasedFunction OnReleased) {
-#if defined(LLVM_ON_UNIX) || defined(_WIN32)
+#if (defined(LLVM_ON_UNIX) && !defined(__ANDROID__)) || defined(_WIN32)
   Error Err = Error::success();
 
   {
@@ -351,8 +376,8 @@ void SharedMemoryMapper::release(ArrayRef<ExecutorAddr> Bases,
 #elif defined(_WIN32)
 
       if (!UnmapViewOfFile(Reservations[Base].LocalAddr))
-        joinErrors(std::move(Err),
-                   errorCodeToError(mapWindowsError(GetLastError())));
+        Err = joinErrors(std::move(Err),
+                         errorCodeToError(mapWindowsError(GetLastError())));
 
 #endif
 

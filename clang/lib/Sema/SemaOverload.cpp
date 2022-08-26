@@ -63,9 +63,8 @@ static ExprResult CreateFunctionRefExpr(
   // being used.
   if (FoundDecl != Fn && S.DiagnoseUseOfDecl(Fn, Loc))
     return ExprError();
-  DeclRefExpr *DRE =
-      DeclRefExpr::Create(S.Context, Fn->getQualifierLoc(), SourceLocation(),
-                          Fn, false, Loc, Fn->getType(), VK_LValue, FoundDecl);
+  DeclRefExpr *DRE = new (S.Context)
+      DeclRefExpr(S.Context, Fn, false, Fn->getType(), VK_LValue, Loc, LocInfo);
   if (HadMultipleCandidates)
     DRE->setHadMultipleCandidates(true);
 
@@ -993,6 +992,78 @@ static bool checkArgPlaceholdersForOverload(Sema &S, MultiExprArg Args,
   return false;
 }
 
+// Figure out the to-translation-unit depth for this function declaration for
+// the purpose of seeing if they differ by constraints. This isn't the same as
+// getTemplateDepth, because it includes already instantiated parents.
+static unsigned CalculateTemplateDepthForConstraints(Sema &S,
+                                                     FunctionDecl *FD) {
+  MultiLevelTemplateArgumentList MLTAL =
+      S.getTemplateInstantiationArgs(FD, nullptr, /*RelativeToPrimary*/ true,
+                                     /*Pattern*/ nullptr,
+                                     /*LookBeyondLambda*/ true);
+  return MLTAL.getNumSubstitutedLevels();
+}
+
+// Friend definitions can appear identical but be different declarations based
+// on the last sentence of the rule below (others included for clarification):
+// C++20 [temp.friend] p9: A non-template friend declaration
+// with a requires-clause shall be a definition.  A friend function template
+// with a constraint that depends on a template parameter from an enclosing
+// template shall be a definition.  Such a constrained friend function or
+// function template declaration does not declare the same function or function
+// template as a declaration in any other scope.
+static bool FriendsDifferByConstraints(Sema &S, DeclContext *CurContext,
+                                       FunctionDecl *Old, FunctionDecl *New,
+                                       Scope *Scope) {
+  // If these aren't friends, than they aren't friends that differe by
+  // constraints.
+  if (!Old->getFriendObjectKind() || !New->getFriendObjectKind())
+    return false;
+
+  // If the the two functions share lexical declaration context, they are not in
+  // separate instantations, and thus in the same scope.
+  if (New->getLexicalDeclContext() == Old->getLexicalDeclContext())
+    return false;
+
+  if (!Old->getDescribedFunctionTemplate()) {
+    assert(!New->getDescribedFunctionTemplate() &&
+           "How would these be the same if they aren't both templates?");
+
+    // If these friends don't have constraints, they aren't constrained, and
+    // thus don't fall under temp.friend p9. Else the simple presence of a
+    // constraint makes them unique.
+    return Old->getTrailingRequiresClause();
+  }
+
+  SmallVector<const Expr *, 3> OldAC;
+  Old->getDescribedFunctionTemplate()->getAssociatedConstraints(OldAC);
+
+#ifndef NDEBUG
+  SmallVector<const Expr *, 3> NewAC;
+  New->getDescribedFunctionTemplate()->getAssociatedConstraints(NewAC);
+  assert(OldAC.size() == NewAC.size() &&
+         "Difference should have been noticed earlier if sizes of constraints "
+         "aren't the same");
+#endif
+  // If there are no constraints, these are not constrained friend function or
+  // friend function templates.
+  if (OldAC.size() == 0)
+    return false;
+
+  unsigned OldTemplateDepth = CalculateTemplateDepthForConstraints(S, Old);
+
+  // At this point, if the constrained function template declaration depends on
+  // a template parameter from an enclosing template, they are not the same
+  // function.  Since these were deemed identical before we got here, we only
+  // have to look into 1 side to see if they refer to a containing template.
+  for (const Expr *Constraint : OldAC)
+    if (S.ConstraintExpressionDependsOnEnclosingTemplate(OldTemplateDepth,
+                                                         Constraint))
+      return true;
+
+  return false;
+}
+
 /// Determine whether the given New declaration is an overload of the
 /// declarations in Old. This routine returns Ovl_Match or Ovl_NonFunction if
 /// New and Old cannot be overloaded, e.g., if New has the same signature as
@@ -1067,6 +1138,15 @@ Sema::CheckOverload(Scope *S, FunctionDecl *New, const LookupResult &Old,
 
         if (!isa<FunctionTemplateDecl>(OldD) &&
             !shouldLinkPossiblyHiddenDecl(*I, New))
+          continue;
+
+        // C++20 [temp.friend] p9: A non-template friend declaration with a
+        // requires-clause shall be a definition.  A friend function template
+        // with a constraint that depends on a template parameter from an
+        // enclosing template shall be a definition.  Such a constrained friend
+        // function or function template declaration does not declare the same
+        // function or function template as a declaration in any other scope.
+        if (FriendsDifferByConstraints(*this, CurContext, OldF, New, S))
           continue;
 
         Match = *I;
@@ -6242,7 +6322,7 @@ ExprResult Sema::PerformContextualImplicitConversion(
                                      HadMultipleCandidates,
                                      ExplicitConversions))
         return ExprError();
-      LLVM_FALLTHROUGH;
+      [[fallthrough]];
     case OR_Deleted:
       // We'll complain below about a non-integral condition type.
       break;
@@ -6516,7 +6596,8 @@ void Sema::AddOverloadCandidate(
 
   if (Function->getTrailingRequiresClause()) {
     ConstraintSatisfaction Satisfaction;
-    if (CheckFunctionConstraints(Function, Satisfaction) ||
+    if (CheckFunctionConstraints(Function, Satisfaction, /*Loc*/ {},
+                                 /*ForOverloadResolution*/ true) ||
         !Satisfaction.IsSatisfied) {
       Candidate.Viable = false;
       Candidate.FailureKind = ovl_fail_constraints_not_satisfied;
@@ -7022,7 +7103,8 @@ Sema::AddMethodCandidate(CXXMethodDecl *Method, DeclAccessPair FoundDecl,
 
   if (Method->getTrailingRequiresClause()) {
     ConstraintSatisfaction Satisfaction;
-    if (CheckFunctionConstraints(Method, Satisfaction) ||
+    if (CheckFunctionConstraints(Method, Satisfaction, /*Loc*/ {},
+                                 /*ForOverloadResolution*/ true) ||
         !Satisfaction.IsSatisfied) {
       Candidate.Viable = false;
       Candidate.FailureKind = ovl_fail_constraints_not_satisfied;
@@ -9312,7 +9394,7 @@ void Sema::AddBuiltinOperatorCandidates(OverloadedOperatorKind Op,
   case OO_Plus: // '+' is either unary or binary
     if (Args.size() == 1)
       OpBuilder.addUnaryPlusPointerOverloads();
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
 
   case OO_Minus: // '-' is either unary or binary
     if (Args.size() == 1) {
@@ -9387,12 +9469,12 @@ void Sema::AddBuiltinOperatorCandidates(OverloadedOperatorKind Op,
 
   case OO_Equal:
     OpBuilder.addAssignmentMemberPointerOrEnumeralOverloads();
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
 
   case OO_PlusEqual:
   case OO_MinusEqual:
     OpBuilder.addAssignmentPointerOverloads(Op == OO_Equal);
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
 
   case OO_StarEqual:
   case OO_SlashEqual:
@@ -12569,7 +12651,7 @@ Sema::resolveAddressOfSingleOverloadCandidate(Expr *E, DeclAccessPair &Pair) {
 /// Returns false if resolveAddressOfSingleOverloadCandidate fails.
 /// Otherwise, returns true. This may emit diagnostics and return true.
 bool Sema::resolveAndFixAddressOfSingleOverloadCandidate(
-    ExprResult &SrcExpr, bool DoFunctionPointerConverion) {
+    ExprResult &SrcExpr, bool DoFunctionPointerConversion) {
   Expr *E = SrcExpr.get();
   assert(E->getType() == Context.OverloadTy && "SrcExpr must be an overload");
 
@@ -12585,7 +12667,7 @@ bool Sema::resolveAndFixAddressOfSingleOverloadCandidate(
   DiagnoseUseOfDecl(Found, E->getExprLoc());
   CheckAddressOfMemberAccess(E, DAP);
   Expr *Fixed = FixOverloadedFunctionReference(E, DAP, Found);
-  if (DoFunctionPointerConverion && Fixed->getType()->isFunctionType())
+  if (DoFunctionPointerConversion && Fixed->getType()->isFunctionType())
     SrcExpr = DefaultFunctionArrayConversion(Fixed, /*Diagnose=*/false);
   else
     SrcExpr = Fixed;
@@ -12687,10 +12769,9 @@ Sema::ResolveSingleFunctionTemplateSpecialization(OverloadExpr *ovl,
 // expression, regardless of whether or not it succeeded.  Always
 // returns true if 'complain' is set.
 bool Sema::ResolveAndFixSingleFunctionTemplateSpecialization(
-                      ExprResult &SrcExpr, bool doFunctionPointerConverion,
-                      bool complain, SourceRange OpRangeForComplaining,
-                                           QualType DestTypeForComplaining,
-                                            unsigned DiagIDForComplaining) {
+    ExprResult &SrcExpr, bool doFunctionPointerConversion, bool complain,
+    SourceRange OpRangeForComplaining, QualType DestTypeForComplaining,
+    unsigned DiagIDForComplaining) {
   assert(SrcExpr.get()->getType() == Context.OverloadTy);
 
   OverloadExpr::FindResult ovl = OverloadExpr::find(SrcExpr.get());
@@ -12731,7 +12812,7 @@ bool Sema::ResolveAndFixSingleFunctionTemplateSpecialization(
         FixOverloadedFunctionReference(SrcExpr.get(), found, fn);
 
     // If desired, do function-to-pointer decay.
-    if (doFunctionPointerConverion) {
+    if (doFunctionPointerConversion) {
       SingleFunctionExpression =
         DefaultFunctionArrayLvalueConversion(SingleFunctionExpression.get());
       if (SingleFunctionExpression.isInvalid()) {
@@ -13932,7 +14013,7 @@ ExprResult Sema::CreateOverloadedBinOp(SourceLocation OpLoc,
 
             R = CreateOverloadedBinOp(
                 OpLoc, Opc, Fns, IsReversed ? ZeroLiteral : R.get(),
-                IsReversed ? R.get() : ZeroLiteral, PerformADL,
+                IsReversed ? R.get() : ZeroLiteral, /*PerformADL=*/true,
                 /*AllowRewrittenCandidates=*/false);
 
             popCodeSynthesisContext();

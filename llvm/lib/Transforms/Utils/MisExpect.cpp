@@ -35,6 +35,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -57,7 +58,7 @@ static cl::opt<bool> PGOWarnMisExpect(
     cl::desc("Use this option to turn on/off "
              "warnings about incorrect usage of llvm.expect intrinsics."));
 
-static cl::opt<unsigned> MisExpectTolerance(
+static cl::opt<uint32_t> MisExpectTolerance(
     "misexpect-tolerance", cl::init(0),
     cl::desc("Prevents emiting diagnostics when profile counts are "
              "within N% of the threshold.."));
@@ -71,7 +72,7 @@ bool isMisExpectDiagEnabled(LLVMContext &Ctx) {
 }
 
 uint64_t getMisExpectTolerance(LLVMContext &Ctx) {
-  return std::max(static_cast<uint64_t>(MisExpectTolerance),
+  return std::max(static_cast<uint32_t>(MisExpectTolerance),
                   Ctx.getDiagnosticsMisExpectTolerance());
 }
 
@@ -117,34 +118,6 @@ void emitMisexpectDiagnostic(Instruction *I, LLVMContext &Ctx,
 
 namespace llvm {
 namespace misexpect {
-
-// Helper function to extract branch weights into a vector
-Optional<SmallVector<uint32_t, 4>> extractWeights(Instruction *I,
-                                                  LLVMContext &Ctx) {
-  assert(I && "MisExpect::extractWeights given invalid pointer");
-
-  auto *ProfileData = I->getMetadata(LLVMContext::MD_prof);
-  if (!ProfileData)
-    return None;
-
-  unsigned NOps = ProfileData->getNumOperands();
-  if (NOps < 3)
-    return None;
-
-  auto *ProfDataName = dyn_cast<MDString>(ProfileData->getOperand(0));
-  if (!ProfDataName || !ProfDataName->getString().equals("branch_weights"))
-    return None;
-
-  SmallVector<uint32_t, 4> Weights(NOps - 1);
-  for (unsigned Idx = 1; Idx < NOps; Idx++) {
-    ConstantInt *Value =
-        mdconst::dyn_extract<ConstantInt>(ProfileData->getOperand(Idx));
-    uint32_t V = Value->getZExtValue();
-    Weights[Idx - 1] = V;
-  }
-
-  return Weights;
-}
 
 // TODO: when clang allows c++17, use std::clamp instead
 uint32_t clamp(uint64_t value, uint32_t low, uint32_t hi) {
@@ -218,26 +191,24 @@ void verifyMisExpect(Instruction &I, ArrayRef<uint32_t> RealWeights,
 
 void checkBackendInstrumentation(Instruction &I,
                                  const ArrayRef<uint32_t> RealWeights) {
-  auto ExpectedWeightsOpt = extractWeights(&I, I.getContext());
-  if (!ExpectedWeightsOpt)
+  SmallVector<uint32_t> ExpectedWeights;
+  if (!extractBranchWeights(I, ExpectedWeights))
     return;
-  auto ExpectedWeights = ExpectedWeightsOpt.value();
   verifyMisExpect(I, RealWeights, ExpectedWeights);
 }
 
 void checkFrontendInstrumentation(Instruction &I,
                                   const ArrayRef<uint32_t> ExpectedWeights) {
-  auto RealWeightsOpt = extractWeights(&I, I.getContext());
-  if (!RealWeightsOpt)
+  SmallVector<uint32_t> RealWeights;
+  if (!extractBranchWeights(I, RealWeights))
     return;
-  auto RealWeights = RealWeightsOpt.value();
   verifyMisExpect(I, RealWeights, ExpectedWeights);
 }
 
 void checkExpectAnnotations(Instruction &I,
                             const ArrayRef<uint32_t> ExistingWeights,
-                            bool IsFrontendInstr) {
-  if (IsFrontendInstr) {
+                            bool IsFrontend) {
+  if (IsFrontend) {
     checkFrontendInstrumentation(I, ExistingWeights);
   } else {
     checkBackendInstrumentation(I, ExistingWeights);

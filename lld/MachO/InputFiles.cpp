@@ -342,7 +342,10 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
 
       InputSection *isec;
       if (sectionType(sec.flags) == S_CSTRING_LITERALS) {
-        isec = make<CStringInputSection>(section, data, align);
+        isec = make<CStringInputSection>(section, data, align,
+                                         /*dedupLiterals=*/name ==
+                                                 section_names::objcMethname ||
+                                             config->dedupLiterals);
         // FIXME: parallelize this?
         cast<CStringInputSection>(isec)->splitIntoPieces();
       } else {
@@ -385,7 +388,7 @@ void ObjFile::parseSections(ArrayRef<SectionHeader> sectionHeaders) {
 }
 
 void ObjFile::splitEhFrames(ArrayRef<uint8_t> data, Section &ehFrameSection) {
-  EhReader reader(this, data, /*dataOff=*/0, target->wordSize);
+  EhReader reader(this, data, /*dataOff=*/0);
   size_t off = 0;
   while (off < reader.size()) {
     uint64_t frameOff = off;
@@ -1293,9 +1296,24 @@ void ObjFile::registerCompactUnwind(Section &compactUnwindSection) {
 
 struct CIE {
   macho::Symbol *personalitySymbol = nullptr;
-  bool fdesHaveLsda = false;
   bool fdesHaveAug = false;
+  uint8_t lsdaPtrSize = 0; // 0 => no LSDA
+  uint8_t funcPtrSize = 0;
 };
+
+static uint8_t pointerEncodingToSize(uint8_t enc) {
+  switch (enc & 0xf) {
+  case dwarf::DW_EH_PE_absptr:
+    return target->wordSize;
+  case dwarf::DW_EH_PE_sdata4:
+    return 4;
+  case dwarf::DW_EH_PE_sdata8:
+    // ld64 doesn't actually support sdata8, but this seems simple enough...
+    return 8;
+  default:
+    return 0;
+  };
+}
 
 static CIE parseCIE(const InputSection *isec, const EhReader &reader,
                     size_t off) {
@@ -1304,8 +1322,6 @@ static CIE parseCIE(const InputSection *isec, const EhReader &reader,
   // DWARF and handle just that.
   constexpr uint8_t expectedPersonalityEnc =
       dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_sdata4;
-  constexpr uint8_t expectedPointerEnc =
-      dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_absptr;
 
   CIE cie;
   uint8_t version = reader.readByte(&off);
@@ -1332,16 +1348,17 @@ static CIE parseCIE(const InputSection *isec, const EhReader &reader,
       break;
     }
     case 'L': {
-      cie.fdesHaveLsda = true;
       uint8_t lsdaEnc = reader.readByte(&off);
-      if (lsdaEnc != expectedPointerEnc)
+      cie.lsdaPtrSize = pointerEncodingToSize(lsdaEnc);
+      if (cie.lsdaPtrSize == 0)
         reader.failOn(off, "unexpected LSDA encoding 0x" +
                                Twine::utohexstr(lsdaEnc));
       break;
     }
     case 'R': {
       uint8_t pointerEnc = reader.readByte(&off);
-      if (pointerEnc != expectedPointerEnc)
+      cie.funcPtrSize = pointerEncodingToSize(pointerEnc);
+      if (cie.funcPtrSize == 0 || !(pointerEnc & dwarf::DW_EH_PE_pcrel))
         reader.failOn(off, "unexpected pointer encoding 0x" +
                                Twine::utohexstr(pointerEnc));
       break;
@@ -1471,7 +1488,7 @@ void ObjFile::registerEhFrames(Section &ehFrameSection) {
     else if (isec->symbols[0]->value != 0)
       fatal("found symbol at unexpected offset in __eh_frame");
 
-    EhReader reader(this, isec->data, subsec.offset, target->wordSize);
+    EhReader reader(this, isec->data, subsec.offset);
     size_t dataOff = 0; // Offset from the start of the EH frame.
     reader.skipValidLength(&dataOff); // readLength() already validated this.
     // cieOffOff is the offset from the start of the EH frame to the cieOff
@@ -1510,20 +1527,20 @@ void ObjFile::registerEhFrames(Section &ehFrameSection) {
       continue;
     }
 
-    // Offset of the function address within the EH frame.
-    const size_t funcAddrOff = dataOff;
-    uint64_t funcAddr = reader.readPointer(&dataOff) + ehFrameSection.addr +
-                        isecOff + funcAddrOff;
-    uint32_t funcLength = reader.readPointer(&dataOff);
-    size_t lsdaAddrOff = 0; // Offset of the LSDA address within the EH frame.
     assert(cieMap.count(cieIsec));
     const CIE &cie = cieMap[cieIsec];
+    // Offset of the function address within the EH frame.
+    const size_t funcAddrOff = dataOff;
+    uint64_t funcAddr = reader.readPointer(&dataOff, cie.funcPtrSize) +
+                        ehFrameSection.addr + isecOff + funcAddrOff;
+    uint32_t funcLength = reader.readPointer(&dataOff, cie.funcPtrSize);
+    size_t lsdaAddrOff = 0; // Offset of the LSDA address within the EH frame.
     Optional<uint64_t> lsdaAddrOpt;
     if (cie.fdesHaveAug) {
       reader.skipLeb128(&dataOff);
       lsdaAddrOff = dataOff;
-      if (cie.fdesHaveLsda) {
-        uint64_t lsdaOff = reader.readPointer(&dataOff);
+      if (cie.lsdaPtrSize != 0) {
+        uint64_t lsdaOff = reader.readPointer(&dataOff, cie.lsdaPtrSize);
         if (lsdaOff != 0) // FIXME possible to test this?
           lsdaAddrOpt = ehFrameSection.addr + isecOff + lsdaAddrOff + lsdaOff;
       }
@@ -1928,14 +1945,15 @@ DylibFile::DylibFile(const InterfaceFile &interface, DylibFile *umbrella,
   checkAppExtensionSafety(interface.isApplicationExtensionSafe());
 
   exportingFile = isImplicitlyLinked(installName) ? this : umbrella;
-  auto addSymbol = [&](const Twine &name) -> void {
+  auto addSymbol = [&](const llvm::MachO::Symbol &symbol,
+                       const Twine &name) -> void {
     StringRef savedName = saver().save(name);
     if (exportingFile->hiddenSymbols.contains(CachedHashStringRef(savedName)))
       return;
 
     symbols.push_back(symtab->addDylib(savedName, exportingFile,
-                                       /*isWeakDef=*/false,
-                                       /*isTlv=*/false));
+                                       symbol.isWeakDefined(),
+                                       symbol.isThreadLocalValue()));
   };
 
   std::vector<const llvm::MachO::Symbol *> normalSymbols;
@@ -1947,32 +1965,31 @@ DylibFile::DylibFile(const InterfaceFile &interface, DylibFile *umbrella,
       continue;
 
     switch (symbol->getKind()) {
-    case SymbolKind::GlobalSymbol:               // Fallthrough
-    case SymbolKind::ObjectiveCClass:            // Fallthrough
-    case SymbolKind::ObjectiveCClassEHType:      // Fallthrough
-    case SymbolKind::ObjectiveCInstanceVariable: // Fallthrough
+    case SymbolKind::GlobalSymbol:
+    case SymbolKind::ObjectiveCClass:
+    case SymbolKind::ObjectiveCClassEHType:
+    case SymbolKind::ObjectiveCInstanceVariable:
       normalSymbols.push_back(symbol);
     }
   }
 
   // TODO(compnerd) filter out symbols based on the target platform
-  // TODO: handle weak defs, thread locals
   for (const auto *symbol : normalSymbols) {
     switch (symbol->getKind()) {
     case SymbolKind::GlobalSymbol:
-      addSymbol(symbol->getName());
+      addSymbol(*symbol, symbol->getName());
       break;
     case SymbolKind::ObjectiveCClass:
       // XXX ld64 only creates these symbols when -ObjC is passed in. We may
       // want to emulate that.
-      addSymbol(objc::klass + symbol->getName());
-      addSymbol(objc::metaclass + symbol->getName());
+      addSymbol(*symbol, objc::klass + symbol->getName());
+      addSymbol(*symbol, objc::metaclass + symbol->getName());
       break;
     case SymbolKind::ObjectiveCClassEHType:
-      addSymbol(objc::ehtype + symbol->getName());
+      addSymbol(*symbol, objc::ehtype + symbol->getName());
       break;
     case SymbolKind::ObjectiveCInstanceVariable:
-      addSymbol(objc::ivar + symbol->getName());
+      addSymbol(*symbol, objc::ivar + symbol->getName());
       break;
     }
   }

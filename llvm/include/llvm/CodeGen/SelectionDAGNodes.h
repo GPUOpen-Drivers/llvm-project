@@ -122,6 +122,9 @@ bool isBuildVectorOfConstantFPSDNodes(const SDNode *N);
 /// specified node are ISD::UNDEF.
 bool allOperandsUndef(const SDNode *N);
 
+/// Return true if the specified node is FREEZE(UNDEF).
+bool isFreezeUndef(const SDNode *N);
+
 } // end namespace ISD
 
 //===----------------------------------------------------------------------===//
@@ -2081,8 +2084,8 @@ public:
   bool isConstant() const;
 
   /// If this BuildVector is constant and represents the numerical series
-  /// `<a, a+n, a+2n, a+3n, ...>` where a is integer and n is a non-zero integer,
-  /// the value `<a,n>` is returned.
+  /// "<a, a+n, a+2n, a+3n, ...>" where a is integer and n is a non-zero integer,
+  /// the value "<a,n>" is returned.
   Optional<std::pair<APInt, APInt>> isConstantSequence() const;
 
   /// Recast bit data \p SrcBitElements to \p DstEltSizeInBits wide elements.

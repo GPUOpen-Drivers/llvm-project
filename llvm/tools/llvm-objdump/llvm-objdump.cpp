@@ -690,14 +690,14 @@ public:
           OS << ' '
              << format_hex_no_prefix(
                     llvm::support::endian::read<uint16_t>(
-                        Bytes.data() + Pos, llvm::support::little),
+                        Bytes.data() + Pos, InstructionEndianness),
                     4);
       } else {
         for (; Pos + 4 <= End; Pos += 4)
           OS << ' '
              << format_hex_no_prefix(
                     llvm::support::endian::read<uint32_t>(
-                        Bytes.data() + Pos, llvm::support::little),
+                        Bytes.data() + Pos, InstructionEndianness),
                     8);
       }
       if (Pos < End) {
@@ -713,6 +713,13 @@ public:
     } else
       OS << "\t<unknown>";
   }
+
+  void setInstructionEndianness(llvm::support::endianness Endianness) {
+    InstructionEndianness = Endianness;
+  }
+
+private:
+  llvm::support::endianness InstructionEndianness = llvm::support::little;
 };
 ARMPrettyPrinter ARMPrettyPrinterInst;
 
@@ -1852,6 +1859,29 @@ static void disassembleObject(ObjectFile *Obj, bool InlineRelocs) {
   if (MCPU.empty())
     MCPU = Obj->tryGetCPUName().value_or("").str();
 
+  if (isArmElf(*Obj)) {
+    // When disassembling big-endian Arm ELF, the instruction endianness is
+    // determined in a complex way. In relocatable objects, AAELF32 mandates
+    // that instruction endianness matches the ELF file endianness; in
+    // executable images, that's true unless the file header has the EF_ARM_BE8
+    // flag, in which case instructions are little-endian regardless of data
+    // endianness.
+    //
+    // We must set the big-endian-instructions SubtargetFeature to make the
+    // disassembler read the instructions the right way round, and also tell
+    // our own prettyprinter to retrieve the encodings the same way to print in
+    // hex.
+    const auto *Elf32BE = dyn_cast<ELF32BEObjectFile>(Obj);
+
+    if (Elf32BE && (Elf32BE->isRelocatableObject() ||
+                    !(Elf32BE->getPlatformFlags() & ELF::EF_ARM_BE8))) {
+      Features.AddFeature("+big-endian-instructions");
+      ARMPrettyPrinterInst.setInstructionEndianness(llvm::support::big);
+    } else {
+      ARMPrettyPrinterInst.setInstructionEndianness(llvm::support::little);
+    }
+  }
+
   std::unique_ptr<const MCSubtargetInfo> STI(
       TheTarget->createMCSubtargetInfo(TripleName, MCPU, Features.getString()));
   if (!STI)
@@ -2757,6 +2787,9 @@ static void parseOtoolOptions(const llvm::opt::InputArgList &InputArgs) {
     FilterSections.push_back(",__text");
   LeadingAddr = LeadingHeaders = !InputArgs.hasArg(OTOOL_X);
 
+  ChainedFixups = InputArgs.hasArg(OTOOL_chained_fixups);
+  DyldInfo = InputArgs.hasArg(OTOOL_dyld_info);
+
   InputFilenames = InputArgs.getAllArgValues(OTOOL_INPUT);
   if (InputFilenames.empty())
     reportCmdLineError("no input file");
@@ -2960,11 +2993,12 @@ int main(int argc, char **argv) {
       !DynamicRelocations && !FileHeaders && !PrivateHeaders && !RawClangAST &&
       !Relocations && !SectionHeaders && !SectionContents && !SymbolTable &&
       !DynamicSymbolTable && !UnwindInfo && !FaultMapSection && !Offloading &&
-      !(MachOOpt && (Bind || DataInCode || DyldInfo || DylibId || DylibsUsed ||
-                     ExportsTrie || FirstPrivateHeader || FunctionStarts ||
-                     IndirectSymbols || InfoPlist || LazyBind || LinkOptHints ||
-                     ObjcMetaData || Rebase || Rpaths || UniversalHeaders ||
-                     WeakBind || !FilterSections.empty()))) {
+      !(MachOOpt &&
+        (Bind || DataInCode || ChainedFixups || DyldInfo || DylibId ||
+         DylibsUsed || ExportsTrie || FirstPrivateHeader || FunctionStarts ||
+         IndirectSymbols || InfoPlist || LazyBind || LinkOptHints ||
+         ObjcMetaData || Rebase || Rpaths || UniversalHeaders || WeakBind ||
+         !FilterSections.empty()))) {
     T->printHelp(ToolName);
     return 2;
   }

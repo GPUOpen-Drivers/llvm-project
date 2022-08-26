@@ -4341,7 +4341,7 @@ MachineBasicBlock *SITargetLowering::EmitInstrWithCustomInserter(
   case AMDGPU::DS_GWS_SEMA_BR:
   case AMDGPU::DS_GWS_BARRIER:
     TII->enforceOperandRCAlignment(MI, AMDGPU::OpName::data0);
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case AMDGPU::DS_GWS_SEMA_V:
   case AMDGPU::DS_GWS_SEMA_P:
   case AMDGPU::DS_GWS_SEMA_RELEASE_ALL:
@@ -6635,8 +6635,7 @@ SDValue SITargetLowering::lowerImage(SDValue Op,
       Opcode = AMDGPU::getMIMGOpcode(IntrOpcode, AMDGPU::MIMGEncGfx90a,
                                      NumVDataDwords, NumVAddrDwords);
       if (Opcode == -1)
-        report_fatal_error(
-            "requested image instruction is not supported on this GPU");
+        return makeV_ILLEGAL(Op, DAG);
     }
     if (Opcode == -1 &&
         Subtarget->getGeneration() >= AMDGPUSubtarget::VOLCANIC_ISLANDS)
@@ -7833,7 +7832,7 @@ SDValue SITargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op,
       DAG.getContext()->diagnose(NoFpRet);
       return SDValue();
     }
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   case Intrinsic::amdgcn_global_atomic_fmin:
   case Intrinsic::amdgcn_global_atomic_fmax:
   case Intrinsic::amdgcn_flat_atomic_fadd:
@@ -7848,6 +7847,9 @@ SDValue SITargetLowering::LowerINTRINSIC_W_CHAIN(SDValue Op,
     unsigned Opcode = 0;
     switch (IntrID) {
     case Intrinsic::amdgcn_global_atomic_fadd:
+      if (!Subtarget->hasAtomicFaddNoRtnInsts())
+        return makeV_ILLEGAL(Op, DAG);
+      [[fallthrough]];
     case Intrinsic::amdgcn_flat_atomic_fadd: {
       EVT VT = Op.getOperand(3).getValueType();
       return DAG.getAtomic(ISD::ATOMIC_LOAD_FADD, DL, VT,
@@ -8412,6 +8414,27 @@ SDValue SITargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     return Op;
   }
   }
+}
+
+SDValue SITargetLowering::makeV_ILLEGAL(SDValue Op, SelectionDAG & DAG) const {
+  // Create the V_ILLEGAL node.
+  SDLoc DL(Op);
+  auto Opcode = Subtarget->getGeneration() < AMDGPUSubtarget::GFX10 ?
+    AMDGPU::V_ILLEGAL_gfx6_gfx7_gfx8_gfx9 : AMDGPU::V_ILLEGAL;
+  auto EntryNode = DAG.getEntryNode();
+  auto IllegalNode = DAG.getMachineNode(Opcode, DL, MVT::Other, EntryNode);
+  auto IllegalVal = SDValue(IllegalNode, 0u);
+
+  // Add the V_ILLEGAL node to the root chain to prevent its removal.
+  auto Chains = SmallVector<SDValue, 2u>();
+  Chains.push_back(IllegalVal);
+  Chains.push_back(DAG.getRoot());
+  auto Root = DAG.getTokenFactor(SDLoc(Chains.back()), Chains);
+  DAG.setRoot(Root);
+
+  // Merge with UNDEF to satisfy return value requirements.
+  auto UndefVal = DAG.getUNDEF(Op.getValueType());
+  return DAG.getMergeValues({UndefVal, IllegalVal}, DL);
 }
 
 // The raw.(t)buffer and struct.(t)buffer intrinsics have two offset args:
@@ -10169,7 +10192,7 @@ bool SITargetLowering::isCanonicalized(SelectionDAG &DAG, SDValue Op,
       break;
     }
 
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   }
   default:
     return denormalsEnabledForType(DAG, Op.getValueType()) &&
@@ -11555,7 +11578,7 @@ SDValue SITargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::LOAD: {
     if (SDValue Widended = widenLoad(cast<LoadSDNode>(N), DCI))
       return Widended;
-    LLVM_FALLTHROUGH;
+    [[fallthrough]];
   }
   default: {
     if (!DCI.isBeforeLegalize()) {
@@ -12887,7 +12910,7 @@ static bool hasCFUser(const Value *V, SmallPtrSet<const Value *, 16> &Visited,
   if (!Visited.insert(V).second)
     return false;
   bool Result = false;
-  for (auto U : V->users()) {
+  for (const auto *U : V->users()) {
     if (const IntrinsicInst *Intrinsic = dyn_cast<IntrinsicInst>(U)) {
       if (V == U->getOperand(1)) {
         switch (Intrinsic->getIntrinsicID()) {
