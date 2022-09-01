@@ -290,20 +290,37 @@ struct ExtractSliceOpInterface
         getBuffer(rewriter, extractSliceOp.getSource(), options);
     if (failed(srcMemref))
       return failure();
-    auto srcMemrefType = srcMemref->getType().cast<MemRefType>();
 
     // Take a subview of the source buffer.
-    auto subviewMemRefType =
-        memref::SubViewOp::inferRankReducedResultType(
-            extractSliceOp.getType().getShape(), srcMemrefType, mixedOffsets,
-            mixedSizes, mixedStrides)
-            .cast<MemRefType>();
+    auto resultMemrefType =
+        bufferization::getBufferType(extractSliceOp.getResult(), options);
+    if (failed(resultMemrefType))
+      return failure();
     Value subView = rewriter.create<memref::SubViewOp>(
-        loc, subviewMemRefType, *srcMemref, mixedOffsets, mixedSizes,
-        mixedStrides);
+        loc, resultMemrefType->cast<MemRefType>(), *srcMemref, mixedOffsets,
+        mixedSizes, mixedStrides);
 
     replaceOpWithBufferizedValues(rewriter, op, subView);
     return success();
+  }
+
+  FailureOr<BaseMemRefType>
+  getBufferType(Operation *op, Value value, const BufferizationOptions &options,
+                const DenseMap<Value, BaseMemRefType> &fixedTypes) const {
+    auto extractSliceOp = cast<tensor::ExtractSliceOp>(op);
+    assert(value == extractSliceOp.getResult() && "invalid value");
+    auto srcMemrefType = bufferization::getBufferType(
+        extractSliceOp.getSource(), options, fixedTypes);
+    if (failed(srcMemrefType))
+      return failure();
+    SmallVector<OpFoldResult> mixedOffsets = extractSliceOp.getMixedOffsets();
+    SmallVector<OpFoldResult> mixedSizes = extractSliceOp.getMixedSizes();
+    SmallVector<OpFoldResult> mixedStrides = extractSliceOp.getMixedStrides();
+    return memref::SubViewOp::inferRankReducedResultType(
+               extractSliceOp.getType().getShape(),
+               srcMemrefType->cast<MemRefType>(), mixedOffsets, mixedSizes,
+               mixedStrides)
+        .cast<BaseMemRefType>();
   }
 };
 
@@ -812,16 +829,10 @@ struct PadOpInterface
                                 generateOp.getBody().begin());
 
     // Create tensor::InsertSliceOp.
-    SmallVector<OpFoldResult> sliceSizes, sliceStrides;
-    for (int64_t i = 0; i < resultType.getRank(); ++i) {
-      sliceStrides.push_back(rewriter.getIndexAttr(1));
-      if (srcType.isDynamicDim(i)) {
-        Value size = rewriter.create<tensor::DimOp>(loc, padOp.getSource(), i);
-        sliceSizes.push_back(size);
-      } else {
-        sliceSizes.push_back(rewriter.getIndexAttr(srcType.getDimSize(i)));
-      }
-    }
+    SmallVector<OpFoldResult> sliceSizes =
+        getMixedSizes(rewriter, loc, padOp.getSource());
+    SmallVector<OpFoldResult> sliceStrides(srcType.getRank(),
+                                           rewriter.getIndexAttr(1));
     rewriter.replaceOpWithNewOp<tensor::InsertSliceOp>(
         padOp, padOp.getSource(), generateOp.getResult(),
         /*offsets=*/padOp.getMixedLowPad(), sliceSizes, sliceStrides);

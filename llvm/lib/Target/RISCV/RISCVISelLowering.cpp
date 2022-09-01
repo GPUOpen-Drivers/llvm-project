@@ -457,15 +457,12 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
         ISD::VP_ZERO_EXTEND, ISD::VP_TRUNCATE};
 
     static const unsigned FloatingPointVPOps[] = {
-        ISD::VP_FADD,        ISD::VP_FSUB,
-        ISD::VP_FMUL,        ISD::VP_FDIV,
-        ISD::VP_FNEG,        ISD::VP_FMA,
-        ISD::VP_REDUCE_FADD, ISD::VP_REDUCE_SEQ_FADD,
-        ISD::VP_REDUCE_FMIN, ISD::VP_REDUCE_FMAX,
-        ISD::VP_MERGE,       ISD::VP_SELECT,
-        ISD::VP_SINT_TO_FP,  ISD::VP_UINT_TO_FP,
-        ISD::VP_SETCC,       ISD::VP_FP_ROUND,
-        ISD::VP_FP_EXTEND};
+        ISD::VP_FADD,        ISD::VP_FSUB,        ISD::VP_FMUL,
+        ISD::VP_FDIV,        ISD::VP_FNEG,        ISD::VP_FABS,
+        ISD::VP_FMA,         ISD::VP_REDUCE_FADD, ISD::VP_REDUCE_SEQ_FADD,
+        ISD::VP_REDUCE_FMIN, ISD::VP_REDUCE_FMAX, ISD::VP_MERGE,
+        ISD::VP_SELECT,      ISD::VP_SINT_TO_FP,  ISD::VP_UINT_TO_FP,
+        ISD::VP_SETCC,       ISD::VP_FP_ROUND,    ISD::VP_FP_EXTEND};
 
     static const unsigned IntegerVecReduceOps[] = {
         ISD::VECREDUCE_ADD,  ISD::VECREDUCE_AND,  ISD::VECREDUCE_OR,
@@ -3795,6 +3792,8 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
     return lowerVPOp(Op, DAG, RISCVISD::FDIV_VL, /*HasMergeOp*/ true);
   case ISD::VP_FNEG:
     return lowerVPOp(Op, DAG, RISCVISD::FNEG_VL);
+  case ISD::VP_FABS:
+    return lowerVPOp(Op, DAG, RISCVISD::FABS_VL);
   case ISD::VP_FMA:
     return lowerVPOp(Op, DAG, RISCVISD::VFMADD_VL);
   case ISD::VP_SIGN_EXTEND:
@@ -8415,8 +8414,58 @@ static SDValue performSUBCombine(SDNode *N, SelectionDAG &DAG) {
   return combineSelectAndUse(N, N1, N0, DAG, /*AllOnes*/ false);
 }
 
-static SDValue performANDCombine(SDNode *N, SelectionDAG &DAG,
+// Apply DeMorgan's law to (and/or (xor X, 1), (xor Y, 1)) if X and Y are 0/1.
+// Legalizing setcc can introduce xors like this. Doing this transform reduces
+// the number of xors and may allow the xor to fold into a branch condition.
+static SDValue combineDeMorganOfBoolean(SDNode *N, SelectionDAG &DAG) {
+  SDValue N0 = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
+  bool IsAnd = N->getOpcode() == ISD::AND;
+
+  if (N0.getOpcode() != ISD::XOR || N1.getOpcode() != ISD::XOR)
+    return SDValue();
+
+  if (!N0.hasOneUse() || !N1.hasOneUse())
+    return SDValue();
+
+  SDValue N01 = N0.getOperand(1);
+  SDValue N11 = N1.getOperand(1);
+
+  // For AND, SimplifyDemandedBits may have turned one of the (xor X, 1) into
+  // (xor X, -1) based on the upper bits of the other operand being 0. If the
+  // operation is And, allow one of the Xors to use -1.
+  if (isOneConstant(N01)) {
+    if (!isOneConstant(N11) && !(IsAnd && isAllOnesConstant(N11)))
+      return SDValue();
+  } else if (isOneConstant(N11)) {
+    // N01 and N11 being 1 was already handled. Handle N11==1 and N01==-1.
+    if (!(IsAnd && isAllOnesConstant(N01)))
+      return SDValue();
+  } else
+    return SDValue();
+
+  EVT VT = N->getValueType(0);
+
+  SDValue N00 = N0.getOperand(0);
+  SDValue N10 = N1.getOperand(0);
+
+  // The LHS of the xors needs to be 0/1.
+  APInt Mask = APInt::getBitsSetFrom(VT.getSizeInBits(), 1);
+  if (!DAG.MaskedValueIsZero(N00, Mask) || !DAG.MaskedValueIsZero(N10, Mask))
+    return SDValue();
+
+  // Invert the opcode and insert a new xor.
+  SDLoc DL(N);
+  unsigned Opc = IsAnd ? ISD::OR : ISD::AND;
+  SDValue Logic = DAG.getNode(Opc, DL, VT, N00, N10);
+  return DAG.getNode(ISD::XOR, DL, VT, Logic, DAG.getConstant(1, DL, VT));
+}
+
+static SDValue performANDCombine(SDNode *N,
+                                 TargetLowering::DAGCombinerInfo &DCI,
                                  const RISCVSubtarget &Subtarget) {
+  SelectionDAG &DAG = DCI.DAG;
+
   SDValue N0 = N->getOperand(0);
   // Pre-promote (i32 (and (srl X, Y), 1)) on RV64 with Zbs without zero
   // extending X. This is safe since we only need the LSB after the shift and
@@ -8439,13 +8488,19 @@ static SDValue performANDCombine(SDNode *N, SelectionDAG &DAG,
   if (SDValue V = combineBinOpToReduce(N, DAG))
     return V;
 
+  if (DCI.isAfterLegalizeDAG())
+    if (SDValue V = combineDeMorganOfBoolean(N, DAG))
+      return V;
+
   // fold (and (select lhs, rhs, cc, -1, y), x) ->
   //      (select lhs, rhs, cc, x, (and x, y))
   return combineSelectAndUseCommutative(N, DAG, /*AllOnes*/ true);
 }
 
-static SDValue performORCombine(SDNode *N, SelectionDAG &DAG,
+static SDValue performORCombine(SDNode *N, TargetLowering::DAGCombinerInfo &DCI,
                                 const RISCVSubtarget &Subtarget) {
+  SelectionDAG &DAG = DCI.DAG;
+
   if (Subtarget.hasStdExtZbp()) {
     if (auto GREV = combineORToGREV(SDValue(N, 0), DAG, Subtarget))
       return GREV;
@@ -8457,6 +8512,11 @@ static SDValue performORCombine(SDNode *N, SelectionDAG &DAG,
 
   if (SDValue V = combineBinOpToReduce(N, DAG))
     return V;
+
+  if (DCI.isAfterLegalizeDAG())
+    if (SDValue V = combineDeMorganOfBoolean(N, DAG))
+      return V;
+
   // fold (or (select cond, 0, y), x) ->
   //      (select cond, x, (or x, y))
   return combineSelectAndUseCommutative(N, DAG, /*AllOnes*/ false);
@@ -9079,6 +9139,68 @@ static SDValue performSRACombine(SDNode *N, SelectionDAG &DAG,
       DAG.getConstant(32 - ShAmt, DL, MVT::i64));
 }
 
+// Invert (and/or (set cc X, Y), (xor Z, 1)) to (or/and (set !cc X, Y)), Z) if
+// the result is used as the conditon of a br_cc or select_cc we can invert,
+// inverting the setcc is free, and Z is 0/1. Caller will invert the
+// br_cc/select_cc.
+static SDValue tryDemorganOfBooleanCondition(SDValue Cond, SelectionDAG &DAG) {
+  bool IsAnd = Cond.getOpcode() == ISD::AND;
+  if (!IsAnd && Cond.getOpcode() != ISD::OR)
+    return SDValue();
+
+  if (!Cond.hasOneUse())
+    return SDValue();
+
+  SDValue Setcc = Cond.getOperand(0);
+  SDValue Xor = Cond.getOperand(1);
+  // Canonicalize setcc to LHS.
+  if (Setcc.getOpcode() != ISD::SETCC)
+    std::swap(Setcc, Xor);
+  // LHS should be a setcc and RHS should be an xor.
+  if (Setcc.getOpcode() != ISD::SETCC || !Setcc.hasOneUse() ||
+      Xor.getOpcode() != ISD::XOR || !Xor.hasOneUse())
+    return SDValue();
+
+  // If the condition is an And, SimplifyDemandedBits may have changed
+  // (xor Z, 1) to (not Z).
+  SDValue Xor1 = Xor.getOperand(1);
+  if (!isOneConstant(Xor1) && !(IsAnd && isAllOnesConstant(Xor1)))
+    return SDValue();
+
+  EVT VT = Cond.getValueType();
+  SDValue Xor0 = Xor.getOperand(0);
+
+  // The LHS of the xor needs to be 0/1.
+  APInt Mask = APInt::getBitsSetFrom(VT.getSizeInBits(), 1);
+  if (!DAG.MaskedValueIsZero(Xor0, Mask))
+    return SDValue();
+
+  // We can only invert integer setccs.
+  EVT SetCCOpVT = Setcc.getOperand(0).getValueType();
+  if (!SetCCOpVT.isScalarInteger())
+    return SDValue();
+
+  ISD::CondCode CCVal = cast<CondCodeSDNode>(Setcc.getOperand(2))->get();
+  if (ISD::isIntEqualitySetCC(CCVal)) {
+    CCVal = ISD::getSetCCInverse(CCVal, SetCCOpVT);
+    Setcc = DAG.getSetCC(SDLoc(Setcc), VT, Setcc.getOperand(0),
+                         Setcc.getOperand(1), CCVal);
+  } else if (CCVal == ISD::SETLT && isNullConstant(Setcc.getOperand(0))) {
+    // Invert (setlt 0, X) by converting to (setlt X, 1).
+    Setcc = DAG.getSetCC(SDLoc(Setcc), VT, Setcc.getOperand(1),
+                         DAG.getConstant(1, SDLoc(Setcc), VT), CCVal);
+  } else if (CCVal == ISD::SETLT && isOneConstant(Setcc.getOperand(1))) {
+    // (setlt X, 1) by converting to (setlt 0, X).
+    Setcc = DAG.getSetCC(SDLoc(Setcc), VT,
+                         DAG.getConstant(0, SDLoc(Setcc), VT),
+                         Setcc.getOperand(0), CCVal);
+  } else
+    return SDValue();
+
+  unsigned Opc = IsAnd ? ISD::OR : ISD::AND;
+  return DAG.getNode(Opc, SDLoc(Cond), VT, Setcc, Xor.getOperand(0));
+}
+
 // Perform common combines for BR_CC and SELECT_CC condtions.
 static bool combine_CC(SDValue &LHS, SDValue &RHS, SDValue &CC, const SDLoc &DL,
                        SelectionDAG &DAG, const RISCVSubtarget &Subtarget) {
@@ -9143,6 +9265,15 @@ static bool combine_CC(SDValue &LHS, SDValue &RHS, SDValue &CC, const SDLoc &DL,
     CC = DAG.getCondCode(CCVal);
     RHS = DAG.getConstant(0, DL, LHS.getValueType());
     return true;
+  }
+
+  if (isNullConstant(RHS)) {
+    if (SDValue NewCond = tryDemorganOfBooleanCondition(LHS, DAG)) {
+      CCVal = ISD::getSetCCInverse(CCVal, LHS.getValueType());
+      CC = DAG.getCondCode(CCVal);
+      LHS = NewCond;
+      return true;
+    }
   }
 
   return false;
@@ -9349,9 +9480,9 @@ SDValue RISCVTargetLowering::PerformDAGCombine(SDNode *N,
   case ISD::SUB:
     return performSUBCombine(N, DAG);
   case ISD::AND:
-    return performANDCombine(N, DAG, Subtarget);
+    return performANDCombine(N, DCI, Subtarget);
   case ISD::OR:
-    return performORCombine(N, DAG, Subtarget);
+    return performORCombine(N, DCI, Subtarget);
   case ISD::XOR:
     return performXORCombine(N, DAG);
   case ISD::FADD:

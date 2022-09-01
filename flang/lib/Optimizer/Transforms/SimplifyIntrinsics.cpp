@@ -22,7 +22,6 @@
 /// and small in size.
 //===----------------------------------------------------------------------===//
 
-#include "PassDetail.h"
 #include "flang/Optimizer/Builder/BoxValue.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Builder/Todo.h"
@@ -30,6 +29,7 @@
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Support/FIRContext.h"
 #include "flang/Optimizer/Transforms/Passes.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/Pass.h"
@@ -40,12 +40,17 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+namespace fir {
+#define GEN_PASS_DEF_SIMPLIFYINTRINSICS
+#include "flang/Optimizer/Transforms/Passes.h.inc"
+} // namespace fir
+
 #define DEBUG_TYPE "flang-simplify-intrinsics"
 
 namespace {
 
 class SimplifyIntrinsicsPass
-    : public fir::SimplifyIntrinsicsBase<SimplifyIntrinsicsPass> {
+    : public fir::impl::SimplifyIntrinsicsBase<SimplifyIntrinsicsPass> {
   using FunctionTypeGeneratorTy =
       std::function<mlir::FunctionType(fir::FirOpBuilder &)>;
   using FunctionBodyGeneratorTy =
@@ -444,9 +449,7 @@ void SimplifyIntrinsicsPass::runOnOperation() {
         // RTNAME(Sum<T>)(const Descriptor &x, const char *source, int line,
         //                int dim, const Descriptor *mask)
         //
-        // Disable SUM inlining by default, because it fatally fails on some
-        // FIR yet.
-        if (enableExperimental && funcName.startswith("_FortranASum")) {
+        if (funcName.startswith("_FortranASum")) {
           mlir::Operation::operand_range args = call.getArgs();
           // args[1] and args[2] are source filename and line number, ignored.
           const mlir::Value &dim = args[3];

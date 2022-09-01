@@ -4347,6 +4347,7 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
                   CB->hasFnAttr("no_caller_saved_registers"));
   bool HasNoCfCheck = (CB && CB->doesNoCfCheck());
   bool IsIndirectCall = (CB && isa<CallInst>(CB) && CB->isIndirectCall());
+  bool IsCFICall = IsIndirectCall && CLI.CFIType;
   const Module *M = MF.getMMI().getModule();
   Metadata *IsCFProtectionSupported = M->getModuleFlag("cf-protection-branch");
 
@@ -4838,6 +4839,10 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     // function making a tail call to a function returning int.
     MF.getFrameInfo().setHasTailCall();
     SDValue Ret = DAG.getNode(X86ISD::TC_RETURN, dl, NodeTys, Ops);
+
+    if (IsCFICall)
+      Ret.getNode()->setCFIType(CLI.CFIType->getZExtValue());
+
     DAG.addCallSiteInfo(Ret.getNode(), std::move(CSInfo));
     return Ret;
   }
@@ -4862,6 +4867,9 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   } else {
     Chain = DAG.getNode(X86ISD::CALL, dl, NodeTys, Ops);
   }
+
+  if (IsCFICall)
+    Chain.getNode()->setCFIType(CLI.CFIType->getZExtValue());
 
   InFlag = Chain.getValue(1);
   DAG.addNoMergeSiteInfo(Chain.getNode(), CLI.NoMerge);
@@ -36247,7 +36255,7 @@ X86TargetLowering::EmitSjLjDispatchBlock(MachineInstr &MI,
     SmallVector<MachineBasicBlock *, 8> Successors(MBB->succ_rbegin(),
                                                    MBB->succ_rend());
     // FIXME: Avoid quadratic complexity.
-    for (auto MBBS : Successors) {
+    for (auto *MBBS : Successors) {
       if (MBBS->isEHPad()) {
         MBB->removeSuccessor(MBBS);
         MBBLPads.push_back(MBBS);
@@ -42196,6 +42204,21 @@ SDValue X86TargetLowering::SimplifyMultipleUseDemandedBitsForTargetNode(
         ISD::isBuildVectorAllZeros(Op.getOperand(0).getNode()))
       return Op.getOperand(1);
     break;
+  case X86ISD::ANDNP: {
+    // ANDNP = (~LHS & RHS);
+    SDValue LHS = Op.getOperand(0);
+    SDValue RHS = Op.getOperand(1);
+
+    KnownBits LHSKnown = DAG.computeKnownBits(LHS, DemandedElts, Depth + 1);
+    KnownBits RHSKnown = DAG.computeKnownBits(RHS, DemandedElts, Depth + 1);
+
+    // If all of the demanded bits are known 0 on LHS and known 0 on RHS, then
+    // the (inverted) LHS bits cannot contribute to the result of the 'andn' in
+    // this context, so return RHS.
+    if (DemandedBits.isSubsetOf(RHSKnown.Zero | LHSKnown.Zero))
+      return RHS;
+    break;
+  }
   }
 
   APInt ShuffleUndef, ShuffleZero;
@@ -49064,10 +49087,10 @@ static SDValue detectAVGPattern(SDValue In, EVT VT, SelectionDAG &DAG,
 
   // Now we have three operands of two additions. Check that one of them is a
   // constant vector with ones, and the other two can be promoted from i8/i16.
-  for (int i = 0; i < 3; ++i) {
-    if (!IsConstVectorInRange(Operands[i], 1, 1))
+  for (SDValue &Op : Operands) {
+    if (!IsConstVectorInRange(Op, 1, 1))
       continue;
-    std::swap(Operands[i], Operands[2]);
+    std::swap(Op, Operands[2]);
 
     // Check if Operands[0] and Operands[1] are results of type promotion.
     for (int j = 0; j < 2; ++j)
@@ -53963,7 +53986,7 @@ static SDValue combineConcatVectorOps(const SDLoc &DL, MVT VT,
     return getZeroVector(VT, Subtarget, DAG, DL);
 
   SDValue Op0 = Ops[0];
-  bool IsSplat = llvm::all_of(Ops, [&Op0](SDValue Op) { return Op == Op0; });
+  bool IsSplat = llvm::all_equal(Ops);
 
   // Repeated subvectors.
   if (IsSplat &&

@@ -1153,6 +1153,12 @@ static mlir::FunctionType genF32IntF32FuncType(mlir::MLIRContext *context) {
   return mlir::FunctionType::get(context, {itype, ftype}, {ftype});
 }
 
+template <int Bits>
+static mlir::FunctionType genIntIntIntFuncType(mlir::MLIRContext *context) {
+  auto itype = mlir::IntegerType::get(context, Bits);
+  return mlir::FunctionType::get(context, {itype, itype}, {itype});
+}
+
 /// Callback type for generating lowering for a math operation.
 using MathGeneratorTy = mlir::Value (*)(fir::FirOpBuilder &, mlir::Location,
                                         llvm::StringRef, mlir::FunctionType,
@@ -1220,7 +1226,12 @@ static mlir::Value genMathOp(fir::FirOpBuilder &builder, mlir::Location loc,
   //           can be also lowered to libm calls for "fast" and "relaxed"
   //           modes.
   mlir::Value result;
-  if (mathRuntimeVersion == preciseVersion) {
+  if (mathRuntimeVersion == preciseVersion &&
+      // Some operations do not have to be lowered as conservative
+      // calls, since they do not affect strict FP behavior.
+      // For example, purely integer operations like exponentiation
+      // with integer operands fall into this class.
+      !mathLibFuncName.empty()) {
     result = genLibCall(builder, loc, mathLibFuncName, mathLibFuncType, args);
   } else {
     LLVM_DEBUG(llvm::dbgs() << "Generating '" << mathLibFuncName
@@ -1310,6 +1321,10 @@ static constexpr MathOperation mathOperations[] = {
     {"nint", "llvm.lround.i64.f32", genIntF32FuncType<64>, genLibCall},
     {"nint", "llvm.lround.i32.f64", genIntF64FuncType<32>, genLibCall},
     {"nint", "llvm.lround.i32.f32", genIntF32FuncType<32>, genLibCall},
+    {"pow", {}, genIntIntIntFuncType<8>, genMathOp<mlir::math::IPowIOp>},
+    {"pow", {}, genIntIntIntFuncType<16>, genMathOp<mlir::math::IPowIOp>},
+    {"pow", {}, genIntIntIntFuncType<32>, genMathOp<mlir::math::IPowIOp>},
+    {"pow", {}, genIntIntIntFuncType<64>, genMathOp<mlir::math::IPowIOp>},
     {"pow", "powf", genF32F32F32FuncType, genMathOp<mlir::math::PowFOp>},
     {"pow", "pow", genF64F64F64FuncType, genMathOp<mlir::math::PowFOp>},
     // TODO: add PowIOp in math and complex dialects.
@@ -4102,13 +4117,13 @@ static mlir::Value computeLBOUND(fir::FirOpBuilder &builder, mlir::Location loc,
   return builder.create<mlir::arith::SelectOp>(loc, dimIsEmpty, one, lb);
 }
 
-/// Create a fir.box to be passed to the LBOUND runtime.
+/// Create a fir.box to be passed to the LBOUND/UBOUND runtime.
 /// This ensure that local lower bounds of assumed shape are propagated and that
 /// a fir.box with equivalent LBOUNDs but an explicit shape is created for
 /// assumed size arrays to avoid undefined behaviors in codegen or the runtime.
-static mlir::Value createBoxForLBOUND(mlir::Location loc,
-                                      fir::FirOpBuilder &builder,
-                                      const fir::ExtendedValue &array) {
+static mlir::Value
+createBoxForRuntimeBoundInquiry(mlir::Location loc, fir::FirOpBuilder &builder,
+                                const fir::ExtendedValue &array) {
   if (!array.isAssumedSize())
     return array.match(
         [&](const fir::BoxValue &boxValue) -> mlir::Value {
@@ -4202,7 +4217,7 @@ IntrinsicLibrary::genLbound(mlir::Type resultType,
     return builder.createConvert(loc, resultType, lb);
   }
 
-  fir::ExtendedValue box = createBoxForLBOUND(loc, builder, array);
+  fir::ExtendedValue box = createBoxForRuntimeBoundInquiry(loc, builder, array);
   return builder.createConvert(
       loc, resultType,
       fir::runtime::genLboundDim(builder, loc, fir::getBase(box), dim));
@@ -4236,8 +4251,9 @@ IntrinsicLibrary::genUbound(mlir::Type resultType,
     mlir::Value resultIrBox =
         fir::factory::getMutableIRBox(builder, loc, resultMutableBox);
 
-    fir::runtime::genUbound(builder, loc, resultIrBox, fir::getBase(args[0]),
-                            kind);
+    fir::ExtendedValue box =
+        createBoxForRuntimeBoundInquiry(loc, builder, args[0]);
+    fir::runtime::genUbound(builder, loc, resultIrBox, fir::getBase(box), kind);
 
     return readAndAddCleanUp(resultMutableBox, resultType, "UBOUND");
   }

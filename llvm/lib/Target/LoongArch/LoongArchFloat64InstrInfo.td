@@ -198,10 +198,12 @@ def : PatFPSelectcc<SETUO,  FCMP_CUN_D,  FSEL_D, FPR64>;
 /// Loads
 
 defm : LdPat<load, FLD_D, f64>;
+def : RegRegLdPat<load, FLDX_D, f64>;
 
 /// Stores
 
 defm : StPat<store, FST_D, FPR64, f64>;
+def : RegRegStPat<store, FSTX_D, FPR64, f64>;
 
 /// FP conversion operations
 
@@ -213,6 +215,9 @@ def : Pat<(loongarch_ftint FPR32:$src), (FTINTRZ_L_S FPR32:$src)>;
 def : Pat<(f32 (fpround FPR64:$src)), (FCVT_S_D FPR64:$src)>;
 // f32 -> f64
 def : Pat<(f64 (fpextend FPR32:$src)), (FCVT_D_S FPR32:$src)>;
+
+// FP reciprocal operation
+def : Pat<(fdiv fpimm1, FPR64:$src), (FRECIP_D $src)>;
 } // Predicates = [HasBasicD]
 
 /// Floating point constants
