@@ -148,11 +148,17 @@ def : PatFprFpr<fadd, FADD_D, FPR64>;
 def : PatFprFpr<fsub, FSUB_D, FPR64>;
 def : PatFprFpr<fmul, FMUL_D, FPR64>;
 def : PatFprFpr<fdiv, FDIV_D, FPR64>;
+def : PatFprFpr<fcopysign, FCOPYSIGN_D, FPR64>;
 def : PatFpr<fneg, FNEG_D, FPR64>;
 def : PatFpr<fabs, FABS_D, FPR64>;
 def : PatFpr<fsqrt, FSQRT_D, FPR64>;
 
 def : Pat<(fdiv fpimm1, (fsqrt FPR64:$fj)), (FRSQRT_D FPR64:$fj)>;
+
+def : Pat<(fcopysign FPR64:$fj, FPR32:$fk),
+          (FCOPYSIGN_D FPR64:$fj, (FCVT_D_S FPR32:$fk))>;
+def : Pat<(fcopysign FPR32:$fj, FPR64:$fk),
+          (FCOPYSIGN_S FPR32:$fj, (FCVT_S_D FPR64:$fk))>;
 
 /// Setcc
 
@@ -174,6 +180,18 @@ def : PatFPSetcc<SETULE, FCMP_CULE_D, FPR64>;
 def : PatFPSetcc<SETUNE, FCMP_CUNE_D, FPR64>;
 def : PatFPSetcc<SETUO,  FCMP_CUN_D,  FPR64>;
 def : PatFPSetcc<SETLT,  FCMP_CLT_D,  FPR64>;
+
+defm : PatFPBrcond<SETOEQ, FCMP_CEQ_D, FPR64>;
+defm : PatFPBrcond<SETOLT, FCMP_CLT_D, FPR64>;
+defm : PatFPBrcond<SETOLE, FCMP_CLE_D, FPR64>;
+defm : PatFPBrcond<SETONE, FCMP_CNE_D, FPR64>;
+defm : PatFPBrcond<SETO,   FCMP_COR_D, FPR64>;
+defm : PatFPBrcond<SETUEQ, FCMP_CUEQ_D, FPR64>;
+defm : PatFPBrcond<SETULT, FCMP_CULT_D, FPR64>;
+defm : PatFPBrcond<SETULE, FCMP_CULE_D, FPR64>;
+defm : PatFPBrcond<SETUNE, FCMP_CUNE_D, FPR64>;
+defm : PatFPBrcond<SETUO,  FCMP_CUN_D, FPR64>;
+defm : PatFPBrcond<SETLT,  FCMP_CLT_D, FPR64>;
 
 // TODO: Match signaling comparison strict_fsetccs with FCMP_S*_D instructions.
 

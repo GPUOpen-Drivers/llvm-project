@@ -1,6 +1,4 @@
-any
 atomic
-chrono
 climits
 cmath
 compare
@@ -13,15 +11,11 @@ ctime
 exception
 initializer_list
 iosfwd
-iterator
 limits
-memory
 new
 ratio
 stdexcept
 tuple
 type_traits
 typeinfo
-utility
-variant
 version

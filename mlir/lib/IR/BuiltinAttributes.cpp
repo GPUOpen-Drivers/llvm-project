@@ -435,8 +435,14 @@ LogicalResult IntegerAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                          << value.getBitWidth() << ")";
     return success();
   }
-  if (type.isa<IndexType>())
+  if (type.isa<IndexType>()) {
+    if (value.getBitWidth() != IndexType::kInternalStorageBitWidth)
+      return emitError()
+             << "value bit width (" << value.getBitWidth()
+             << ") doesn't match index type internal storage bit width ("
+             << IndexType::kInternalStorageBitWidth << ")";
     return success();
+  }
   return emitError() << "expected integer or index type";
 }
 
@@ -1520,7 +1526,12 @@ static ShapedType mappingHelper(Fn mapping, Attr &attr, ShapedType inType,
 
   // Check for the splat case.
   if (attr.isSplat()) {
-    processElt(*attr.begin(), /*index=*/0);
+    if (bitWidth == 1) {
+      // Handle the special encoding of splat of bool.
+      data[0] = mapping(*attr.begin()).isZero() ? 0 : -1;
+    } else {
+      processElt(*attr.begin(), /*index=*/0);
+    }
     return newArrayType;
   }
 

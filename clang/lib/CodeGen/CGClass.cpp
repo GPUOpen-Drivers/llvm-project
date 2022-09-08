@@ -1649,6 +1649,29 @@ namespace {
     }
   };
 
+  class DeclAsInlineDebugLocation {
+    CGDebugInfo *DI;
+    llvm::MDNode *InlinedAt;
+    llvm::Optional<ApplyDebugLocation> Location;
+
+  public:
+    DeclAsInlineDebugLocation(CodeGenFunction &CGF, const NamedDecl &Decl)
+        : DI(CGF.getDebugInfo()) {
+      if (!DI)
+        return;
+      InlinedAt = DI->getInlinedAt();
+      DI->setInlinedAt(CGF.Builder.getCurrentDebugLocation());
+      Location.emplace(CGF, Decl.getLocation());
+    }
+
+    ~DeclAsInlineDebugLocation() {
+      if (!DI)
+        return;
+      Location.reset();
+      DI->setInlinedAt(InlinedAt);
+    }
+  };
+
   static void EmitSanitizerDtorCallback(
       CodeGenFunction &CGF, StringRef Name, llvm::Value *Ptr,
       llvm::Optional<CharUnits::QuantityType> PoisonSize = {}) {
@@ -1699,6 +1722,9 @@ namespace {
       if (!BaseSize.isPositive())
         return;
 
+      // Use the base class declaration location as inline DebugLocation. All
+      // fields of the class are destroyed.
+      DeclAsInlineDebugLocation InlineHere(CGF, *BaseClass);
       EmitSanitizerDtorFieldsCallback(CGF, Addr.getPointer(),
                                       BaseSize.getQuantity());
 
@@ -1748,6 +1774,9 @@ namespace {
       if (!PoisonSize.isPositive())
         return;
 
+      // Use the top field declaration location as inline DebugLocation.
+      DeclAsInlineDebugLocation InlineHere(
+          CGF, **std::next(Dtor->getParent()->field_begin(), StartIndex));
       EmitSanitizerDtorFieldsCallback(CGF, OffsetPtr, PoisonSize.getQuantity());
 
       // Prevent the current stack frame from disappearing from the stack trace.
@@ -2966,7 +2995,7 @@ void CodeGenFunction::EmitLambdaBlockInvokeBody() {
   CallArgs.add(RValue::get(ThisPtr.getPointer()), ThisType);
 
   // Add the rest of the parameters.
-  for (auto param : BD->parameters())
+  for (auto *param : BD->parameters())
     EmitDelegateCallArg(CallArgs, param, param->getBeginLoc());
 
   assert(!Lambda->isGenericLambda() &&
@@ -2986,7 +3015,7 @@ void CodeGenFunction::EmitLambdaDelegatingInvokeBody(const CXXMethodDecl *MD) {
   CallArgs.add(RValue::get(ThisPtr.getPointer()), ThisType);
 
   // Add the rest of the parameters.
-  for (auto Param : MD->parameters())
+  for (auto *Param : MD->parameters())
     EmitDelegateCallArg(CallArgs, Param, Param->getBeginLoc());
 
   const CXXMethodDecl *CallOp = Lambda->getLambdaCallOperator();

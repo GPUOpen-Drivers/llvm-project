@@ -474,9 +474,8 @@ static llvm::Optional<PublicSym32> FindPublicSym(const SegmentOffset &addr,
                                                  SymbolStream &syms,
                                                  PublicsStream &publics) {
   llvm::FixedStreamArray<ulittle32_t> addr_map = publics.getAddressMap();
-  auto iter = std::lower_bound(
-      addr_map.begin(), addr_map.end(), addr,
-      [&](const ulittle32_t &x, const SegmentOffset &y) {
+  auto iter = llvm::lower_bound(
+      addr_map, addr, [&](const ulittle32_t &x, const SegmentOffset &y) {
         CVSymbol s1 = syms.readRecord(x);
         lldbassert(s1.kind() == S_PUB32);
         PublicSym32 p1;
@@ -776,7 +775,7 @@ bool PdbAstBuilder::CompleteTagDecl(clang::TagDecl &tag) {
       llvm::codeview::visitMemberRecordStream(field_list.Data, completer);
   completer.complete();
 
-  status.resolved = true;
+  m_decl_to_status[&tag].resolved = true;
   if (error) {
     llvm::consumeError(std::move(error));
     return false;
