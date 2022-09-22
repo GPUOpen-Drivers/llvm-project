@@ -184,6 +184,12 @@ public:
     return result;
   }
 
+  MPFRNumber acos() const {
+    MPFRNumber result(*this);
+    mpfr_acos(result.value, value, mpfr_rounding);
+    return result;
+  }
+
   MPFRNumber asin() const {
     MPFRNumber result(*this);
     mpfr_asin(result.value, value, mpfr_rounding);
@@ -229,6 +235,12 @@ public:
   MPFRNumber exp2() const {
     MPFRNumber result(*this);
     mpfr_exp2(result.value, value, mpfr_rounding);
+    return result;
+  }
+
+  MPFRNumber exp10() const {
+    MPFRNumber result(*this);
+    mpfr_exp10(result.value, value, mpfr_rounding);
     return result;
   }
 
@@ -526,6 +538,8 @@ unary_operation(Operation op, InputType input, unsigned int precision,
   switch (op) {
   case Operation::Abs:
     return mpfrInput.abs();
+  case Operation::Acos:
+    return mpfrInput.acos();
   case Operation::Asin:
     return mpfrInput.asin();
   case Operation::Atan:
@@ -542,6 +556,8 @@ unary_operation(Operation op, InputType input, unsigned int precision,
     return mpfrInput.exp();
   case Operation::Exp2:
     return mpfrInput.exp2();
+  case Operation::Exp10:
+    return mpfrInput.exp10();
   case Operation::Expm1:
     return mpfrInput.expm1();
   case Operation::Floor:

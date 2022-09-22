@@ -143,11 +143,15 @@ def : PatFprFpr<fsub, FSUB_S, FPR32>;
 def : PatFprFpr<fmul, FMUL_S, FPR32>;
 def : PatFprFpr<fdiv, FDIV_S, FPR32>;
 def : PatFprFpr<fcopysign, FCOPYSIGN_S, FPR32>;
+def : PatFprFpr<fmaxnum_ieee, FMAX_S, FPR32>;
+def : PatFprFpr<fminnum_ieee, FMIN_S, FPR32>;
 def : PatFpr<fneg, FNEG_S, FPR32>;
 def : PatFpr<fabs, FABS_S, FPR32>;
 def : PatFpr<fsqrt, FSQRT_S, FPR32>;
 
 def : Pat<(fdiv fpimm1, (fsqrt FPR32:$fj)), (FRSQRT_S FPR32:$fj)>;
+
+def : Pat<(fcanonicalize FPR32:$fj), (FMAX_S $fj, $fj)>;
 
 /// Setcc
 
@@ -237,6 +241,25 @@ def : Pat<(loongarch_ftint FPR32:$src), (FTINTRZ_W_S FPR32:$src)>;
 
 // FP reciprocal operation
 def : Pat<(fdiv fpimm1, FPR32:$src), (FRECIP_S $src)>;
+
+// fmadd.s: fj * fk + fa
+def : Pat<(fma FPR32:$fj, FPR32:$fk, FPR32:$fa), (FMADD_S $fj, $fk, $fa)>;
+
+// fmsub.s: fj * fk - fa
+def : Pat<(fma FPR32:$fj, FPR32:$fk, (fneg FPR32:$fa)),
+          (FMSUB_S FPR32:$fj, FPR32:$fk, FPR32:$fa)>;
+
+// fnmadd.s: -(fj * fk + fa)
+def : Pat<(fneg (fma FPR32:$fj, FPR32:$fk, FPR32:$fa)),
+          (FNMADD_S FPR32:$fj, FPR32:$fk, FPR32:$fa)>;
+
+// fnmadd.s: -fj * fk - fa (the nsz flag on the FMA)
+def : Pat<(fma_nsz (fneg FPR32:$fj), FPR32:$fk, (fneg FPR32:$fa)),
+          (FNMADD_S FPR32:$fj, FPR32:$fk, FPR32:$fa)>;
+
+// fnmsub.s: -fj * fk + fa
+def : Pat<(fma (fneg FPR32:$fj), FPR32:$fk, FPR32:$fa),
+          (FNMSUB_S FPR32:$fj, FPR32:$fk, FPR32:$fa)>;
 } // Predicates = [HasBasicF]
 
 let Predicates = [HasBasicF, IsLA64] in {
@@ -247,6 +270,11 @@ def : Pat<(loongarch_movfr2gr_s_la64 FPR32:$src),
           (MOVFR2GR_S FPR32:$src)>;
 // int -> f32
 def : Pat<(f32 (sint_to_fp GPR:$src)), (FFINT_S_W (MOVGR2FR_W GPR:$src))>;
+} // Predicates = [HasBasicF, IsLA64]
+
+// FP Rounding
+let Predicates = [HasBasicF, IsLA64] in {
+def : PatFpr<frint, FRINT_S, FPR32>;
 } // Predicates = [HasBasicF, IsLA64]
 
 let Predicates = [HasBasicF, IsLA32] in {

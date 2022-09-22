@@ -730,7 +730,7 @@ void tools::gnutools::Assembler::ConstructJob(Compilation &C,
       CmdArgs.push_back("--compress-debug-sections");
     } else {
       StringRef Value = A->getValue();
-      if (Value == "none" || Value == "zlib") {
+      if (Value == "none" || Value == "zlib" || Value == "zstd") {
         CmdArgs.push_back(
             Args.MakeArgString("--compress-debug-sections=" + Twine(Value)));
       } else {
@@ -2827,7 +2827,8 @@ void Generic_GCC::printVerboseInfo(raw_ostream &OS) const {
   RocmInstallation.print(OS);
 }
 
-bool Generic_GCC::IsUnwindTablesDefault(const ArgList &Args) const {
+ToolChain::UnwindTableLevel
+Generic_GCC::getDefaultUnwindTableLevel(const ArgList &Args) const {
   switch (getArch()) {
   case llvm::Triple::aarch64:
   case llvm::Triple::ppc:
@@ -2836,9 +2837,9 @@ bool Generic_GCC::IsUnwindTablesDefault(const ArgList &Args) const {
   case llvm::Triple::ppc64le:
   case llvm::Triple::x86:
   case llvm::Triple::x86_64:
-    return true;
+    return UnwindTableLevel::Asynchronous;
   default:
-    return false;
+    return UnwindTableLevel::None;
   }
 }
 

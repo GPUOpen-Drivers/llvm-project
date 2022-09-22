@@ -141,6 +141,15 @@ static bool checkArgCountAtMost(Sema &S, CallExpr *Call, unsigned MaxArgCount) {
          << Call->getSourceRange();
 }
 
+/// Checks that a call expression's argument count is in the desired range. This
+/// is useful when doing custom type-checking on a variadic function. Returns
+/// true on error.
+static bool checkArgCountRange(Sema &S, CallExpr *Call, unsigned MinArgCount,
+                               unsigned MaxArgCount) {
+  return checkArgCountAtLeast(S, Call, MinArgCount) ||
+         checkArgCountAtMost(S, Call, MaxArgCount);
+}
+
 /// Checks that a call expression's argument count is the desired number.
 /// This is useful when doing custom type-checking.  Returns true on error.
 static bool checkArgCount(Sema &S, CallExpr *Call, unsigned DesiredArgCount) {
@@ -4369,13 +4378,20 @@ bool Sema::CheckRISCVBuiltinFunctionCall(const TargetInfo &TI,
     if (llvm::none_of(ReqOpFeatures,
                       [&TI](StringRef OF) { return TI.hasFeature(OF); })) {
       std::string FeatureStrs;
+      bool IsExtension = true;
       for (StringRef OF : ReqOpFeatures) {
         // If the feature is 64bit, alter the string so it will print better in
         // the diagnostic.
-        if (OF == "64bit")
+        if (OF == "64bit") {
+          assert(ReqOpFeatures.size() == 1 && "Expected '64bit' to be alone");
           OF = "RV64";
-        if (OF == "32bit")
+          IsExtension = false;
+        }
+        if (OF == "32bit") {
+          assert(ReqOpFeatures.size() == 1 && "Expected '32bit' to be alone");
           OF = "RV32";
+          IsExtension = false;
+        }
 
         // Convert features like "zbr" and "experimental-zbr" to "Zbr".
         OF.consume_front("experimental-");
@@ -4390,6 +4406,7 @@ bool Sema::CheckRISCVBuiltinFunctionCall(const TargetInfo &TI,
       // Error message
       FeatureMissing = true;
       Diag(TheCall->getBeginLoc(), diag::err_riscv_builtin_requires_extension)
+          << IsExtension
           << TheCall->getSourceRange() << StringRef(FeatureStrs);
     }
   }
@@ -5682,9 +5699,9 @@ void Sema::CheckArgAlignment(SourceLocation Loc, NamedDecl *FDecl,
 
   // Find expected alignment, and the actual alignment of the passed object.
   // getTypeAlignInChars requires complete types
-  if (ArgTy.isNull() || ParamTy->isIncompleteType() ||
-      ArgTy->isIncompleteType() || ParamTy->isUndeducedType() ||
-      ArgTy->isUndeducedType())
+  if (ArgTy.isNull() || ParamTy->isDependentType() ||
+      ParamTy->isIncompleteType() || ArgTy->isIncompleteType() ||
+      ParamTy->isUndeducedType() || ArgTy->isUndeducedType())
     return;
 
   CharUnits ParamAlign = Context.getTypeAlignInChars(ParamTy);
@@ -7643,17 +7660,15 @@ bool Sema::SemaBuiltinAllocaWithAlign(CallExpr *TheCall) {
 /// Handle __builtin_assume_aligned. This is declared
 /// as (const void*, size_t, ...) and can take one optional constant int arg.
 bool Sema::SemaBuiltinAssumeAligned(CallExpr *TheCall) {
-  if (checkArgCountAtMost(*this, TheCall, 3))
+  if (checkArgCountRange(*this, TheCall, 2, 3))
     return true;
 
   unsigned NumArgs = TheCall->getNumArgs();
   Expr *FirstArg = TheCall->getArg(0);
-  if (auto *CE = dyn_cast<CastExpr>(FirstArg))
-    FirstArg = CE->getSubExprAsWritten();
 
   {
     ExprResult FirstArgResult =
-        DefaultFunctionArrayLvalueConversion(FirstArg, /*Diagnose=*/false);
+        DefaultFunctionArrayLvalueConversion(FirstArg);
     if (FirstArgResult.isInvalid())
       return true;
     TheCall->setArg(0, FirstArgResult.get());

@@ -148,6 +148,8 @@ function check-cxx-benchmarks() {
 ${CMAKE} --version
 ${NINJA} --version
 
+if [ ! -z "${CXX}" ]; then ${CXX} --version; fi
+
 case "${BUILDER}" in
 check-format)
     clean
@@ -498,21 +500,6 @@ legacy-test-config)
     generate-cmake -DLIBCXX_TEST_CONFIG="legacy.cfg.in" \
                    -DLIBCXXABI_TEST_CONFIG="${MONOREPO_ROOT}/libcxxabi/test/lit.site.cfg.in" \
                    -DLIBUNWIND_TEST_CONFIG="${MONOREPO_ROOT}/libunwind/test/lit.site.cfg.in"
-    check-runtimes
-;;
-legacy-project-build)
-    clean
-
-    echo "--- Generating CMake"
-    ${CMAKE} \
-          -S "${MONOREPO_ROOT}/llvm" \
-          -B "${BUILD_DIR}" \
-          -DLLVM_ENABLE_PROJECTS="libcxx;libunwind;libcxxabi" \
-          -GNinja -DCMAKE_MAKE_PROGRAM="${NINJA}" \
-          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-          -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" \
-          -DLLVM_LIT_ARGS="-sv --show-unsupported --xunit-xml-output test-results.xml --timeout=1500" \
-          -DLIBCXX_CXX_ABI=libcxxabi
     check-runtimes
 ;;
 aarch64)
