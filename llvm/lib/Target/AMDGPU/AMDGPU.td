@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===------------------------------------------------------------===//
 
@@ -704,6 +706,12 @@ def FeatureVOPD : SubtargetFeature<"vopd",
   "Has VOPD dual issue wave32 instructions"
 >;
 
+def FeatureGetPcStallHazard : SubtargetFeature<"getpc-stall-hazard",
+  "HasGetPcStallHazard",
+  "true",
+  "S_GETPC can be stalled by VALU access to same register"
+>;
+
 //===------------------------------------------------------------===//
 // Subtarget Features (options and debugging)
 //===------------------------------------------------------------===//
@@ -922,7 +930,8 @@ def FeatureGFX11 : GCNSubtargetFeatureGeneration<"GFX11",
    FeatureVOP3Literal, FeatureDPP8, FeatureExtendedImageInsts,
    FeatureNoDataDepHazard, FeaturePkFmacF16Inst,
    FeatureGFX10A16, FeatureFastDenormalF32, FeatureG16,
-   FeatureUnalignedBufferAccess, FeatureUnalignedDSAccess
+   FeatureUnalignedBufferAccess, FeatureUnalignedDSAccess,
+   FeatureGetPcStallHazard
   ]
 >;
 
@@ -1181,8 +1190,7 @@ def FeatureISAVersion10_1_0 : FeatureSet<
      FeatureMadMacF32Insts,
      FeatureDsSrc2Insts,
      FeatureLdsMisalignedBug,
-     FeatureSupportsXNACK,
-     FeatureBackOffBarrier])>;
+     FeatureSupportsXNACK])>;
 
 def FeatureISAVersion10_1_1 : FeatureSet<
   !listconcat(FeatureGroup.GFX10_1_Bugs,
@@ -1204,8 +1212,7 @@ def FeatureISAVersion10_1_1 : FeatureSet<
      FeatureMadMacF32Insts,
      FeatureDsSrc2Insts,
      FeatureLdsMisalignedBug,
-     FeatureSupportsXNACK,
-     FeatureBackOffBarrier])>;
+     FeatureSupportsXNACK])>;
 
 def FeatureISAVersion10_1_2 : FeatureSet<
   !listconcat(FeatureGroup.GFX10_1_Bugs,
@@ -1227,8 +1234,7 @@ def FeatureISAVersion10_1_2 : FeatureSet<
      FeatureMadMacF32Insts,
      FeatureDsSrc2Insts,
      FeatureLdsMisalignedBug,
-     FeatureSupportsXNACK,
-     FeatureBackOffBarrier])>;
+     FeatureSupportsXNACK])>;
 
 def FeatureISAVersion10_1_3 : FeatureSet<
   !listconcat(FeatureGroup.GFX10_1_Bugs,
@@ -1246,8 +1252,7 @@ def FeatureISAVersion10_1_3 : FeatureSet<
      FeatureMadMacF32Insts,
      FeatureDsSrc2Insts,
      FeatureLdsMisalignedBug,
-     FeatureSupportsXNACK,
-     FeatureBackOffBarrier])>;
+     FeatureSupportsXNACK])>;
 
 def FeatureISAVersion10_3_0 : FeatureSet<
   [FeatureGFX10,
@@ -1264,8 +1269,7 @@ def FeatureISAVersion10_3_0 : FeatureSet<
    FeatureNSAEncoding,
    FeatureNSAMaxSize13,
    FeatureWavefrontSize32,
-   FeatureShaderCyclesRegister,
-   FeatureBackOffBarrier]>;
+   FeatureShaderCyclesRegister]>;
 
 def FeatureISAVersion11_Common : FeatureSet<
   [FeatureGFX11,

@@ -671,6 +671,8 @@ def AArch64NvCast : SDNode<"AArch64ISD::NVCAST", SDTUnaryOp>;
 
 def SDT_AArch64mull : SDTypeProfile<1, 2, [SDTCisInt<0>, SDTCisInt<1>,
                                     SDTCisSameAs<1, 2>]>;
+def AArch64pmull    : SDNode<"AArch64ISD::PMULL", SDT_AArch64mull,
+                             [SDNPCommutative]>;
 def AArch64smull    : SDNode<"AArch64ISD::SMULL", SDT_AArch64mull,
                              [SDNPCommutative]>;
 def AArch64umull    : SDNode<"AArch64ISD::UMULL", SDT_AArch64mull,
@@ -1448,6 +1450,11 @@ def : Pat<(AArch64mrs imm:$id),
 def MOVbaseTLS : Pseudo<(outs GPR64:$dst), (ins),
                        [(set GPR64:$dst, AArch64threadpointer)]>, Sched<[WriteSys]>;
 
+let Defs = [ X9, X16, X17, NZCV ] in {
+def KCFI_CHECK : Pseudo<
+  (outs), (ins GPR64:$ptr, i32imm:$type), []>, Sched<[]>;
+}
+
 let Uses = [ X9 ], Defs = [ X16, X17, LR, NZCV ] in {
 def HWASAN_CHECK_MEMACCESS : Pseudo<
   (outs), (ins GPR64noip:$ptr, i32imm:$accessinfo),
@@ -2090,7 +2097,7 @@ defm BICS : LogicalRegS<0b11, 1, "bics",
                         BinOpFrag<(AArch64and_flag node:$LHS, (not node:$RHS))>>;
 defm AND  : LogicalReg<0b00, 0, "and", and>;
 defm BIC  : LogicalReg<0b00, 1, "bic",
-                       BinOpFrag<(and node:$LHS, (not node:$RHS))>>;
+                       BinOpFrag<(and node:$LHS, (not node:$RHS))>, 3>;
 defm EON  : LogicalReg<0b10, 1, "eon",
                        BinOpFrag<(not (xor node:$LHS, node:$RHS))>>;
 defm EOR  : LogicalReg<0b10, 0, "eor", xor>;
@@ -2938,7 +2945,7 @@ def : Pat<(i64 (zextloadi32 (am_indexed32 GPR64sp:$Rn, uimm12s4:$offset))),
 
 // Pre-fetch.
 def PRFMui : PrefetchUI<0b11, 0, 0b10, "prfm",
-                        [(AArch64Prefetch imm:$Rt,
+                        [(AArch64Prefetch timm:$Rt,
                                         (am_indexed64 GPR64sp:$Rn,
                                                       uimm12s8:$offset))]>;
 
@@ -3183,7 +3190,7 @@ def : InstAlias<"ldrsw $Rt, [$Rn, $offset]",
 
 // Pre-fetch.
 defm PRFUM : PrefetchUnscaled<0b11, 0, 0b10, "prfum",
-                  [(AArch64Prefetch imm:$Rt,
+                  [(AArch64Prefetch timm:$Rt,
                                   (am_unscaled64 GPR64sp:$Rn, simm9:$offset))]>;
 
 //---
@@ -5226,7 +5233,7 @@ defm ADDHN  : SIMDNarrowThreeVectorBHS<0,0b0100,"addhn", int_aarch64_neon_addhn>
 defm SUBHN  : SIMDNarrowThreeVectorBHS<0,0b0110,"subhn", int_aarch64_neon_subhn>;
 defm RADDHN : SIMDNarrowThreeVectorBHS<1,0b0100,"raddhn",int_aarch64_neon_raddhn>;
 defm RSUBHN : SIMDNarrowThreeVectorBHS<1,0b0110,"rsubhn",int_aarch64_neon_rsubhn>;
-defm PMULL  : SIMDDifferentThreeVectorBD<0,0b1110,"pmull",int_aarch64_neon_pmull>;
+defm PMULL  : SIMDDifferentThreeVectorBD<0,0b1110,"pmull", AArch64pmull>;
 defm SABAL  : SIMDLongThreeVectorTiedBHSabal<0,0b0101,"sabal",
                                              AArch64sabd>;
 defm SABDL   : SIMDLongThreeVectorBHSabdl<0, 0b0111, "sabdl",
@@ -5303,13 +5310,6 @@ defm : Neon_mul_acc_widen_patterns<sub, AArch64umull,
      UMLSLv8i8_v8i16, UMLSLv4i16_v4i32, UMLSLv2i32_v2i64>;
 defm : Neon_mul_acc_widen_patterns<sub, AArch64smull,
      SMLSLv8i8_v8i16, SMLSLv4i16_v4i32, SMLSLv2i32_v2i64>;
-
-// Patterns for 64-bit pmull
-def : Pat<(int_aarch64_neon_pmull64 V64:$Rn, V64:$Rm),
-          (PMULLv1i64 V64:$Rn, V64:$Rm)>;
-def : Pat<(int_aarch64_neon_pmull64 (extractelt (v2i64 V128:$Rn), (i64 1)),
-                                    (extractelt (v2i64 V128:$Rm), (i64 1))),
-          (PMULLv2i64 V128:$Rn, V128:$Rm)>;
 
 // CodeGen patterns for addhn and subhn instructions, which can actually be
 // written in LLVM IR without too much difficulty.

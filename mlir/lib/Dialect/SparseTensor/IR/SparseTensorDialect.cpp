@@ -49,7 +49,7 @@ Attribute SparseTensorEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
   // Process the data from the parsed dictionary value into struct-like data.
   SmallVector<SparseTensorEncodingAttr::DimLevelType, 4> dlt;
-  AffineMap map = {};
+  AffineMap dimOrd = {};
   unsigned ptr = 0;
   unsigned ind = 0;
   for (const NamedAttribute &attr : dict) {
@@ -72,6 +72,20 @@ Attribute SparseTensorEncodingAttr::parse(AsmParser &parser, Type type) {
           dlt.push_back(SparseTensorEncodingAttr::DimLevelType::Dense);
         } else if (strVal == "compressed") {
           dlt.push_back(SparseTensorEncodingAttr::DimLevelType::Compressed);
+        } else if (strVal == "compressed-nu") {
+          dlt.push_back(SparseTensorEncodingAttr::DimLevelType::CompressedNu);
+        } else if (strVal == "compressed-no") {
+          dlt.push_back(SparseTensorEncodingAttr::DimLevelType::CompressedNo);
+        } else if (strVal == "compressed-nu-no") {
+          dlt.push_back(SparseTensorEncodingAttr::DimLevelType::CompressedNuNo);
+        } else if (strVal == "singleton") {
+          dlt.push_back(SparseTensorEncodingAttr::DimLevelType::Singleton);
+        } else if (strVal == "singleton-nu") {
+          dlt.push_back(SparseTensorEncodingAttr::DimLevelType::SingletonNu);
+        } else if (strVal == "singleton-no") {
+          dlt.push_back(SparseTensorEncodingAttr::DimLevelType::SingletonNo);
+        } else if (strVal == "singleton-nu-no") {
+          dlt.push_back(SparseTensorEncodingAttr::DimLevelType::SingletonNuNo);
         } else {
           parser.emitError(parser.getNameLoc(),
                            "unexpected dimension level type: ")
@@ -86,7 +100,7 @@ Attribute SparseTensorEncodingAttr::parse(AsmParser &parser, Type type) {
                          "expected an affine map for dimension ordering");
         return {};
       }
-      map = affineAttr.getValue();
+      dimOrd = affineAttr.getValue();
     } else if (attr.getName() == "pointerBitWidth") {
       auto intAttr = attr.getValue().dyn_cast<IntegerAttr>();
       if (!intAttr) {
@@ -111,7 +125,7 @@ Attribute SparseTensorEncodingAttr::parse(AsmParser &parser, Type type) {
   }
   // Construct struct-like storage for attribute.
   return parser.getChecked<SparseTensorEncodingAttr>(parser.getContext(), dlt,
-                                                     map, ptr, ind);
+                                                     dimOrd, ptr, ind);
 }
 
 void SparseTensorEncodingAttr::print(AsmPrinter &printer) const {
@@ -125,15 +139,40 @@ void SparseTensorEncodingAttr::print(AsmPrinter &printer) const {
     case DimLevelType::Compressed:
       printer << "\"compressed\"";
       break;
+    case DimLevelType::CompressedNu:
+      printer << "\"compressed-nu\"";
+      break;
+    case DimLevelType::CompressedNo:
+      printer << "\"compressed-no\"";
+      break;
+    case DimLevelType::CompressedNuNo:
+      printer << "\"compressed-nu-no\"";
+      break;
+    case DimLevelType::Singleton:
+      printer << "\"singleton\"";
+      break;
+    case DimLevelType::SingletonNu:
+      printer << "\"singleton-nu\"";
+      break;
+    case DimLevelType::SingletonNo:
+      printer << "\"singleton-no\"";
+      break;
+    case DimLevelType::SingletonNuNo:
+      printer << "\"singleton-nu-no\"";
+      break;
     }
     if (i != e - 1)
       printer << ", ";
   }
   printer << " ]";
-  if (getDimOrdering())
+  // Print remaining members only for non-default values.
+  if (getDimOrdering() && !getDimOrdering().isIdentity())
     printer << ", dimOrdering = affine_map<" << getDimOrdering() << ">";
-  printer << ", pointerBitWidth = " << getPointerBitWidth()
-          << ", indexBitWidth = " << getIndexBitWidth() << " }>";
+  if (getPointerBitWidth())
+    printer << ", pointerBitWidth = " << getPointerBitWidth();
+  if (getIndexBitWidth())
+    printer << ", indexBitWidth = " << getIndexBitWidth();
+  printer << " }>";
 }
 
 LogicalResult SparseTensorEncodingAttr::verify(
@@ -187,14 +226,11 @@ mlir::sparse_tensor::getSparseTensorEncoding(Type type) {
 // TensorDialect Operations.
 //===----------------------------------------------------------------------===//
 
-static LogicalResult isInBounds(Value dim, Value tensor) {
-  IntegerAttr constantAttr;
-  if (matchPattern(dim, m_Constant(&constantAttr))) {
-    unsigned d = constantAttr.getInt();
-    if (d >= tensor.getType().cast<RankedTensorType>().getRank())
-      return failure();
-  }
-  return success(); // in bounds, or symbolic
+static LogicalResult isInBounds(uint64_t dim, Value tensor) {
+  uint64_t rank = tensor.getType().cast<RankedTensorType>().getRank();
+  if (dim >= rank)
+    return failure();
+  return success(); // in bounds
 }
 
 static LogicalResult isMatchingWidth(Value result, unsigned width) {
@@ -231,7 +267,7 @@ OpFoldResult ConvertOp::fold(ArrayRef<Attribute> operands) {
 
 LogicalResult ToPointersOp::verify() {
   auto e = getSparseTensorEncoding(getTensor().getType());
-  if (failed(isInBounds(getDim(), getTensor())))
+  if (failed(isInBounds(getDimension().getZExtValue(), getTensor())))
     return emitError("requested pointers dimension out of bounds");
   if (failed(isMatchingWidth(getResult(), e.getPointerBitWidth())))
     return emitError("unexpected type for pointers");
@@ -240,7 +276,7 @@ LogicalResult ToPointersOp::verify() {
 
 LogicalResult ToIndicesOp::verify() {
   auto e = getSparseTensorEncoding(getTensor().getType());
-  if (failed(isInBounds(getDim(), getTensor())))
+  if (failed(isInBounds(getDimension().getZExtValue(), getTensor())))
     return emitError("requested indices dimension out of bounds");
   if (failed(isMatchingWidth(getResult(), e.getIndexBitWidth())))
     return emitError("unexpected type for indices");

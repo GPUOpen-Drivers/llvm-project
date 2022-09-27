@@ -3846,6 +3846,9 @@ def warn_impcast_integer_64_32 : Warning<
 def warn_impcast_integer_precision_constant : Warning<
   "implicit conversion from %2 to %3 changes value from %0 to %1">,
   InGroup<ConstantConversion>;
+def warn_impcast_single_bit_bitield_precision_constant : Warning<
+  "implicit truncation from %2 to a one-bit wide bit-field changes value from "
+  "%0 to %1">, InGroup<SingleBitBitFieldConstantConversion>;
 def warn_impcast_bitfield_precision_constant : Warning<
   "implicit truncation from %2 to bit-field changes value from %0 to %1">,
   InGroup<BitFieldConstantConversion>;
@@ -4048,6 +4051,9 @@ def warn_transparent_union_attribute_zero_fields : Warning<
   InGroup<IgnoredAttributes>;
 def warn_attribute_type_not_supported : Warning<
   "%0 attribute argument not supported: %1">,
+  InGroup<IgnoredAttributes>;
+def warn_attribute_type_not_supported_global : Warning<
+  "%0 attribute argument '%1' not supported on a global variable">,
   InGroup<IgnoredAttributes>;
 def warn_attribute_unknown_visibility : Warning<"unknown visibility %0">,
   InGroup<IgnoredAttributes>;
@@ -8674,6 +8680,10 @@ def err_typecheck_expect_flt_or_vector : Error<
   "a vector of such types is required">;
 def err_cast_selector_expr : Error<
   "cannot type cast @selector expression">;
+def err_make_signed_integral_only : Error<
+  "'%select{make_unsigned|make_signed}0' is only compatible with "
+  "non-%select{bool|_BitInt(1)}1 integers and enum types, but was given "
+  "%2%select{| whose underlying type is %4}3">;
 def ext_typecheck_cond_incompatible_pointers : ExtWarn<
   "pointer type mismatch%diff{ ($ and $)|}0,1">,
   InGroup<DiagGroup<"pointer-type-mismatch">>;
@@ -11141,6 +11151,8 @@ def err_export_using_internal : Error<
 def err_export_not_in_module_interface : Error<
   "export declaration can only be used within a module interface unit"
   "%select{ after the module declaration|}0">;
+def err_export_inline_not_defined : Error<
+  "inline function not defined%select{| before the private module fragment}0">;
 def err_export_partition_impl : Error<
   "module partition implementations cannot be exported">;
 def err_export_in_private_module_fragment : Error<
@@ -11259,6 +11271,9 @@ def warn_always_inline_coroutine : Warning<
   InGroup<AlwaysInlineCoroutine>;
 def err_coroutine_unusable_new : Error<
   "'operator new' provided by %0 is not usable with the function signature of %1"
+>;
+def err_coroutine_unfound_nothrow_new : Error <
+  "unable to find '::operator new(size_t, nothrow_t)' for %0"
 >;
 } // end of coroutines issue category
 
@@ -11621,7 +11636,7 @@ def warn_tcb_enforcement_violation : Warning<
 
 // RISC-V builtin required extension warning
 def err_riscv_builtin_requires_extension : Error<
-  "builtin requires at least one of the following extensions support to be enabled : %0">;
+  "builtin requires at least one of the following extensions to be enabled: %0">;
 def err_riscv_builtin_invalid_lmul : Error<
   "LMUL argument must be in the range [0,3] or [5,7]">;
 
@@ -11637,6 +11652,9 @@ def err_hlsl_numthreads_argument_oor : Error<"argument '%select{X|Y|Z}0' to numt
 def err_hlsl_numthreads_invalid : Error<"total number of threads cannot exceed %0">;
 def err_hlsl_missing_numthreads : Error<"missing numthreads attribute for %0 shader entry">;
 def err_hlsl_attribute_param_mismatch : Error<"%0 attribute parameters do not match the previous declaration">;
+def err_hlsl_missing_semantic_annotation : Error<
+  "semantic annotations must be present for all parameters of an entry "
+  "function or patch constant function">;
 
 def err_hlsl_pointers_unsupported : Error<
   "%select{pointers|references}0 are unsupported in HLSL">;

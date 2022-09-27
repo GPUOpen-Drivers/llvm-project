@@ -908,7 +908,8 @@ def TuneNeoverseE1 : SubtargetFeature<"neoversee1", "ARMProcFamily", "NeoverseE1
 def TuneNeoverseN1 : SubtargetFeature<"neoversen1", "ARMProcFamily", "NeoverseN1",
                                       "Neoverse N1 ARM processors", [
                                       FeaturePostRAScheduler,
-                                      FeatureFuseAES
+                                      FeatureFuseAES,
+                                      FeatureFuseAdrpAdd
                                       ]>;
 
 def TuneNeoverseN2 : SubtargetFeature<"neoversen2", "ARMProcFamily", "NeoverseN2",
@@ -1032,9 +1033,10 @@ def ProcessorFeatures {
                                  FeatureSPE, FeatureFullFP16, FeatureDotProd,
                                  FeatureSSBS];
   list<SubtargetFeature> X1C  = [HasV8_2aOps, FeatureCrypto, FeatureFPARMv8,
-                                 FeatureNEON, FeatureRCPC, FeaturePerfMon,
+                                 FeatureNEON, FeatureRCPC_IMMO, FeaturePerfMon,
                                  FeatureSPE, FeatureFullFP16, FeatureDotProd,
-                                 FeaturePAuth, FeatureSSBS];
+                                 FeaturePAuth, FeatureSSBS, FeatureFlagM,
+                                 FeatureLSE2];
   list<SubtargetFeature> X2   = [HasV9_0aOps, FeatureNEON, FeaturePerfMon,
                                  FeatureMatMulInt8, FeatureBF16, FeatureAM,
                                  FeatureMTE, FeatureETE, FeatureSVE2BitPerm,

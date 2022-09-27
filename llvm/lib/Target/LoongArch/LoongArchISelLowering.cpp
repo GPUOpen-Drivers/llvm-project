@@ -17,6 +17,7 @@
 #include "LoongArchRegisterInfo.h"
 #include "LoongArchSubtarget.h"
 #include "LoongArchTargetMachine.h"
+#include "MCTargetDesc/LoongArchBaseInfo.h"
 #include "MCTargetDesc/LoongArchMCTargetDesc.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
@@ -56,6 +57,10 @@ LoongArchTargetLowering::LoongArchTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::CTPOP, GRLenVT, Expand);
 
   setOperationAction({ISD::GlobalAddress, ISD::ConstantPool}, GRLenVT, Custom);
+
+  setOperationAction(ISD::EH_DWARF_CFA, MVT::i32, Custom);
+  if (Subtarget.is64Bit())
+    setOperationAction(ISD::EH_DWARF_CFA, MVT::i64, Custom);
 
   setOperationAction(ISD::DYNAMIC_STACKALLOC, GRLenVT, Expand);
   setOperationAction(ISD::VASTART, MVT::Other, Custom);
@@ -99,13 +104,19 @@ LoongArchTargetLowering::LoongArchTargetLowering(const TargetMachine &TM,
   if (Subtarget.hasBasicF()) {
     setCondCodeAction(FPCCToExpand, MVT::f32, Expand);
     setOperationAction(ISD::SELECT_CC, MVT::f32, Expand);
+    setOperationAction(ISD::BR_CC, MVT::f32, Expand);
   }
   if (Subtarget.hasBasicD()) {
     setCondCodeAction(FPCCToExpand, MVT::f64, Expand);
     setOperationAction(ISD::SELECT_CC, MVT::f64, Expand);
+    setOperationAction(ISD::BR_CC, MVT::f64, Expand);
     setLoadExtAction(ISD::EXTLOAD, MVT::f64, MVT::f32, Expand);
     setLoadExtAction(ISD::EXTLOAD, MVT::f64, MVT::f32, Expand);
   }
+
+  // Effectively disable jump table generation.
+  setMinimumJumpTableEntries(INT_MAX);
+  setOperationAction(ISD::BR_JT, MVT::Other, Expand);
 
   setOperationAction(ISD::BR_CC, GRLenVT, Expand);
   setOperationAction(ISD::SELECT_CC, GRLenVT, Expand);
@@ -147,6 +158,8 @@ bool LoongArchTargetLowering::isOffsetFoldingLegal(
 SDValue LoongArchTargetLowering::LowerOperation(SDValue Op,
                                                 SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
+  case ISD::EH_DWARF_CFA:
+    return lowerEH_DWARF_CFA(Op, DAG);
   case ISD::GlobalAddress:
     return lowerGlobalAddress(Op, DAG);
   case ISD::SHL_PARTS:
@@ -167,6 +180,14 @@ SDValue LoongArchTargetLowering::LowerOperation(SDValue Op,
     return lowerVASTART(Op, DAG);
   }
   return SDValue();
+}
+
+SDValue LoongArchTargetLowering::lowerEH_DWARF_CFA(SDValue Op,
+                                                   SelectionDAG &DAG) const {
+  MachineFunction &MF = DAG.getMachineFunction();
+  auto Size = Subtarget.getGRLen() / 8;
+  auto FI = MF.getFrameInfo().CreateFixedObject(Size, 0, false);
+  return DAG.getFrameIndex(FI, getPointerTy(DAG.getDataLayout()));
 }
 
 SDValue LoongArchTargetLowering::lowerVASTART(SDValue Op,
@@ -264,10 +285,13 @@ SDValue LoongArchTargetLowering::lowerGlobalAddress(SDValue Op,
 
   // TODO: Support dso_preemptable and target flags.
   if (GV->isDSOLocal()) {
-    SDValue GA = DAG.getTargetGlobalAddress(GV, DL, Ty);
-    SDValue AddrHi(DAG.getMachineNode(LoongArch::PCALAU12I, DL, Ty, GA), 0);
-    SDValue Addr(DAG.getMachineNode(ADDIOp, DL, Ty, AddrHi, GA), 0);
-    return Addr;
+    SDValue GAHi =
+        DAG.getTargetGlobalAddress(GV, DL, Ty, 0, LoongArchII::MO_PCREL_HI);
+    SDValue GALo =
+        DAG.getTargetGlobalAddress(GV, DL, Ty, 0, LoongArchII::MO_PCREL_LO);
+    SDValue AddrHi(DAG.getMachineNode(LoongArch::PCALAU12I, DL, Ty, GAHi), 0);
+
+    return SDValue(DAG.getMachineNode(ADDIOp, DL, Ty, AddrHi, GALo), 0);
   }
   report_fatal_error("Unable to lowerGlobalAddress");
 }
@@ -1587,11 +1611,20 @@ LoongArchTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // If the callee is a GlobalAddress/ExternalSymbol node, turn it into a
   // TargetGlobalAddress/TargetExternalSymbol node so that legalize won't
   // split it and then direct call can be matched by PseudoCALL.
-  // FIXME: Add target flags for relocation.
-  if (GlobalAddressSDNode *S = dyn_cast<GlobalAddressSDNode>(Callee))
-    Callee = DAG.getTargetGlobalAddress(S->getGlobal(), DL, PtrVT);
-  else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee))
-    Callee = DAG.getTargetExternalSymbol(S->getSymbol(), PtrVT);
+  if (GlobalAddressSDNode *S = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    const GlobalValue *GV = S->getGlobal();
+    unsigned OpFlags =
+        getTargetMachine().shouldAssumeDSOLocal(*GV->getParent(), GV)
+            ? LoongArchII::MO_CALL
+            : LoongArchII::MO_CALL_PLT;
+    Callee = DAG.getTargetGlobalAddress(S->getGlobal(), DL, PtrVT, 0, OpFlags);
+  } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee)) {
+    unsigned OpFlags = getTargetMachine().shouldAssumeDSOLocal(
+                           *MF.getFunction().getParent(), nullptr)
+                           ? LoongArchII::MO_CALL
+                           : LoongArchII::MO_CALL_PLT;
+    Callee = DAG.getTargetExternalSymbol(S->getSymbol(), PtrVT, OpFlags);
+  }
 
   // The first call operand is the chain and the second is the target address.
   SmallVector<SDValue> Ops;
@@ -1716,6 +1749,33 @@ bool LoongArchTargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT,
   return (Imm.isZero() || Imm.isExactlyValue(+1.0));
 }
 
-bool LoongArchTargetLowering::isCheapToSpeculateCttz() const { return true; }
+bool LoongArchTargetLowering::isCheapToSpeculateCttz(Type *) const {
+  return true;
+}
 
-bool LoongArchTargetLowering::isCheapToSpeculateCtlz() const { return true; }
+bool LoongArchTargetLowering::isCheapToSpeculateCtlz(Type *) const {
+  return true;
+}
+
+bool LoongArchTargetLowering::shouldInsertFencesForAtomic(
+    const Instruction *I) const {
+  if (!Subtarget.is64Bit())
+    return isa<LoadInst>(I) || isa<StoreInst>(I);
+
+  if (isa<LoadInst>(I))
+    return true;
+
+  // On LA64, atomic store operations with IntegerBitWidth of 32 and 64 do not
+  // require fences beacuse we can use amswap_db.[w/d].
+  if (isa<StoreInst>(I)) {
+    unsigned Size = I->getOperand(0)->getType()->getIntegerBitWidth();
+    return (Size == 8 || Size == 16);
+  }
+
+  return false;
+}
+
+bool LoongArchTargetLowering::hasAndNot(SDValue Y) const {
+  // TODO: Support vectors.
+  return Y.getValueType().isScalarInteger() && !isa<ConstantSDNode>(Y);
+}

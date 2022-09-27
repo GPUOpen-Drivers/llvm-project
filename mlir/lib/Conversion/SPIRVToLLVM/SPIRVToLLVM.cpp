@@ -252,7 +252,7 @@ static Optional<Type> convertArrayType(spirv::ArrayType type,
   unsigned stride = type.getArrayStride();
   Type elementType = type.getElementType();
   auto sizeInBytes = elementType.cast<spirv::SPIRVType>().getSizeInBytes();
-  if (stride != 0 && !(sizeInBytes && *sizeInBytes == stride))
+  if (stride != 0 && (!sizeInBytes || *sizeInBytes != stride))
     return llvm::None;
 
   auto llvmElementType = converter.convertType(elementType);
@@ -1380,8 +1380,9 @@ public:
     int vector1Size = vector1.getType().cast<VectorType>().getNumElements();
     int vector2Size = vector2.getType().cast<VectorType>().getNumElements();
     if (vector1Size == vector2Size) {
-      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(op, vector1, vector2,
-                                                         components);
+      rewriter.replaceOpWithNewOp<LLVM::ShuffleVectorOp>(
+          op, vector1, vector2,
+          LLVM::convertArrayToIndices<int32_t>(components));
       return success();
     }
 

@@ -38,6 +38,17 @@
 #define _LIBUNWIND_CHECK_LINUX_SIGRETURN 1
 #endif
 
+#include "AddressSpace.hpp"
+#include "CompactUnwinder.hpp"
+#include "config.h"
+#include "DwarfInstructions.hpp"
+#include "EHHeaderParser.hpp"
+#include "libunwind.h"
+#include "libunwind_ext.h"
+#include "Registers.hpp"
+#include "RWMutex.hpp"
+#include "Unwind-EHABI.h"
+
 #if defined(_LIBUNWIND_SUPPORT_SEH_UNWIND)
 // Provide a definition for the DISPATCHER_CONTEXT struct for old (Win7 and
 // earlier) SDKs.
@@ -74,18 +85,6 @@ extern "C" _Unwind_Reason_Code __libunwind_seh_personality(
     struct _Unwind_Context *);
 
 #endif
-
-#include "config.h"
-
-#include "AddressSpace.hpp"
-#include "CompactUnwinder.hpp"
-#include "config.h"
-#include "DwarfInstructions.hpp"
-#include "EHHeaderParser.hpp"
-#include "libunwind.h"
-#include "Registers.hpp"
-#include "RWMutex.hpp"
-#include "Unwind-EHABI.h"
 
 namespace libunwind {
 
@@ -510,7 +509,7 @@ public:
   void setDispatcherContext(DISPATCHER_CONTEXT *disp) { _dispContext = *disp; }
 
   // libunwind does not and should not depend on C++ library which means that we
-  // need our own defition of inline placement new.
+  // need our own definition of inline placement new.
   static void *operator new(size_t, UnwindCursor<A, R> *p) { return p; }
 
 private:
@@ -946,7 +945,7 @@ public:
 #endif
 
   // libunwind does not and should not depend on C++ library which means that we
-  // need our own defition of inline placement new.
+  // need our own definition of inline placement new.
   static void *operator new(size_t, UnwindCursor<A, R> *p) { return p; }
 
 private:
@@ -2461,7 +2460,7 @@ int UnwindCursor<A, R>::stepWithTBTable(pint_t pc, tbtable *TBTable,
                              reinterpret_cast<void *>(pc));
 
   // The return address is the address after call site instruction, so
-  // setting IP to that simualates a return.
+  // setting IP to that simulates a return.
   newRegisters.setIP(reinterpret_cast<uintptr_t>(returnAddress));
 
   // Simulate the step by replacing the register set with the new ones.

@@ -1510,9 +1510,9 @@ void ObjFile::registerEhFrames(Section &ehFrameSection) {
       // embedded in the section data (AKA an "abs-ified" reloc.). Parse that
       // and generate a Reloc struct.
       uint32_t cieMinuend = reader.readU32(&dataOff);
-      if (cieMinuend == 0)
+      if (cieMinuend == 0) {
         cieIsec = isec;
-      else {
+      } else {
         uint32_t cieOff = isecOff + dataOff - cieMinuend;
         cieIsec = findContainingSubsection(ehFrameSection, &cieOff);
         if (cieIsec == nullptr)
@@ -1593,6 +1593,15 @@ void ObjFile::registerEhFrames(Section &ehFrameSection) {
     funcSym->unwindEntry = isec;
     ehRelocator.commit();
   }
+
+  // __eh_frame is marked as S_ATTR_LIVE_SUPPORT in input files, because FDEs
+  // are normally required to be kept alive if they reference a live symbol.
+  // However, we've explicitly created a dependency from a symbol to its FDE, so
+  // dead-stripping will just work as usual, and S_ATTR_LIVE_SUPPORT will only
+  // serve to incorrectly prevent us from dead-stripping duplicate FDEs for a
+  // live symbol (e.g. if there were multiple weak copies). Remove this flag to
+  // let dead-stripping proceed correctly.
+  ehFrameSection.flags &= ~S_ATTR_LIVE_SUPPORT;
 }
 
 std::string ObjFile::sourceFile() const {

@@ -18,7 +18,7 @@
 
 /* Indicate that this is LLVM compiled from the amd-gfx branch. */
 #define LLVM_HAVE_BRANCH_AMD_GFX
-#define LLVM_MAIN_REVISION 433219
+#define LLVM_MAIN_REVISION 435325
 
 /* Define if LLVM_ENABLE_DUMP is enabled */
 #cmakedefine LLVM_ENABLE_DUMP
@@ -106,6 +106,9 @@
 
 /* Define if LLVM was built with a dependency to the libtensorflow dynamic library */
 #cmakedefine LLVM_HAVE_TF_API
+
+/* Define if LLVM is using tflite instead of libtensorflow */
+#cmakedefine LLVM_HAVE_TFLITE
 
 /* Define to 1 if you have the <sysexits.h> header file. */
 #cmakedefine HAVE_SYSEXITS_H ${HAVE_SYSEXITS_H}

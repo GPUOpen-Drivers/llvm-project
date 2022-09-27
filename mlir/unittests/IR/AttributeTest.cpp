@@ -209,6 +209,40 @@ TEST(DenseScalarTest, ExtractZeroRankElement) {
   auto attr = DenseElementsAttr::get(shape, llvm::makeArrayRef({elementValue}));
   EXPECT_TRUE(attr.getValues<Attribute>()[0] == value);
 }
+
+TEST(DenseSplatMapValuesTest, I32ToTrue) {
+  MLIRContext context;
+  const int elementValue = 12;
+  IntegerType boolTy = IntegerType::get(&context, 1);
+  IntegerType intTy = IntegerType::get(&context, 32);
+  RankedTensorType shape = RankedTensorType::get({4}, intTy);
+
+  auto attr =
+      DenseElementsAttr::get(shape, llvm::makeArrayRef({elementValue}))
+          .mapValues(boolTy, [](const APInt &x) {
+            return x.isZero() ? APInt::getZero(1) : APInt::getAllOnes(1);
+          });
+  EXPECT_EQ(attr.getNumElements(), 4);
+  EXPECT_TRUE(attr.isSplat());
+  EXPECT_TRUE(attr.getSplatValue<BoolAttr>().getValue());
+}
+
+TEST(DenseSplatMapValuesTest, I32ToFalse) {
+  MLIRContext context;
+  const int elementValue = 0;
+  IntegerType boolTy = IntegerType::get(&context, 1);
+  IntegerType intTy = IntegerType::get(&context, 32);
+  RankedTensorType shape = RankedTensorType::get({4}, intTy);
+
+  auto attr =
+      DenseElementsAttr::get(shape, llvm::makeArrayRef({elementValue}))
+          .mapValues(boolTy, [](const APInt &x) {
+            return x.isZero() ? APInt::getZero(1) : APInt::getAllOnes(1);
+          });
+  EXPECT_EQ(attr.getNumElements(), 4);
+  EXPECT_TRUE(attr.isSplat());
+  EXPECT_FALSE(attr.getSplatValue<BoolAttr>().getValue());
+}
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -219,8 +253,8 @@ template <typename AttrT, typename T>
 static void checkNativeAccess(MLIRContext *ctx, ArrayRef<T> data,
                               Type elementType) {
   auto type = RankedTensorType::get(data.size(), elementType);
-  auto attr =
-      AttrT::get(type, "resource", UnmanagedAsmResourceBlob::allocate(data));
+  auto attr = AttrT::get(type, "resource",
+                         UnmanagedAsmResourceBlob::allocateInferAlign(data));
 
   // Check that we can access and iterate the data properly.
   Optional<ArrayRef<T>> attrData = attr.tryGetAsArrayRef();
@@ -279,7 +313,7 @@ TEST(DenseResourceElementsAttrTest, CheckNoCast) {
   ArrayRef<uint32_t> data;
   auto type = RankedTensorType::get(data.size(), builder.getI32Type());
   Attribute i32ResourceAttr = DenseI32ResourceElementsAttr::get(
-      type, "resource", UnmanagedAsmResourceBlob::allocate(data));
+      type, "resource", UnmanagedAsmResourceBlob::allocateInferAlign(data));
 
   EXPECT_TRUE(i32ResourceAttr.isa<DenseI32ResourceElementsAttr>());
   EXPECT_FALSE(i32ResourceAttr.isa<DenseF32ResourceElementsAttr>());
@@ -296,7 +330,8 @@ TEST(DenseResourceElementsAttrTest, CheckInvalidData) {
   EXPECT_DEBUG_DEATH(
       {
         DenseBoolResourceElementsAttr::get(
-            type, "resource", UnmanagedAsmResourceBlob::allocate(data));
+            type, "resource",
+            UnmanagedAsmResourceBlob::allocateInferAlign(data));
       },
       "alignment mismatch between expected alignment and blob alignment");
 }
@@ -311,7 +346,8 @@ TEST(DenseResourceElementsAttrTest, CheckInvalidType) {
   EXPECT_DEBUG_DEATH(
       {
         DenseBoolResourceElementsAttr::get(
-            type, "resource", UnmanagedAsmResourceBlob::allocate(data));
+            type, "resource",
+            UnmanagedAsmResourceBlob::allocateInferAlign(data));
       },
       "invalid shape element type for provided type `T`");
 }

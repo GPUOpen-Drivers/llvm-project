@@ -1530,8 +1530,7 @@ ExpectedType ASTNodeImporter::VisitSubstTemplateTypeParmType(
     return ToReplacementTypeOrErr.takeError();
 
   return Importer.getToContext().getSubstTemplateTypeParmType(
-      *ReplacedOrErr, ToReplacementTypeOrErr->getCanonicalType(),
-      T->getPackIndex());
+      *ReplacedOrErr, ToReplacementTypeOrErr->getCanonicalType());
 }
 
 ExpectedType ASTNodeImporter::VisitSubstTemplateTypeParmPackType(
@@ -3593,7 +3592,7 @@ ExpectedDecl ASTNodeImporter::VisitFunctionDecl(FunctionDecl *D) {
 
   // Import the function parameters.
   SmallVector<ParmVarDecl *, 8> Parameters;
-  for (auto P : D->parameters()) {
+  for (auto *P : D->parameters()) {
     if (Expected<ParmVarDecl *> ToPOrErr = import(P))
       Parameters.push_back(*ToPOrErr);
     else

@@ -925,12 +925,12 @@ PlatformType macho::removeSimulator(PlatformType platform) {
 }
 
 static bool dataConstDefault(const InputArgList &args) {
-  static const std::vector<std::pair<PlatformType, VersionTuple>> minVersion = {
-      {PLATFORM_MACOS, VersionTuple(10, 15)},
-      {PLATFORM_IOS, VersionTuple(13, 0)},
-      {PLATFORM_TVOS, VersionTuple(13, 0)},
-      {PLATFORM_WATCHOS, VersionTuple(6, 0)},
-      {PLATFORM_BRIDGEOS, VersionTuple(4, 0)}};
+  static const std::array<std::pair<PlatformType, VersionTuple>, 5> minVersion =
+      {{{PLATFORM_MACOS, VersionTuple(10, 15)},
+        {PLATFORM_IOS, VersionTuple(13, 0)},
+        {PLATFORM_TVOS, VersionTuple(13, 0)},
+        {PLATFORM_WATCHOS, VersionTuple(6, 0)},
+        {PLATFORM_BRIDGEOS, VersionTuple(4, 0)}}};
   PlatformType platform = removeSimulator(config->platformInfo.target.Platform);
   auto it = llvm::find_if(minVersion,
                           [&](const auto &p) { return p.first == platform; });
@@ -1103,6 +1103,11 @@ static void gatherInputSections() {
         if (auto *isec = dyn_cast<ConcatInputSection>(subsection.isec)) {
           if (isec->isCoalescedWeak())
             continue;
+          if (config->emitInitOffsets &&
+              sectionType(isec->getFlags()) == S_MOD_INIT_FUNC_POINTERS) {
+            in.initOffsets->addInput(isec);
+            continue;
+          }
           isec->outSecOff = inputOrder++;
           if (!osec)
             osec = ConcatOutputSection::getOrCreateForInput(isec);
@@ -1151,7 +1156,7 @@ static void addSynthenticMethnames() {
   llvm::raw_string_ostream os(data);
   const int prefixLength = ObjCStubsSection::symbolPrefix.size();
   for (Symbol *sym : symtab->getSymbols())
-    if (const auto *undefined = dyn_cast<Undefined>(sym))
+    if (isa<Undefined>(sym))
       if (sym->getName().startswith(ObjCStubsSection::symbolPrefix))
         os << sym->getName().drop_front(prefixLength) << '\0';
 
@@ -1186,7 +1191,7 @@ static void referenceStubBinder() {
   // dyld_stub_binder is in libSystem.dylib, which is usually linked in. This
   // isn't needed for correctness, but the presence of that symbol suppresses
   // "no symbols" diagnostics from `nm`.
-  // StubHelperSection::setup() adds a reference and errors out if
+  // StubHelperSection::setUp() adds a reference and errors out if
   // dyld_stub_binder doesn't exist in case it is actually needed.
   symtab->addUndefined("dyld_stub_binder", /*file=*/nullptr, /*isWeak=*/false);
 }
@@ -1432,6 +1437,7 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   config->emitBitcodeBundle = args.hasArg(OPT_bitcode_bundle);
   config->emitDataInCodeInfo =
       args.hasFlag(OPT_data_in_code_info, OPT_no_data_in_code_info, true);
+  config->emitInitOffsets = args.hasArg(OPT_init_offsets);
   config->icfLevel = getICFLevel(args);
   config->dedupLiterals =
       args.hasFlag(OPT_deduplicate_literals, OPT_icf_eq, false) ||

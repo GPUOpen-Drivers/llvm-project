@@ -1808,6 +1808,7 @@ AMDGPURegisterBankInfo::splitBufferOffsets(MachineIRBuilder &B,
   unsigned ImmOffset;
   const LLT S32 = LLT::scalar(32);
 
+  // TODO: Use AMDGPU::getBaseWithConstantOffset() instead.
   std::tie(BaseReg, ImmOffset) = getBaseWithConstantOffset(*B.getMRI(),
                                                            OrigOffset);
 

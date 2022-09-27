@@ -317,8 +317,10 @@ private:
       if (PrevNonComment->is(tok::kw___attribute)) {
         OpeningParen.setType(TT_AttributeParen);
       } else if (PrevNonComment->isOneOf(TT_TypenameMacro, tok::kw_decltype,
-                                         tok::kw_typeof, tok::kw__Atomic,
-                                         tok::kw___underlying_type)) {
+                                         tok::kw_typeof,
+#define TRANSFORM_TYPE_TRAIT_DEF(_, Trait) tok::kw___##Trait,
+#include "clang/Basic/TransformTypeTraits.def"
+                                         tok::kw__Atomic)) {
         OpeningParen.setType(TT_TypeDeclarationParen);
         // decltype() and typeof() usually contain expressions.
         if (PrevNonComment->isOneOf(tok::kw_decltype, tok::kw_typeof))
@@ -1922,7 +1924,7 @@ private:
           !Current.Next->isBinaryOperator() &&
           !Current.Next->isOneOf(tok::semi, tok::colon, tok::l_brace,
                                  tok::comma, tok::period, tok::arrow,
-                                 tok::coloncolon)) {
+                                 tok::coloncolon, tok::kw_noexcept)) {
         if (FormatToken *AfterParen = Current.MatchingParen->Next) {
           // Make sure this isn't the return type of an Obj-C block declaration
           if (AfterParen->isNot(tok::caret)) {
@@ -2151,7 +2153,7 @@ private:
       // before the parentheses, this is unlikely to be a cast.
       if (LeftOfParens->Tok.getIdentifierInfo() &&
           !LeftOfParens->isOneOf(Keywords.kw_in, tok::kw_return, tok::kw_case,
-                                 tok::kw_delete)) {
+                                 tok::kw_delete, tok::kw_throw)) {
         return false;
       }
 
@@ -2369,6 +2371,9 @@ private:
     if (PrevToken->is(tok::r_brace) && Tok.is(tok::star) &&
         !PrevToken->MatchingParen)
       return TT_PointerOrReference;
+
+    if (PrevToken->endsSequence(tok::r_square, tok::l_square, tok::kw_delete))
+      return TT_UnaryOperator;
 
     if (PrevToken->Tok.isLiteral() ||
         PrevToken->isOneOf(tok::r_paren, tok::r_square, tok::kw_true,
@@ -2696,15 +2701,18 @@ void TokenAnnotator::setCommentLineLevels(
         NextNonCommentLine->First->NewlinesBefore <= 1 &&
         NextNonCommentLine->First->OriginalColumn ==
             Line->First->OriginalColumn) {
+      const bool PPDirectiveOrImportStmt =
+          NextNonCommentLine->Type == LT_PreprocessorDirective ||
+          NextNonCommentLine->Type == LT_ImportStatement;
+      if (PPDirectiveOrImportStmt)
+        Line->Type = LT_CommentAbovePPDirective;
       // Align comments for preprocessor lines with the # in column 0 if
       // preprocessor lines are not indented. Otherwise, align with the next
       // line.
-      Line->Level =
-          (Style.IndentPPDirectives != FormatStyle::PPDIS_BeforeHash &&
-           (NextNonCommentLine->Type == LT_PreprocessorDirective ||
-            NextNonCommentLine->Type == LT_ImportStatement))
-              ? 0
-              : NextNonCommentLine->Level;
+      Line->Level = Style.IndentPPDirectives != FormatStyle::PPDIS_BeforeHash &&
+                            PPDirectiveOrImportStmt
+                        ? 0
+                        : NextNonCommentLine->Level;
     } else {
       NextNonCommentLine = Line->First->isNot(tok::r_brace) ? Line : nullptr;
     }
@@ -3307,6 +3315,10 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
       !Right.isOneOf(tok::semi, tok::r_paren, tok::hashhash)) {
     return true;
   }
+  if (Left.is(tok::kw_throw) && Right.is(tok::l_paren) && Right.MatchingParen &&
+      Right.MatchingParen->is(TT_CastRParen)) {
+    return true;
+  }
   if (Style.isJson() && Left.is(tok::string_literal) && Right.is(tok::colon))
     return false;
   if (Left.is(Keywords.kw_assert) && Style.Language == FormatStyle::LK_Java)
@@ -3337,9 +3349,11 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
   }
 
   // trailing return type 'auto': []() -> auto {}, auto foo() -> auto {}
-  if (Left.is(tok::kw_auto) &&
-      Right.isOneOf(TT_LambdaLBrace, TT_FunctionLBrace))
+  if (Left.is(tok::kw_auto) && Right.isOneOf(TT_LambdaLBrace, TT_FunctionLBrace,
+                                             // function return type 'auto'
+                                             TT_FunctionTypeLParen)) {
     return true;
+  }
 
   // auto{x} auto(x)
   if (Left.is(tok::kw_auto) && Right.isOneOf(tok::l_paren, tok::l_brace))

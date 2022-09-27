@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -70,6 +72,10 @@ private:
   // instructions.
   void processBundle();
 
+  // Run on an individual instruction in hazard recognizer mode. This can be
+  // used on a newly inserted instruction before returning from PreEmitNoops.
+  void runOnInstruction(MachineInstr *MI);
+
   int getWaitStatesSince(IsHazardFn IsHazard, int Limit);
   int getWaitStatesSinceDef(unsigned Reg, IsHazardFn IsHazardDef, int Limit);
   int getWaitStatesSinceSetReg(IsHazardFn IsHazard, int Limit);
@@ -101,6 +107,8 @@ private:
   bool fixVALUPartialForwardingHazard(MachineInstr *MI);
   bool fixVALUTransUseHazard(MachineInstr *MI);
   bool fixWMMAHazards(MachineInstr *MI);
+  bool fixGetPcStallHazard(MachineInstr *MI);
+  bool fixShift64HighRegBug(MachineInstr *MI);
 
   int checkMAIHazards(MachineInstr *MI);
   int checkMAIHazards908(MachineInstr *MI);

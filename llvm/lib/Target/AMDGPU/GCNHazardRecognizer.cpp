@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -298,6 +300,20 @@ void GCNHazardRecognizer::processBundle() {
     EmittedInstrs.resize(MaxLookAhead);
   }
   CurrCycleInstr = nullptr;
+}
+
+void GCNHazardRecognizer::runOnInstruction(MachineInstr *MI) {
+  assert(IsHazardRecognizerMode);
+
+  unsigned NumPreNoops = PreEmitNoops(MI);
+  EmitNoops(NumPreNoops);
+  if (MI->isInsideBundle())
+    insertNoopsInBundle(MI, TII, NumPreNoops);
+  else
+    TII.insertNoops(*MI->getParent(), MachineBasicBlock::iterator(MI),
+                    NumPreNoops);
+  EmitInstruction(MI);
+  AdvanceCycle();
 }
 
 unsigned GCNHazardRecognizer::PreEmitNoops(MachineInstr *MI) {
@@ -1087,6 +1103,8 @@ void GCNHazardRecognizer::fixHazards(MachineInstr *MI) {
   fixVALUPartialForwardingHazard(MI);
   fixVALUTransUseHazard(MI);
   fixWMMAHazards(MI);
+  fixGetPcStallHazard(MI);
+  fixShift64HighRegBug(MI);
 }
 
 bool GCNHazardRecognizer::fixVcmpxPermlaneHazards(MachineInstr *MI) {
@@ -1735,6 +1753,108 @@ bool GCNHazardRecognizer::fixWMMAHazards(MachineInstr *MI) {
     return false;
 
   BuildMI(*MI->getParent(), MI, MI->getDebugLoc(), TII->get(AMDGPU::V_NOP_e32));
+
+  return true;
+}
+
+bool GCNHazardRecognizer::fixShift64HighRegBug(MachineInstr *MI) {
+  if (!ST.hasShift64HighRegBug())
+    return false;
+
+  switch (MI->getOpcode()) {
+  default:
+    return false;
+  case AMDGPU::V_LSHLREV_B64_e64:
+  case AMDGPU::V_LSHRREV_B64_e64:
+  case AMDGPU::V_ASHRREV_I64_e64:
+    break;
+  }
+
+  MachineOperand *Amt = TII.getNamedOperand(*MI, AMDGPU::OpName::src0);
+  if (!Amt->isReg())
+    return false;
+
+  Register AmtReg = Amt->getReg();
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+  // Check if this is a last VGPR in the allocation block.
+  if (!TRI.isVGPR(MRI, AmtReg) || ((AmtReg - AMDGPU::VGPR0) & 7) != 7)
+    return false;
+
+  if (AmtReg != AMDGPU::VGPR255 && MRI.isPhysRegUsed(AmtReg + 1))
+    return false;
+
+  MachineOperand *Src1 = TII.getNamedOperand(*MI, AMDGPU::OpName::src1);
+  bool OverlappedSrc = Src1->isReg() && TRI.regsOverlap(Src1->getReg(), AmtReg);
+  bool OverlappedDst = MI->modifiesRegister(AmtReg, &TRI);
+  bool Overlapped = OverlappedSrc || OverlappedDst;
+
+  assert(!OverlappedDst || !OverlappedSrc ||
+         Src1->getReg() == MI->getOperand(0).getReg());
+  assert(ST.needsAlignedVGPRs());
+  static_assert(AMDGPU::VGPR0 + 1 == AMDGPU::VGPR1);
+
+  Register NewReg;
+  for (MCRegister Reg : Overlapped ? AMDGPU::VReg_64_Align2RegClass
+                                   : AMDGPU::VGPR_32RegClass) {
+    if (!MI->modifiesRegister(Reg, &TRI) && !MI->readsRegister(Reg, &TRI)) {
+      NewReg = Reg;
+      break;
+    }
+  }
+
+  Register NewAmt = Overlapped ? (Register)TRI.getSubReg(NewReg, AMDGPU::sub1)
+                               : NewReg;
+  Register NewAmtLo;
+
+  if (Overlapped)
+    NewAmtLo = TRI.getSubReg(NewReg, AMDGPU::sub0);
+
+  DebugLoc DL = MI->getDebugLoc();
+  MachineBasicBlock *MBB = MI->getParent();
+  // Insert a full wait count because found register might be pending a wait.
+  BuildMI(*MBB, MI, DL, TII.get(AMDGPU::S_WAITCNT))
+      .addImm(0);
+
+  // Insert V_SWAP_B32 instruction(s) and run hazard recognizer on them.
+  if (Overlapped)
+    runOnInstruction(
+        BuildMI(*MBB, MI, DL, TII.get(AMDGPU::V_SWAP_B32), NewAmtLo)
+            .addDef(AmtReg - 1)
+            .addReg(AmtReg - 1, RegState::Undef)
+            .addReg(NewAmtLo, RegState::Undef));
+  runOnInstruction(BuildMI(*MBB, MI, DL, TII.get(AMDGPU::V_SWAP_B32), NewAmt)
+                       .addDef(AmtReg)
+                       .addReg(AmtReg, RegState::Undef)
+                       .addReg(NewAmt, RegState::Undef));
+
+  // Instructions emitted after the current instruction will be processed by the
+  // parent loop of the hazard recognizer in a natural way.
+  BuildMI(*MBB, std::next(MI->getIterator()), DL, TII.get(AMDGPU::V_SWAP_B32),
+          AmtReg)
+      .addDef(NewAmt)
+      .addReg(NewAmt)
+      .addReg(AmtReg);
+  if (Overlapped)
+    BuildMI(*MBB, std::next(MI->getIterator()), DL, TII.get(AMDGPU::V_SWAP_B32),
+            AmtReg - 1)
+        .addDef(NewAmtLo)
+        .addReg(NewAmtLo)
+        .addReg(AmtReg - 1);
+
+  // Re-running hazard recognizer on the modified instruction is not necessary,
+  // inserted V_SWAP_B32 has already both read and write new registers so
+  // hazards related to these register has already been handled.
+  Amt->setReg(NewAmt);
+  Amt->setIsKill(false);
+  // We do not update liveness, so verifier may see it as undef.
+  Amt->setIsUndef(true);
+  if (OverlappedDst)
+    MI->getOperand(0).setReg(NewReg);
+  if (OverlappedSrc) {
+    Src1->setReg(NewReg);
+    Src1->setIsKill(false);
+    Src1->setIsUndef(true);
+  }
 
   return true;
 }
@@ -2588,4 +2708,58 @@ bool GCNHazardRecognizer::ShouldPreferAnother(SUnit *SU) {
   }
 
   return false;
+}
+
+bool GCNHazardRecognizer::fixGetPcStallHazard(MachineInstr *MI) {
+  if (!ST.isWave64())
+    return false;
+  if (!ST.hasGetPcStallHazard())
+    return false;
+  if (MI->getOpcode() != AMDGPU::S_GETPC_B64)
+    return false;
+
+  const Register SrcReg = MI->getOperand(0).getReg();
+
+  auto IsHazardFn = [SrcReg](const MachineInstr &I) {
+    if (I.getOpcode() != AMDGPU::V_CNDMASK_B32_e64 &&
+        I.getOpcode() != AMDGPU::V_CNDMASK_B16_e64)
+      return false;
+
+    return I.readsRegister(SrcReg);
+  };
+
+  auto IsExpiredFn = [](const MachineInstr &I, int WaitStates) {
+    // s_waitcnt 0 does not mitigate hazard, but hazard should not exist if
+    // s_waitcnt_depctr va_vdst(0) occurs as this implies all VALUs creating
+    // hazard have completed.
+    //
+    // FIXME: WaitStates limit is an arbitrary number to avoid excessive search.
+    return (I.getOpcode() == AMDGPU::S_WAITCNT_DEPCTR &&
+            !(I.getOperand(0).getImm() & 0xf000)) ||
+           I.getOpcode() == AMDGPU::S_WAIT_IDLE ||
+           WaitStates > 255;
+  };
+
+  if (::getWaitStatesSince(IsHazardFn, MI, IsExpiredFn) ==
+      std::numeric_limits<int>::max())
+    return false;
+
+  auto NextMI = std::next(MI->getIterator());
+
+  // Add s_waitcnt_depctr sa_sdst(0) after s_getpc to ensure completion.
+  BuildMI(*MI->getParent(), NextMI, MI->getDebugLoc(),
+          TII.get(AMDGPU::S_WAITCNT_DEPCTR))
+    .addImm(0xfffe);
+
+  // Update offsets of any references in the bundle with this s_getpc.
+  while (NextMI != MI->getParent()->end() &&
+         NextMI->isBundledWithPred()) {
+    for (auto &Operand : NextMI->operands()) {
+      if (Operand.isGlobal())
+        Operand.setOffset(Operand.getOffset() + 4);
+    }
+    NextMI++;
+  }
+
+  return true;
 }

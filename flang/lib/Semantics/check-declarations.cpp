@@ -813,16 +813,17 @@ void CheckHelper::CheckProcEntity(
   if (symbol.attrs().test(Attr::POINTER)) {
     CheckPointerInitialization(symbol);
     if (const Symbol * interface{details.interface().symbol()}) {
-      if (interface->attrs().test(Attr::INTRINSIC)) {
+      const Symbol &ultimate{interface->GetUltimate()};
+      if (ultimate.attrs().test(Attr::INTRINSIC)) {
         if (const auto intrinsic{
                 context_.intrinsics().IsSpecificIntrinsicFunction(
-                    interface->name().ToString())};
+                    ultimate.name().ToString())};
             !intrinsic || intrinsic->isRestrictedSpecific) { // C1515
           messages_.Say(
               "Intrinsic procedure '%s' is not an unrestricted specific "
               "intrinsic permitted for use as the definition of the interface "
               "to procedure pointer '%s'"_err_en_US,
-              interface->name(), symbol.name());
+              ultimate.name(), symbol.name());
         }
       } else if (IsElementalProcedure(*interface)) {
         messages_.Say("Procedure pointer '%s' may not be ELEMENTAL"_err_en_US,
@@ -1920,8 +1921,7 @@ void CheckHelper::CheckBindC(const Symbol &symbol) {
           "An interface name with BIND attribute must be specified if the BIND attribute is specified in a procedure declaration statement"_err_en_US);
       context_.SetError(symbol);
     }
-  }
-  if (const auto *derived{symbol.detailsIf<DerivedTypeDetails>()}) {
+  } else if (const auto *derived{symbol.detailsIf<DerivedTypeDetails>()}) {
     if (derived->sequence()) { // C1801
       messages_.Say(symbol.name(),
           "A derived type with the BIND attribute cannot have the SEQUENCE attribute"_err_en_US);
@@ -1940,6 +1940,18 @@ void CheckHelper::CheckBindC(const Symbol &symbol) {
         if (IsProcedure(*component)) { // C1804
           messages_.Say(symbol.name(),
               "A derived type with the BIND attribute cannot have a type bound procedure"_err_en_US);
+          context_.SetError(symbol);
+          break;
+        } else if (IsAllocatableOrPointer(*component)) { // C1806
+          messages_.Say(symbol.name(),
+              "A derived type with the BIND attribute cannot have a pointer or allocatable component"_err_en_US);
+          context_.SetError(symbol);
+          break;
+        } else if (component->GetType() && component->GetType()->AsDerived() &&
+            !component->GetType()->AsDerived()->typeSymbol().attrs().test(
+                Attr::BIND_C)) {
+          messages_.Say(component->GetType()->AsDerived()->typeSymbol().name(),
+              "The component of the interoperable derived type must have the BIND attribute"_err_en_US);
           context_.SetError(symbol);
           break;
         }

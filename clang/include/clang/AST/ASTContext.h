@@ -1614,8 +1614,7 @@ public:
                                    QualType Wrapped);
 
   QualType getSubstTemplateTypeParmType(const TemplateTypeParmType *Replaced,
-                                        QualType Replacement,
-                                        Optional<unsigned> PackIndex) const;
+                                        QualType Replacement) const;
   QualType getSubstTemplateTypeParmPackType(
                                           const TemplateTypeParmType *Replaced,
                                             const TemplateArgument &ArgPack);
@@ -2730,6 +2729,10 @@ public:
 
   /// Return number of constant array elements.
   uint64_t getConstantArrayElementCount(const ConstantArrayType *CA) const;
+
+  /// Return number of elements initialized in an ArrayInitLoopExpr.
+  uint64_t
+  getArrayInitLoopExprElementCount(const ArrayInitLoopExpr *AILE) const;
 
   /// Perform adjustment on the parameter type of a function.
   ///

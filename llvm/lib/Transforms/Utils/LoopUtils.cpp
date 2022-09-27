@@ -1395,7 +1395,10 @@ int llvm::rewriteLoopExitValues(Loop *L, LoopInfo *LI, TargetLibraryInfo *TLI,
         // and next SCEV may errneously get smaller cost.
 
         // Collect all the candidate PHINodes to be rewritten.
-        RewritePhiSet.emplace_back(PN, i, ExitValue, Inst, HighCost);
+        Instruction *InsertPt =
+          (isa<PHINode>(Inst) || isa<LandingPadInst>(Inst)) ?
+          &*Inst->getParent()->getFirstInsertionPt() : Inst;
+        RewritePhiSet.emplace_back(PN, i, ExitValue, InsertPt, HighCost);
       }
     }
   }
@@ -1665,8 +1668,7 @@ Value *llvm::addRuntimeChecks(
 }
 
 Value *llvm::addDiffRuntimeChecks(
-    Instruction *Loc, Loop *TheLoop, ArrayRef<PointerDiffInfo> Checks,
-    SCEVExpander &Expander,
+    Instruction *Loc, ArrayRef<PointerDiffInfo> Checks, SCEVExpander &Expander,
     function_ref<Value *(IRBuilderBase &, unsigned)> GetVF, unsigned IC) {
 
   LLVMContext &Ctx = Loc->getContext();

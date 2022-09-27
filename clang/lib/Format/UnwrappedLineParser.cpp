@@ -245,7 +245,7 @@ public:
       : Tokens(Tokens), Position(-1) {}
 
   FormatToken *getNextToken() override {
-    if (Position >= 0 && Tokens[Position]->is(tok::eof)) {
+    if (Position >= 0 && isEOF()) {
       LLVM_DEBUG({
         llvm::dbgs() << "Next ";
         dbgToken(Position);
@@ -815,6 +815,10 @@ bool UnwrappedLineParser::mightFitOnOneLine(
   auto Length = LastToken->TotalLength;
   if (OpeningBrace) {
     assert(OpeningBrace != Tokens.front().Tok);
+    if (auto Prev = OpeningBrace->Previous;
+        Prev && Prev->TotalLength + ColumnLimit == OpeningBrace->TotalLength) {
+      Length -= ColumnLimit;
+    }
     Length -= OpeningBrace->TokenText.size() + 1;
   }
 
@@ -1494,7 +1498,7 @@ void UnwrappedLineParser::parseStructuralElement(
     if (FormatTok->is(tok::l_brace)) {
       FormatTok->setFinalizedType(TT_InlineASMBrace);
       nextToken();
-      while (FormatTok && FormatTok->isNot(tok::eof)) {
+      while (FormatTok && !eof()) {
         if (FormatTok->is(tok::r_brace)) {
           FormatTok->setFinalizedType(TT_InlineASMBrace);
           nextToken();
@@ -1835,7 +1839,7 @@ void UnwrappedLineParser::parseStructuralElement(
       parseParens();
       // Break the unwrapped line if a K&R C function definition has a parameter
       // declaration.
-      if (!IsTopLevel || !Style.isCpp() || !Previous || FormatTok->is(tok::eof))
+      if (!IsTopLevel || !Style.isCpp() || !Previous || eof())
         break;
       if (isC78ParameterDecl(FormatTok, Tokens->peekNextToken(), Previous)) {
         addUnwrappedLine();
@@ -1878,8 +1882,7 @@ void UnwrappedLineParser::parseStructuralElement(
         } else if (Style.BraceWrapping.AfterFunction) {
           addUnwrappedLine();
         }
-        if (!Line->InPPDirective)
-          FormatTok->setFinalizedType(TT_FunctionLBrace);
+        FormatTok->setFinalizedType(TT_FunctionLBrace);
         parseBlock();
         addUnwrappedLine();
         return;
@@ -2007,7 +2010,8 @@ void UnwrappedLineParser::parseStructuralElement(
 
         if (FollowedByNewline && (Text.size() >= 5 || FunctionLike) &&
             tokenCanStartNewLine(*FormatTok) && Text == Text.upper()) {
-          PreviousToken->setFinalizedType(TT_FunctionLikeOrFreestandingMacro);
+          if (PreviousToken->isNot(TT_UntouchableMacroFunc))
+            PreviousToken->setFinalizedType(TT_FunctionLikeOrFreestandingMacro);
           addUnwrappedLine();
           return;
         }
@@ -2206,21 +2210,21 @@ bool UnwrappedLineParser::tryToParseLambda() {
     case tok::l_square:
       parseSquare();
       break;
+    case tok::less:
+      assert(FormatTok->Previous);
+      if (FormatTok->Previous->is(tok::r_square))
+        InTemplateParameterList = true;
+      nextToken();
+      break;
     case tok::kw_auto:
     case tok::kw_class:
     case tok::kw_template:
     case tok::kw_typename:
-      assert(FormatTok->Previous);
-      if (FormatTok->Previous->is(tok::less))
-        InTemplateParameterList = true;
-      nextToken();
-      break;
     case tok::amp:
     case tok::star:
     case tok::kw_const:
     case tok::kw_constexpr:
     case tok::comma:
-    case tok::less:
     case tok::greater:
     case tok::identifier:
     case tok::numeric_constant:
@@ -2602,7 +2606,10 @@ void UnwrappedLineParser::parseUnbracedBody(bool CheckEOF) {
 
   if (Style.InsertBraces && !Line->InPPDirective && !Line->Tokens.empty() &&
       PreprocessorDirectives.empty()) {
-    Tok = getLastNonComment(*Line);
+    assert(!Line->Tokens.empty());
+    Tok = Style.BraceWrapping.AfterControlStatement == FormatStyle::BWACS_Never
+              ? getLastNonComment(*Line)
+              : Line->Tokens.back().Tok;
     assert(Tok);
     if (Tok->BraceCount < 0) {
       assert(Tok->BraceCount == -1);
@@ -2629,7 +2636,7 @@ void UnwrappedLineParser::parseUnbracedBody(bool CheckEOF) {
     ++Tok->BraceCount;
   }
 
-  if (CheckEOF && FormatTok->is(tok::eof))
+  if (CheckEOF && eof())
     addUnwrappedLine();
 
   --Line->Level;
@@ -3537,7 +3544,8 @@ void UnwrappedLineParser::parseConstraintExpression() {
       switch (FormatTok->Previous->Tok.getKind()) {
       case tok::coloncolon:  // Nested identifier.
       case tok::ampamp:      // Start of a function or variable for the
-      case tok::pipepipe:    // constraint expression.
+      case tok::pipepipe:    // constraint expression. (binary)
+      case tok::exclaim:     // The same as above, but unary.
       case tok::kw_requires: // Initial identifier of a requires clause.
       case tok::equal:       // Initial identifier of a concept declaration.
         break;
@@ -3738,7 +3746,7 @@ void UnwrappedLineParser::parseJavaEnumBody() {
   ++Line->Level;
 
   // Parse the enum constants.
-  while (FormatTok->isNot(tok::eof)) {
+  while (!eof()) {
     if (FormatTok->is(tok::l_brace)) {
       // Parse the constant's class body.
       parseBlock(/*MustBeDeclaration=*/true, /*AddLevels=*/1u,

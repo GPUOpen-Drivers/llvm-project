@@ -797,6 +797,9 @@ public:
     return Value.getPointer().isNull();
   }
 
+  // Determines if a type can form `T&`.
+  bool isReferenceable() const;
+
   /// Determine whether this particular QualType instance has the
   /// "const" qualifier set, without looking through typedefs that may have
   /// added "const" at a different level.
@@ -1790,18 +1793,6 @@ protected:
     unsigned NumArgs;
   };
 
-  class SubstTemplateTypeParmTypeBitfields {
-    friend class SubstTemplateTypeParmType;
-
-    unsigned : NumTypeBits;
-
-    /// Represents the index within a pack if this represents a substitution
-    /// from a pack expansion.
-    /// Positive non-zero number represents the index + 1.
-    /// Zero means this is not substituted from an expansion.
-    unsigned PackIndex;
-  };
-
   class SubstTemplateTypeParmPackTypeBitfields {
     friend class SubstTemplateTypeParmPackType;
 
@@ -1884,7 +1875,6 @@ protected:
     ElaboratedTypeBitfields ElaboratedTypeBits;
     VectorTypeBitfields VectorTypeBits;
     SubstTemplateTypeParmPackTypeBitfields SubstTemplateTypeParmPackTypeBits;
-    SubstTemplateTypeParmTypeBitfields SubstTemplateTypeParmTypeBits;
     TemplateSpecializationTypeBitfields TemplateSpecializationTypeBits;
     DependentTemplateSpecializationTypeBitfields
       DependentTemplateSpecializationTypeBits;
@@ -4637,7 +4627,8 @@ public:
 class UnaryTransformType : public Type {
 public:
   enum UTTKind {
-    EnumUnderlyingType
+#define TRANSFORM_TYPE_TRAIT_DEF(Enum, _) Enum,
+#include "clang/Basic/TransformTypeTraits.def"
   };
 
 private:
@@ -4987,12 +4978,9 @@ class SubstTemplateTypeParmType : public Type, public llvm::FoldingSetNode {
   // The original type parameter.
   const TemplateTypeParmType *Replaced;
 
-  SubstTemplateTypeParmType(const TemplateTypeParmType *Param, QualType Canon,
-                            Optional<unsigned> PackIndex)
+  SubstTemplateTypeParmType(const TemplateTypeParmType *Param, QualType Canon)
       : Type(SubstTemplateTypeParm, Canon, Canon->getDependence()),
-        Replaced(Param) {
-    SubstTemplateTypeParmTypeBits.PackIndex = PackIndex ? *PackIndex + 1 : 0;
-  }
+        Replaced(Param) {}
 
 public:
   /// Gets the template parameter that was substituted for.
@@ -5006,25 +4994,18 @@ public:
     return getCanonicalTypeInternal();
   }
 
-  Optional<unsigned> getPackIndex() const {
-    if (SubstTemplateTypeParmTypeBits.PackIndex == 0)
-      return None;
-    return SubstTemplateTypeParmTypeBits.PackIndex - 1;
-  }
-
   bool isSugared() const { return true; }
   QualType desugar() const { return getReplacementType(); }
 
   void Profile(llvm::FoldingSetNodeID &ID) {
-    Profile(ID, getReplacedParameter(), getReplacementType(), getPackIndex());
+    Profile(ID, getReplacedParameter(), getReplacementType());
   }
 
   static void Profile(llvm::FoldingSetNodeID &ID,
                       const TemplateTypeParmType *Replaced,
-                      QualType Replacement, Optional<unsigned> PackIndex) {
+                      QualType Replacement) {
     ID.AddPointer(Replaced);
     ID.AddPointer(Replacement.getAsOpaquePtr());
-    ID.AddInteger(PackIndex ? *PackIndex - 1 : 0);
   }
 
   static bool classof(const Type *T) {
@@ -6582,6 +6563,19 @@ inline const Type *QualType::getTypePtr() const {
 
 inline const Type *QualType::getTypePtrOrNull() const {
   return (isNull() ? nullptr : getCommonPtr()->BaseType);
+}
+
+inline bool QualType::isReferenceable() const {
+  // C++ [defns.referenceable]
+  //   type that is either an object type, a function type that does not have
+  //   cv-qualifiers or a ref-qualifier, or a reference type.
+  const Type &Self = **this;
+  if (Self.isObjectType() || Self.isReferenceType())
+    return true;
+  if (const auto *F = Self.getAs<FunctionProtoType>())
+    return F->getMethodQuals().empty() && F->getRefQualifier() == RQ_None;
+
+  return false;
 }
 
 inline SplitQualType QualType::split() const {

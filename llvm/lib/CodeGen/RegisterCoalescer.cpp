@@ -2743,8 +2743,10 @@ JoinVals::analyzeValue(unsigned ValNo, JoinVals &Other) {
     }
     V.OtherVNI = OtherVNI;
     Val &OtherV = Other.Vals[OtherVNI->id];
-    // Keep this value, check for conflicts when analyzing OtherVNI.
-    if (!OtherV.isAnalyzed())
+    // Keep this value, check for conflicts when analyzing OtherVNI. Avoid
+    // revisiting OtherVNI->id in JoinVals::computeAssignment() below before it
+    // is assigned.
+    if (!OtherV.isAnalyzed() || Other.Assignments[OtherVNI->id] == -1)
       return CR_Keep;
     // Both sides have been analyzed now.
     // Allow overlapping PHI values. Any real interference would show up in a
@@ -4108,7 +4110,7 @@ bool RegisterCoalescer::runOnMachineFunction(MachineFunction &fn) {
   // calls
   if (fn.exposesReturnsTwice()) {
     LLVM_DEBUG(
-        dbgs() << "* Skipped as it exposes funcions that returns twice.\n");
+        dbgs() << "* Skipped as it exposes functions that returns twice.\n");
     return false;
   }
 

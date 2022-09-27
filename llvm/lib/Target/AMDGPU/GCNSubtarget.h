@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //==-----------------------------------------------------------------------===//
 //
@@ -192,6 +194,8 @@ protected:
   bool HasImageStoreD16Bug = false;
   bool HasImageGather4D16Bug = false;
   bool HasVOPDInsts = false;
+
+  bool HasGetPcStallHazard = false;
 
   // Dummy feature to use for assembler in tablegen.
   bool FeatureDisable = false;
@@ -1008,6 +1012,12 @@ public:
     return HasLdsBranchVmemWARHazard;
   }
 
+  // Shift amount of a 64 bit shift cannot be a highest allocated register
+  // if also at the end of the allocation block.
+  bool hasShift64HighRegBug() const {
+    return GFX90AInsts && !GFX940Insts;
+  }
+
   // Has one cycle hazard on transcendental instruction feeding a
   // non transcendental VALU.
   bool hasTransForwardingHazard() const { return GFX940Insts; }
@@ -1043,6 +1053,8 @@ public:
   }
 
   bool hasVALUTransUseHazard() const { return getGeneration() >= GFX11; }
+
+  bool hasGetPcStallHazard() const { return HasGetPcStallHazard; }
 
   /// Return if operations acting on VGPR tuples require even alignment.
   bool needsAlignedVGPRs() const { return GFX90AInsts; }
