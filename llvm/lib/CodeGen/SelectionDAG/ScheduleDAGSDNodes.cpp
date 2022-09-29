@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -110,15 +112,11 @@ SUnit *ScheduleDAGSDNodes::Clone(SUnit *Old) {
 static void CheckForPhysRegDependency(SDNode *Def, SDNode *User, unsigned Op,
                                       const TargetRegisterInfo *TRI,
                                       const TargetInstrInfo *TII,
-                                      const TargetLowering &TLI,
                                       unsigned &PhysReg, int &Cost) {
   if (Op != 2 || User->getOpcode() != ISD::CopyToReg)
     return;
 
   unsigned Reg = cast<RegisterSDNode>(User->getOperand(1))->getReg();
-  if (TLI.checkForPhysRegDependency(Def, User, Op, TRI, TII, PhysReg, Cost))
-    return;
-
   if (Register::isVirtualRegister(Reg))
     return;
 
@@ -489,8 +487,7 @@ void ScheduleDAGSDNodes::AddSchedEdges() {
         unsigned PhysReg = 0;
         int Cost = 1;
         // Determine if this is a physical register dependency.
-        const TargetLowering &TLI = DAG->getTargetLoweringInfo();
-        CheckForPhysRegDependency(OpN, N, i, TRI, TII, TLI, PhysReg, Cost);
+        CheckForPhysRegDependency(OpN, N, i, TRI, TII, PhysReg, Cost);
         assert((PhysReg == 0 || !isChain) &&
                "Chain dependence via physreg data?");
         // FIXME: See ScheduleDAGSDNodes::EmitCopyFromReg. For now, scheduler

@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -march=amdgcn -mcpu=bonaire -verify-machineinstrs < %s | FileCheck -check-prefixes=SI,FUNC,GFX7 %s
 ; RUN: llc -march=amdgcn -mcpu=tonga -mattr=-flat-for-global -verify-machineinstrs < %s | FileCheck -check-prefixes=SI,FUNC,GFX8 %s
 
@@ -58,7 +60,7 @@ entry:
 
 ; FUNC-LABEL: {{^}}null_32bit_lds_ptr:
 ; GFX7 v_cmp_ne_u32
-; GFX7: s_cselect_b32
+; GFX7: v_cndmask_b32
 ; GFX8: s_cmp_lg_u32
 ; GFX8-NOT: v_cmp_ne_u32
 ; GFX8: s_cselect_b32

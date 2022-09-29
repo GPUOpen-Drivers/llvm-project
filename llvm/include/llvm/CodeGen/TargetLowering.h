@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -4020,23 +4022,6 @@ public:
                                            SDValue Val, SDValue *Parts,
                                            unsigned NumParts, MVT PartVT,
                                            Optional<CallingConv::ID> CC) const {
-    return false;
-  }
-
-  /// Allows the target to handle physreg-carried dependency
-  /// in target-specific way. Used from the ScheduleDAGSDNodes to decide whether
-  /// to add the edge to the dependency graph.
-  /// Def - input: Selection DAG node defininfg physical register
-  /// User - input: Selection DAG node using physical register
-  /// Op - input: Number of User operand
-  /// PhysReg - inout: set to the physical register if the edge is
-  /// necessary, unchanged otherwise
-  /// Cost - inout: physical register copy cost.
-  /// Returns 'true' is the edge is necessary, 'false' otherwise
-  virtual bool checkForPhysRegDependency(SDNode *Def, SDNode *User, unsigned Op,
-                                         const TargetRegisterInfo *TRI,
-                                         const TargetInstrInfo *TII,
-                                         unsigned &PhysReg, int &Cost) const {
     return false;
   }
 

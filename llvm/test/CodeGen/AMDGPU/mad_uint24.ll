@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc < %s -march=r600 -mcpu=redwood | FileCheck %s --check-prefix=EG --check-prefix=FUNC
 ; RUN: llc < %s -march=r600 -mcpu=cayman | FileCheck %s --check-prefix=EG --check-prefix=FUNC
 ; RUN: llc < %s -march=amdgcn -verify-machineinstrs | FileCheck %s --check-prefix=SI --check-prefix=FUNC --check-prefix=GCN
@@ -74,7 +76,7 @@ entry:
 ; Check that the select instruction is not deleted.
 ; FUNC-LABEL: {{^}}i24_i32_i32_mad:
 ; EG: CNDE_INT
-; SI: s_cselect
+; SI: v_cndmask
 ; GCN2: s_cselect
 define amdgpu_kernel void @i24_i32_i32_mad(i32 addrspace(1)* %out, i32 %a, i32 %b, i32 %c, i32 %d) {
 entry:

@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ;RUN: llc < %s -march=amdgcn -verify-machineinstrs | FileCheck --check-prefix=SI --check-prefix=FUNC %s
 ;RUN: llc < %s -march=amdgcn -mcpu=tonga -mattr=-flat-for-global -verify-machineinstrs | FileCheck --check-prefix=VI --check-prefix=FUNC %s
 ;RUN: llc < %s -march=r600 -mcpu=redwood | FileCheck --check-prefix=EG --check-prefix=FUNC %s
@@ -13,9 +15,9 @@
 ; VI: s_cselect_b32
 
 ; SI-DAG: s_cmp_gt_i32
-; SI-DAG: s_cselect_b32
+; SI-DAG: v_cndmask_b32_e64
 ; SI-DAG: s_cmp_gt_i32
-; SI-DAG: s_cselect_b32
+; SI-DAG: v_cndmask_b32_e32
 
 define amdgpu_kernel void @test_select_v2i32(<2 x i32> addrspace(1)* %out, <2 x i32> addrspace(1)* %in0, <2 x i32> addrspace(1)* %in1, <2 x i32> %val) {
 entry:
@@ -59,10 +61,10 @@ entry:
 ; VI: s_cselect_b32
 ; VI: s_cselect_b32
 
-; SI-DAG: s_cselect_b32
-; SI-DAG: s_cselect_b32
-; SI-DAG: s_cselect_b32
-; SI-DAG: s_cselect_b32
+; SI-DAG: v_cndmask_b32_e64
+; SI-DAG: v_cndmask_b32_e64
+; SI-DAG: v_cndmask_b32_e64
+; SI-DAG: v_cndmask_b32_e32
 
 define amdgpu_kernel void @test_select_v4i32(<4 x i32> addrspace(1)* %out, <4 x i32> addrspace(1)* %in0, <4 x i32> addrspace(1)* %in1, <4 x i32> %val) {
 entry:
