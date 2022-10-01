@@ -1054,6 +1054,8 @@ public:
 
   bool hasVALUTransUseHazard() const { return getGeneration() >= GFX11; }
 
+  bool hasVALUMaskWriteHazard() const { return getGeneration() >= GFX11; }
+
   /// Return if operations acting on VGPR tuples require even alignment.
   bool needsAlignedVGPRs() const { return GFX90AInsts; }
 
