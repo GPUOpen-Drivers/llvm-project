@@ -1164,7 +1164,10 @@ static Instruction *canonicalizeSPF(SelectInst &Sel, ICmpInst &Cmp,
 /// TODO: Wrapping flags could be preserved in some cases with better analysis.
 Instruction *InstCombinerImpl::foldSelectValueEquivalence(SelectInst &Sel,
                                                           ICmpInst &Cmp) {
-  if (!Cmp.isEquality())
+  // Value equivalence substitution requires an all-or-nothing replacement.
+  // It does not make sense for a vector compare where each lane is chosen
+  // independently.
+  if (!Cmp.isEquality() || Cmp.getType()->isVectorTy())
     return nullptr;
 
   // Canonicalize the pattern to ICMP_EQ by swapping the select operands.
@@ -1194,9 +1197,7 @@ Instruction *InstCombinerImpl::foldSelectValueEquivalence(SelectInst &Sel,
     // undefined behavior). Only do this if CmpRHS is a constant, as
     // profitability is not clear for other cases.
     // FIXME: The replacement could be performed recursively.
-    // FIXME: Support vectors.
-    if (match(CmpRHS, m_ImmConstant()) && !match(CmpLHS, m_ImmConstant()) &&
-        !Cmp.getType()->isVectorTy())
+    if (match(CmpRHS, m_ImmConstant()) && !match(CmpLHS, m_ImmConstant()))
       if (auto *I = dyn_cast<Instruction>(TrueVal))
         if (I->hasOneUse() && isSafeToSpeculativelyExecute(I))
           for (Use &U : I->operands())
@@ -2664,40 +2665,46 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
   // If the type of select is not an integer type or if the condition and
   // the selection type are not both scalar nor both vector types, there is no
   // point in attempting to match these patterns.
-  Type *CondType = CondVal->getType();
   if (!isa<Constant>(CondVal) && SelType->isIntOrIntVectorTy() &&
-      CondType->isVectorTy() == SelType->isVectorTy()) {
-    if (Value *S = simplifyWithOpReplaced(TrueVal, CondVal,
-                                          ConstantInt::getTrue(CondType), SQ,
-                                          /* AllowRefinement */ true))
-      return replaceOperand(SI, 1, S);
+      CondVal->getType()->isVectorTy() == SelType->isVectorTy()) {
+    auto *One = ConstantInt::get(SelType, 1);
+    auto *Zero = ConstantInt::get(SelType, 0);
+    auto *AllOnes = ConstantInt::get(SelType, -1, /*isSigned*/ true);
 
-    if (Value *S = simplifyWithOpReplaced(FalseVal, CondVal,
-                                          ConstantInt::getFalse(CondType), SQ,
-                                          /* AllowRefinement */ true))
-      return replaceOperand(SI, 2, S);
+    // select a, a, b -> select a, 1, b
+    // select a, zext(a), b -> select a, 1, b
+    if (match(TrueVal, m_ZExtOrSelf(m_Specific(CondVal))))
+      return replaceOperand(SI, 1, One);
 
-    // Handle patterns involving sext/zext + not explicitly,
-    // as simplifyWithOpReplaced() only looks past one instruction.
+    // select a, sext(a), b -> select a, -1, b
+    if (match(TrueVal, m_SExt(m_Specific(CondVal))))
+      return replaceOperand(SI, 1, AllOnes);
+
+    // select a, b, a -> select a, b, 0
+    // select a, b, zext(a) -> select a, b, 0
+    // select a, b, sext(a) -> select a, b, 0
+    if (match(FalseVal, m_ZExtOrSExtOrSelf(m_Specific(CondVal))))
+      return replaceOperand(SI, 2, Zero);
+
     Value *NotCond;
 
+    // select a, !a, b -> select !a, b, 0
     // select a, sext(!a), b -> select !a, b, 0
     // select a, zext(!a), b -> select !a, b, 0
-    if (match(TrueVal, m_ZExtOrSExt(m_CombineAnd(m_Value(NotCond),
-                                                 m_Not(m_Specific(CondVal))))))
-      return SelectInst::Create(NotCond, FalseVal,
-                                Constant::getNullValue(SelType));
+    if (match(TrueVal, m_ZExtOrSExtOrSelf(m_CombineAnd(
+                           m_Value(NotCond), m_Not(m_Specific(CondVal))))))
+      return SelectInst::Create(NotCond, FalseVal, Zero);
 
+    // select a, b, !a -> select !a, 1, b
     // select a, b, zext(!a) -> select !a, 1, b
-    if (match(FalseVal, m_ZExt(m_CombineAnd(m_Value(NotCond),
-                                            m_Not(m_Specific(CondVal))))))
-      return SelectInst::Create(NotCond, ConstantInt::get(SelType, 1), TrueVal);
+    if (match(FalseVal, m_ZExtOrSelf(m_CombineAnd(m_Value(NotCond),
+                                                  m_Not(m_Specific(CondVal))))))
+      return SelectInst::Create(NotCond, One, TrueVal);
 
     // select a, b, sext(!a) -> select !a, -1, b
     if (match(FalseVal, m_SExt(m_CombineAnd(m_Value(NotCond),
                                             m_Not(m_Specific(CondVal))))))
-      return SelectInst::Create(NotCond, Constant::getAllOnesValue(SelType),
-                                TrueVal);
+      return SelectInst::Create(NotCond, AllOnes, TrueVal);
   }
 
   // Avoid potential infinite loops by checking for non-constant condition.
@@ -2786,6 +2793,15 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
         CondVal->hasOneUse()) {
       TrueVal = Builder.CreateFreeze(TrueVal);
       return BinaryOperator::CreateAnd(FalseVal, Builder.CreateOr(C, TrueVal));
+    }
+
+    if (!SelType->isVectorTy()) {
+      if (Value *S = simplifyWithOpReplaced(TrueVal, CondVal, One, SQ,
+                                            /* AllowRefinement */ true))
+        return replaceOperand(SI, 1, S);
+      if (Value *S = simplifyWithOpReplaced(FalseVal, CondVal, Zero, SQ,
+                                            /* AllowRefinement */ true))
+        return replaceOperand(SI, 2, S);
     }
 
     if (match(FalseVal, m_Zero()) || match(TrueVal, m_One())) {

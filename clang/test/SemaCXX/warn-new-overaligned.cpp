@@ -19,13 +19,9 @@ void helper() {
 }
 
 namespace test2 {
-struct S {
-  char c[256];
-};
-
 class Test {
-  typedef S __attribute__((aligned(256))) alignedS;
-  alignedS high_contention_data[10];
+  typedef int __attribute__((aligned(256))) aligned_int;
+  aligned_int high_contention_data[10];
 };
 
 void helper() {

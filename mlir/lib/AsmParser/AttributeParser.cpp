@@ -1174,11 +1174,9 @@ Attribute Parser::parseStridedLayoutAttr() {
 
     SMLoc loc = getToken().getLoc();
     auto emitWrongTokenError = [&] {
-      emitError(loc, "expected a 64-bit signed integer or '?'");
+      emitError(loc, "expected a non-negative 64-bit signed integer or '?'");
       return llvm::None;
     };
-
-    bool negative = consumeIf(Token::minus);
 
     if (getToken().is(Token::integer)) {
       Optional<uint64_t> value = getToken().getUInt64IntegerValue();
@@ -1186,11 +1184,7 @@ Attribute Parser::parseStridedLayoutAttr() {
           *value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
         return emitWrongTokenError();
       consumeToken();
-      auto result = static_cast<int64_t>(*value);
-      if (negative)
-        result = -result;
-
-      return result;
+      return static_cast<int64_t>(*value);
     }
 
     return emitWrongTokenError();

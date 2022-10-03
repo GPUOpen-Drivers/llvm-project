@@ -18,8 +18,7 @@ void __clear_cache(void*, void*);
 void test1(void) {
   __builtin_va_list ptr;
   ptr.__ap = "x";
-  *(ptr.__ap) = '0'; /* expected-error {{incomplete type 'void' is not assignable}}
-                        expected-warning {{ISO C does not allow indirection on operand of type 'void *'}} */
+  *(ptr.__ap) = '0'; // expected-error {{incomplete type 'void' is not assignable}}
 }
 #else
 // va_list on ARM apcs-gnu is void*.
@@ -31,9 +30,7 @@ void test1(void) {
 
 void test2(void) {
   __builtin_va_list ptr = "x";
-  *ptr = '0'; /* expected-error {{incomplete type 'void' is not assignable}}
-                 expected-warning {{ISO C does not allow indirection on operand of type '__builtin_va_list'}} */
-
+  *ptr = '0'; // expected-error {{incomplete type 'void' is not assignable}}
 }
 #endif
 

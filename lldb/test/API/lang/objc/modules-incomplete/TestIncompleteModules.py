@@ -15,7 +15,7 @@ class IncompleteModulesTestCase(TestBase):
         # Find the line number to break inside main().
         self.line = line_number('main.m', '// Set breakpoint 0 here.')
 
-    @add_test_categories(["gmodules"])
+    @skipIf(debug_info=no_match(["gmodules"]))
     def test_expr(self):
         self.build()
         exe = self.getBuildArtifact("a.out")

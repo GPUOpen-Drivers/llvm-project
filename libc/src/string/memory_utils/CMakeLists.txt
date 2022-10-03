@@ -5,7 +5,6 @@ add_header_library(
     utils.h
     elements.h
     bcmp_implementations.h
-    bzero_implementations.h
     memcmp_implementations.h
     memcpy_implementations.h
     memset_implementations.h
@@ -35,12 +34,4 @@ add_header_library(
     memset_implementations.h
   DEPS
     .memory_utils
-)
-
-add_header_library(
-  bzero_implementation
-  HDRS
-    bzero_implementations.h
-  DEPS
-    .memset_implementation
 )

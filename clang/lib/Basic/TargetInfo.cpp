@@ -14,7 +14,6 @@
 #include "clang/Basic/AddressSpaces.h"
 #include "clang/Basic/CharInfo.h"
 #include "clang/Basic/Diagnostic.h"
-#include "clang/Basic/DiagnosticFrontend.h"
 #include "clang/Basic/LangOptions.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
@@ -495,13 +494,9 @@ bool TargetInfo::initFeatureMap(
     const std::vector<std::string> &FeatureVec) const {
   for (const auto &F : FeatureVec) {
     StringRef Name = F;
-    if (Name.empty())
-      continue;
     // Apply the feature via the target.
-    if (Name[0] != '+' && Name[0] != '-')
-      Diags.Report(diag::warn_fe_backend_invalid_feature_flag) << Name;
-    else
-      setFeatureEnabled(Features, Name.substr(1), Name[0] == '+');
+    bool Enabled = Name[0] == '+';
+    setFeatureEnabled(Features, Name.substr(1), Enabled);
   }
   return true;
 }

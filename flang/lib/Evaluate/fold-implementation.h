@@ -1310,28 +1310,15 @@ AsFlatArrayConstructor(const Expr<SomeKind<CAT>> &expr) {
 // into an Expr<T>, folds it, and returns the resulting wrapped
 // array constructor or constant array value.
 template <typename T>
-std::optional<Expr<T>> FromArrayConstructor(
-    FoldingContext &context, ArrayConstructor<T> &&values, const Shape &shape) {
-  if (auto constShape{AsConstantExtents(context, shape)}) {
-    Expr<T> result{Fold(context, Expr<T>{std::move(values)})};
+Expr<T> FromArrayConstructor(FoldingContext &context,
+    ArrayConstructor<T> &&values, std::optional<ConstantSubscripts> &&shape) {
+  Expr<T> result{Fold(context, Expr<T>{std::move(values)})};
+  if (shape) {
     if (auto *constant{UnwrapConstantValue<T>(result)}) {
-      // Elements and shape are both constant.
-      return Expr<T>{constant->Reshape(std::move(*constShape))};
-    }
-    if (constShape->size() == 1) {
-      if (auto elements{GetShape(context, result)}) {
-        if (auto constElements{AsConstantExtents(context, *elements)}) {
-          if (constElements->size() == 1 &&
-              constElements->at(0) == constShape->at(0)) {
-            // Elements are not constant, but array constructor has
-            // the right known shape and can be simply returned as is.
-            return std::move(result);
-          }
-        }
-      }
+      return Expr<T>{constant->Reshape(std::move(*shape))};
     }
   }
-  return std::nullopt;
+  return result;
 }
 
 // MapOperation is a utility for various specializations of ApplyElementwise()
@@ -1343,7 +1330,7 @@ std::optional<Expr<T>> FromArrayConstructor(
 
 // Unary case
 template <typename RESULT, typename OPERAND>
-std::optional<Expr<RESULT>> MapOperation(FoldingContext &context,
+Expr<RESULT> MapOperation(FoldingContext &context,
     std::function<Expr<RESULT>(Expr<OPERAND> &&)> &&f, const Shape &shape,
     Expr<OPERAND> &&values) {
   ArrayConstructor<RESULT> result{values};
@@ -1365,7 +1352,8 @@ std::optional<Expr<RESULT>> MapOperation(FoldingContext &context,
       result.Push(Fold(context, f(std::move(scalar))));
     }
   }
-  return FromArrayConstructor(context, std::move(result), shape);
+  return FromArrayConstructor(
+      context, std::move(result), AsConstantExtents(context, shape));
 }
 
 template <typename RESULT, typename A>
@@ -1381,11 +1369,10 @@ ArrayConstructor<RESULT> ArrayConstructorFromMold(
 
 // array * array case
 template <typename RESULT, typename LEFT, typename RIGHT>
-auto MapOperation(FoldingContext &context,
+Expr<RESULT> MapOperation(FoldingContext &context,
     std::function<Expr<RESULT>(Expr<LEFT> &&, Expr<RIGHT> &&)> &&f,
     const Shape &shape, std::optional<Expr<SubscriptInteger>> &&length,
-    Expr<LEFT> &&leftValues, Expr<RIGHT> &&rightValues)
-    -> std::optional<Expr<RESULT>> {
+    Expr<LEFT> &&leftValues, Expr<RIGHT> &&rightValues) {
   auto result{ArrayConstructorFromMold<RESULT>(leftValues, std::move(length))};
   auto &leftArrConst{std::get<ArrayConstructor<LEFT>>(leftValues.u)};
   if constexpr (common::HasMember<RIGHT, AllIntrinsicCategoryTypes>) {
@@ -1417,16 +1404,16 @@ auto MapOperation(FoldingContext &context,
       ++rightIter;
     }
   }
-  return FromArrayConstructor(context, std::move(result), shape);
+  return FromArrayConstructor(
+      context, std::move(result), AsConstantExtents(context, shape));
 }
 
 // array * scalar case
 template <typename RESULT, typename LEFT, typename RIGHT>
-auto MapOperation(FoldingContext &context,
+Expr<RESULT> MapOperation(FoldingContext &context,
     std::function<Expr<RESULT>(Expr<LEFT> &&, Expr<RIGHT> &&)> &&f,
     const Shape &shape, std::optional<Expr<SubscriptInteger>> &&length,
-    Expr<LEFT> &&leftValues, const Expr<RIGHT> &rightScalar)
-    -> std::optional<Expr<RESULT>> {
+    Expr<LEFT> &&leftValues, const Expr<RIGHT> &rightScalar) {
   auto result{ArrayConstructorFromMold<RESULT>(leftValues, std::move(length))};
   auto &leftArrConst{std::get<ArrayConstructor<LEFT>>(leftValues.u)};
   for (auto &leftValue : leftArrConst) {
@@ -1434,16 +1421,16 @@ auto MapOperation(FoldingContext &context,
     result.Push(
         Fold(context, f(std::move(leftScalar), Expr<RIGHT>{rightScalar})));
   }
-  return FromArrayConstructor(context, std::move(result), shape);
+  return FromArrayConstructor(
+      context, std::move(result), AsConstantExtents(context, shape));
 }
 
 // scalar * array case
 template <typename RESULT, typename LEFT, typename RIGHT>
-auto MapOperation(FoldingContext &context,
+Expr<RESULT> MapOperation(FoldingContext &context,
     std::function<Expr<RESULT>(Expr<LEFT> &&, Expr<RIGHT> &&)> &&f,
     const Shape &shape, std::optional<Expr<SubscriptInteger>> &&length,
-    const Expr<LEFT> &leftScalar, Expr<RIGHT> &&rightValues)
-    -> std::optional<Expr<RESULT>> {
+    const Expr<LEFT> &leftScalar, Expr<RIGHT> &&rightValues) {
   auto result{ArrayConstructorFromMold<RESULT>(leftScalar, std::move(length))};
   if constexpr (common::HasMember<RIGHT, AllIntrinsicCategoryTypes>) {
     common::visit(
@@ -1466,7 +1453,8 @@ auto MapOperation(FoldingContext &context,
           Fold(context, f(Expr<LEFT>{leftScalar}, std::move(rightScalar))));
     }
   }
-  return FromArrayConstructor(context, std::move(result), shape);
+  return FromArrayConstructor(
+      context, std::move(result), AsConstantExtents(context, shape));
 }
 
 template <typename DERIVED, typename RESULT, typename LEFT, typename RIGHT>
@@ -1539,19 +1527,17 @@ auto ApplyElementwise(FoldingContext &context,
                   std::move(resultLength), std::move(*left), std::move(*right));
             }
           }
-        } else if (IsExpandableScalar(rightExpr, context, *leftShape)) {
+        } else if (IsExpandableScalar(rightExpr)) {
           return MapOperation(context, std::move(f), *leftShape,
               std::move(resultLength), std::move(*left), rightExpr);
         }
       }
     }
-  } else if (rightExpr.Rank() > 0) {
-    if (std::optional<Shape> rightShape{GetShape(context, rightExpr)}) {
-      if (IsExpandableScalar(leftExpr, context, *rightShape)) {
-        if (auto right{AsFlatArrayConstructor(rightExpr)}) {
-          return MapOperation(context, std::move(f), *rightShape,
-              std::move(resultLength), leftExpr, std::move(*right));
-        }
+  } else if (rightExpr.Rank() > 0 && IsExpandableScalar(leftExpr)) {
+    if (std::optional<Shape> shape{GetShape(context, rightExpr)}) {
+      if (auto right{AsFlatArrayConstructor(rightExpr)}) {
+        return MapOperation(context, std::move(f), *shape,
+            std::move(resultLength), leftExpr, std::move(*right));
       }
     }
   }

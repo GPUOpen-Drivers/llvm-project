@@ -135,9 +135,8 @@ public:
   bool TestEmulation(Stream *out_stream, ArchSpec &arch,
                      OptionValueDictionary *test_data) override;
 
-  using EmulateInstruction::GetRegisterInfo;
-  llvm::Optional<RegisterInfo> GetRegisterInfo(lldb::RegisterKind reg_kind,
-                                               uint32_t reg_num) override;
+  bool GetRegisterInfo(lldb::RegisterKind reg_kind, uint32_t reg_num,
+                       RegisterInfo &reg_info) override;
 
   bool CreateFunctionEntryUnwind(UnwindPlan &unwind_plan) override;
 

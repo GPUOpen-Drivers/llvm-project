@@ -584,8 +584,6 @@ class VectorType;
 
     bool preferZeroCompareBranch() const override { return true; }
 
-    bool isMaskAndCmp0FoldingBeneficial(const Instruction &AndI) const override;
-
     bool
     isShuffleMaskLegal(ArrayRef<int> M, EVT VT) const override;
     bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const override;

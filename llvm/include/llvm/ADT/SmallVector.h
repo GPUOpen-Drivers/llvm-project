@@ -468,7 +468,8 @@ protected:
 
   /// Either const T& or T, depending on whether it's cheap enough to take
   /// parameters by value.
-  using ValueParamT = std::conditional_t<TakesParamByValue, T, const T &>;
+  using ValueParamT =
+      typename std::conditional<TakesParamByValue, T, const T &>::type;
 
   SmallVectorTemplateBase(size_t Size) : SmallVectorTemplateCommon<T>(Size) {}
 

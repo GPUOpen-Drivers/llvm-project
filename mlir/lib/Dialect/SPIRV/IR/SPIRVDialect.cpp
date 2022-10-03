@@ -38,8 +38,7 @@ using namespace mlir::spirv;
 // InlinerInterface
 //===----------------------------------------------------------------------===//
 
-/// Returns true if the given region contains spirv.Return or spirv.ReturnValue
-/// ops.
+/// Returns true if the given region contains spv.Return or spv.ReturnValue ops.
 static inline bool containsReturn(Region &region) {
   return llvm::any_of(region, [](Block &block) {
     Operation *terminator = block.getTerminator();
@@ -62,8 +61,8 @@ struct SPIRVInlinerInterface : public DialectInlinerInterface {
   /// 'dest' that is attached to an operation registered to the current dialect.
   bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned,
                        BlockAndValueMapping &) const final {
-    // Return true here when inlining into spirv.func, spirv.mlir.selection, and
-    // spirv.mlir.loop operations.
+    // Return true here when inlining into spv.func, spv.mlir.selection, and
+    // spv.mlir.loop operations.
     auto *op = dest->getParentOp();
     return isa<spirv::FuncOp, spirv::SelectionOp, spirv::LoopOp>(op);
   }
@@ -91,7 +90,7 @@ struct SPIRVInlinerInterface : public DialectInlinerInterface {
       OpBuilder(op).create<spirv::BranchOp>(op->getLoc(), newDest);
       op->erase();
     } else if (auto retValOp = dyn_cast<spirv::ReturnValueOp>(op)) {
-      llvm_unreachable("unimplemented spirv.ReturnValue in inliner");
+      llvm_unreachable("unimplemented spv.ReturnValue in inliner");
     }
   }
 
@@ -99,15 +98,15 @@ struct SPIRVInlinerInterface : public DialectInlinerInterface {
   /// as necessary.
   void handleTerminator(Operation *op,
                         ArrayRef<Value> valuesToRepl) const final {
-    // Only spirv.ReturnValue needs to be handled here.
+    // Only spv.ReturnValue needs to be handled here.
     auto retValOp = dyn_cast<spirv::ReturnValueOp>(op);
     if (!retValOp)
       return;
 
     // Replace the values directly with the return operands.
     assert(valuesToRepl.size() == 1 &&
-           "spirv.ReturnValue expected to only handle one result");
-    valuesToRepl.front().replaceAllUsesWith(retValOp.getValue());
+           "spv.ReturnValue expected to only handle one result");
+    valuesToRepl.front().replaceAllUsesWith(retValOp.value());
   }
 };
 } // namespace
@@ -280,7 +279,7 @@ static LogicalResult parseOptionalArrayStride(const SPIRVDialect &dialect,
 //                | vector-type
 //                | spirv-type
 //
-// array-type ::= `!spirv.array` `<` integer-literal `x` element-type
+// array-type ::= `!spv.array` `<` integer-literal `x` element-type
 //                (`,` `stride` `=` integer-literal)? `>`
 static Type parseArrayType(SPIRVDialect const &dialect,
                            DialectAsmParser &parser) {
@@ -318,8 +317,7 @@ static Type parseArrayType(SPIRVDialect const &dialect,
   return ArrayType::get(elementType, count, stride);
 }
 
-// cooperative-matrix-type ::= `!spirv.coopmatrix` `<` element-type ',' scope
-// ','
+// cooperative-matrix-type ::= `!spv.coopmatrix` `<` element-type ',' scope ','
 //                                                   rows ',' columns>`
 static Type parseCooperativeMatrixType(SPIRVDialect const &dialect,
                                        DialectAsmParser &parser) {
@@ -349,8 +347,7 @@ static Type parseCooperativeMatrixType(SPIRVDialect const &dialect,
   return CooperativeMatrixNVType::get(elementTy, scope, dims[0], dims[1]);
 }
 
-// joint-matrix-type ::= `!spirv.jointmatrix` `<`rows `x` columns `x`
-// element-type
+// joint-matrix-type ::= `!spv.jointmatrix` `<`rows `x` columns `x` element-type
 //                                                       `,` layout `,` scope`>`
 static Type parseJointMatrixType(SPIRVDialect const &dialect,
                                  DialectAsmParser &parser) {
@@ -391,7 +388,7 @@ static Type parseJointMatrixType(SPIRVDialect const &dialect,
 //                 | `Workgroup`
 //                 | <and other storage classes...>
 //
-// pointer-type ::= `!spirv.ptr<` element-type `,` storage-class `>`
+// pointer-type ::= `!spv.ptr<` element-type `,` storage-class `>`
 static Type parsePointerType(SPIRVDialect const &dialect,
                              DialectAsmParser &parser) {
   if (parser.parseLess())
@@ -417,7 +414,7 @@ static Type parsePointerType(SPIRVDialect const &dialect,
   return PointerType::get(pointeeType, *storageClass);
 }
 
-// runtime-array-type ::= `!spirv.rtarray` `<` element-type
+// runtime-array-type ::= `!spv.rtarray` `<` element-type
 //                        (`,` `stride` `=` integer-literal)? `>`
 static Type parseRuntimeArrayType(SPIRVDialect const &dialect,
                                   DialectAsmParser &parser) {
@@ -437,7 +434,7 @@ static Type parseRuntimeArrayType(SPIRVDialect const &dialect,
   return RuntimeArrayType::get(elementType, stride);
 }
 
-// matrix-type ::= `!spirv.matrix` `<` integer-literal `x` element-type `>`
+// matrix-type ::= `!spv.matrix` `<` integer-literal `x` element-type `>`
 static Type parseMatrixType(SPIRVDialect const &dialect,
                             DialectAsmParser &parser) {
   if (parser.parseLess())
@@ -562,7 +559,7 @@ struct ParseCommaSeparatedList<ParseType> {
 //
 // format ::= `Unknown` | `Rgba32f` | <and other SPIR-V Image formats...>
 //
-// image-type ::= `!spirv.image<` element-type `,` dim `,` depth-info `,`
+// image-type ::= `!spv.image<` element-type `,` dim `,` depth-info `,`
 //                              arrayed-info `,` sampling-info `,`
 //                              sampler-use-info `,` format `>`
 static Type parseImageType(SPIRVDialect const &dialect,
@@ -582,7 +579,7 @@ static Type parseImageType(SPIRVDialect const &dialect,
   return ImageType::get(*value);
 }
 
-// sampledImage-type :: = `!spirv.sampledImage<` image-type `>`
+// sampledImage-type :: = `!spv.sampledImage<` image-type `>`
 static Type parseSampledImageType(SPIRVDialect const &dialect,
                                   DialectAsmParser &parser) {
   if (parser.parseLess())
@@ -661,7 +658,7 @@ static ParseResult parseStructMemberDecorations(
 
 // struct-member-decoration ::= integer-literal? spirv-decoration*
 // struct-type ::=
-//             `!spirv.struct<` (id `,`)?
+//             `!spv.struct<` (id `,`)?
 //                          `(`
 //                            (spirv-type (`[` struct-member-decoration `]`)?)*
 //                          `)>`

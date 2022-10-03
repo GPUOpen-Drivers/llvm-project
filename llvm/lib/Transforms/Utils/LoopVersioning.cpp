@@ -137,10 +137,8 @@ void LoopVersioning::addPHINodes(
     // See if we have a single-operand PHI with the value defined by the
     // original loop.
     for (auto I = PHIBlock->begin(); (PN = dyn_cast<PHINode>(I)); ++I) {
-      if (PN->getIncomingValue(0) == Inst) {
-        SE->forgetValue(PN);
+      if (PN->getIncomingValue(0) == Inst)
         break;
-      }
     }
     // If not create it.
     if (!PN) {

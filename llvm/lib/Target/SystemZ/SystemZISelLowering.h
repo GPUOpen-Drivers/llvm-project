@@ -447,7 +447,7 @@ public:
     // LD, and having the full constant in memory enables reg/mem opcodes.
     return VT != MVT::f64;
   }
-  bool hasInlineStackProbe(const MachineFunction &MF) const override;
+  bool hasInlineStackProbe(MachineFunction &MF) const override;
   bool isLegalICmpImmediate(int64_t Imm) const override;
   bool isLegalAddImmediate(int64_t Imm) const override;
   bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM, Type *Ty,
@@ -614,7 +614,7 @@ public:
     return true;
   }
 
-  unsigned getStackProbeSize(const MachineFunction &MF) const;
+  unsigned getStackProbeSize(MachineFunction &MF) const;
 
 private:
   const SystemZSubtarget &Subtarget;

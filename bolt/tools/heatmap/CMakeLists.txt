@@ -7,7 +7,6 @@ set(LLVM_LINK_COMPONENTS
 
 add_bolt_tool(llvm-bolt-heatmap
   heatmap.cpp
-  DISABLE_LLVM_LINK_LLVM_DYLIB
   )
 
 target_link_libraries(llvm-bolt-heatmap

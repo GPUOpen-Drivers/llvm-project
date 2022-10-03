@@ -1286,9 +1286,9 @@ bool EmulateInstructionRISCV::WritePC(lldb::addr_t pc) {
                                LLDB_REGNUM_GENERIC_PC, pc);
 }
 
-llvm::Optional<RegisterInfo>
-EmulateInstructionRISCV::GetRegisterInfo(lldb::RegisterKind reg_kind,
-                                         uint32_t reg_index) {
+bool EmulateInstructionRISCV::GetRegisterInfo(lldb::RegisterKind reg_kind,
+                                              uint32_t reg_index,
+                                              RegisterInfo &reg_info) {
   if (reg_kind == eRegisterKindGeneric) {
     switch (reg_index) {
     case LLDB_REGNUM_GENERIC_PC:
@@ -1320,9 +1320,10 @@ EmulateInstructionRISCV::GetRegisterInfo(lldb::RegisterKind reg_kind,
       RegisterInfoPOSIX_riscv64::GetRegisterInfoCount(m_arch);
 
   if (reg_index >= length || reg_kind != eRegisterKindLLDB)
-    return {};
+    return false;
 
-  return array[reg_index];
+  reg_info = array[reg_index];
+  return true;
 }
 
 bool EmulateInstructionRISCV::SetTargetTriple(const ArchSpec &arch) {

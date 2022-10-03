@@ -5,8 +5,6 @@ set(LLVM_LINK_COMPONENTS
 
 add_llvm_tool(llvm-bat-dump
   bat-dump.cpp
-
-  DISABLE_LLVM_LINK_LLVM_DYLIB
   )
 
 target_link_libraries(llvm-bat-dump

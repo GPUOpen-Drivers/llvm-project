@@ -406,17 +406,8 @@ void RecoveryExprForInvalidDecls(Unknown InvalidDecl) {
   InvalidDecl + 1;
   // CHECK:      BinaryOperator {{.*}}
   // CHECK-NEXT: |-RecoveryExpr {{.*}} '<dependent type>'
-  // CHECK-NEXT: | | `-DeclRefExpr {{.*}} 'InvalidDecl' 'int'
   // CHECK-NEXT: `-IntegerLiteral {{.*}} 'int' 1
   InvalidDecl();
   // CHECK:      CallExpr {{.*}}
   // CHECK-NEXT: `-RecoveryExpr {{.*}} '<dependent type>'
-}
-
-void RecoverToAnInvalidDecl() {
-  Unknown* foo; // invalid decl
-  goo; // the typo was correct to the invalid foo.
-  // Verify that RecoveryExpr has an inner DeclRefExpr.
-  // CHECK:      RecoveryExpr {{.*}} '<dependent type>' contains-errors lvalue
-  // CHECK-NEXT: `-DeclRefExpr {{.*}} 'foo' 'int *'
 }

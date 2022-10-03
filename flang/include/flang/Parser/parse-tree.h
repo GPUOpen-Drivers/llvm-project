@@ -1356,8 +1356,10 @@ struct TypeDeclarationStmt {
 };
 
 // R828 access-id -> access-name | generic-spec
-// "access-name" is ambiguous with "generic-spec", so that's what's parsed
-WRAPPER_CLASS(AccessId, common::Indirection<GenericSpec>);
+struct AccessId {
+  UNION_CLASS_BOILERPLATE(AccessId);
+  std::variant<Name, common::Indirection<GenericSpec>> u;
+};
 
 // R827 access-stmt -> access-spec [[::] access-id-list]
 struct AccessStmt {

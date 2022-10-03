@@ -361,7 +361,8 @@ Error MachOLinkGraphBuilder::graphifyRegularSymbols() {
                                           "index " +
                                           Twine(KV.first));
         NSym.GraphSymbol = &G->addExternalSymbol(
-            *NSym.Name, 0, (NSym.Desc & MachO::N_WEAK_REF) != 0);
+            *NSym.Name, 0,
+            NSym.Desc & MachO::N_WEAK_REF ? Linkage::Weak : Linkage::Strong);
       }
       break;
     case MachO::N_ABS:

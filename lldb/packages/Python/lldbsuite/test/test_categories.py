@@ -13,14 +13,10 @@ import sys
 # LLDB modules
 from lldbsuite.support import gmodules
 
-# Key: Category name
-# Value: should be used in lldbtest's debug-info replication
-debug_info_categories = {
-    'dwarf'    : True,
-    'dwo'      : True,
-    'dsym'     : True,
-    'gmodules' : False
-}
+
+debug_info_categories = [
+    'dwarf', 'dwo', 'dsym', 'gmodules'
+]
 
 all_categories = {
     'basic_process': 'Basic process execution sniff tests.',

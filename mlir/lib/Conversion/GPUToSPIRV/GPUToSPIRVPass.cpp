@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This file implements a pass to convert a kernel function in the GPU Dialect
-// into a spirv.module operation.
+// into a spv.module operation.
 //
 //===----------------------------------------------------------------------===//
 

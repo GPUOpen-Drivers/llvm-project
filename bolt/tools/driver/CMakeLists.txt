@@ -14,8 +14,6 @@ endif()
 add_bolt_tool(llvm-bolt
   llvm-bolt.cpp
 
-  DISABLE_LLVM_LINK_LLVM_DYLIB
-
   DEPENDS
   ${BOLT_DRIVER_DEPS}
   )

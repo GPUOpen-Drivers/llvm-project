@@ -350,7 +350,8 @@ createLoopOp(Fortran::lower::AbstractConverter &converter,
   auto loopOp = createRegionOp<mlir::acc::LoopOp, mlir::acc::YieldOp>(
       firOpBuilder, currentLocation, operands, operandSegments);
 
-  loopOp.setExecMappingAttr(firOpBuilder.getI64IntegerAttr(executionMapping));
+  loopOp->setAttr(mlir::acc::LoopOp::getExecutionMappingAttrName(),
+                  firOpBuilder.getI64IntegerAttr(executionMapping));
 
   // Lower clauses mapped to attributes
   for (const Fortran::parser::AccClause &clause : accClauseList.v) {
@@ -360,15 +361,18 @@ createLoopOp(Fortran::lower::AbstractConverter &converter,
       const std::optional<int64_t> collapseValue =
           Fortran::evaluate::ToInt64(*expr);
       if (collapseValue) {
-        loopOp.setCollapseAttr(firOpBuilder.getI64IntegerAttr(*collapseValue));
+        loopOp->setAttr(mlir::acc::LoopOp::getCollapseAttrName(),
+                        firOpBuilder.getI64IntegerAttr(*collapseValue));
       }
     } else if (std::get_if<Fortran::parser::AccClause::Seq>(&clause.u)) {
-      loopOp.setSeqAttr(firOpBuilder.getUnitAttr());
+      loopOp->setAttr(mlir::acc::LoopOp::getSeqAttrName(),
+                      firOpBuilder.getUnitAttr());
     } else if (std::get_if<Fortran::parser::AccClause::Independent>(
                    &clause.u)) {
-      loopOp.setIndependentAttr(firOpBuilder.getUnitAttr());
+      loopOp->setAttr(mlir::acc::LoopOp::getIndependentAttrName(),
+                      firOpBuilder.getUnitAttr());
     } else if (std::get_if<Fortran::parser::AccClause::Auto>(&clause.u)) {
-      loopOp->setAttr(mlir::acc::LoopOp::getAutoAttrStrName(),
+      loopOp->setAttr(mlir::acc::LoopOp::getAutoAttrName(),
                       firOpBuilder.getUnitAttr());
     }
   }

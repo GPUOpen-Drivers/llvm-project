@@ -638,8 +638,7 @@ LogicalResult mlir::linalg::detail::verifyStructuredOpInterface(Operation *op) {
   auto iteratorTypesRange =
       linalgOp.iterator_types().getAsValueRange<StringAttr>();
   for (StringRef iteratorType : iteratorTypesRange) {
-    if (!llvm::is_contained(getAllIteratorTypeNames(), iteratorType) ||
-        !utils::symbolizeIteratorType(iteratorType).has_value())
+    if (!llvm::is_contained(getAllIteratorTypeNames(), iteratorType))
       return op->emitOpError("unexpected iterator_type (")
              << iteratorType << ")";
   }
@@ -763,11 +762,11 @@ LogicalResult mlir::linalg::detail::verifyStructuredOpInterface(Operation *op) {
   // not used).
   Block &block = linalgOp->getRegion(0).front();
 
-  if (linalgOp.getOpOperandsMatchingBBargs().size() != block.getNumArguments())
+  if (linalgOp.getNumInputsAndOutputs() != block.getNumArguments())
     return op->emitOpError("expected as many non-induction variable region "
                            "arguments as the number of input/output operands");
 
-  for (OpOperand *opOperand : linalgOp.getOpOperandsMatchingBBargs()) {
+  for (OpOperand *opOperand : linalgOp.getInputAndOutputOperands()) {
     Type elementType = getElementTypeOrSelf(opOperand->get());
     Type argType = block.getArgument(opOperand->getOperandNumber()).getType();
     if (elementType != argType)

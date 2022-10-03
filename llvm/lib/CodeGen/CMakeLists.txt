@@ -2,7 +2,7 @@ if (DEFINED LLVM_HAVE_TF_AOT OR DEFINED LLVM_HAVE_TF_API)
   include(TensorFlowCompile)
   set(LLVM_RAEVICT_MODEL_PATH_DEFAULT "models/regalloc-eviction")
 
-  set(LLVM_RAEVICT_MODEL_CURRENT_URL "<UNSPECIFIED>" CACHE STRING "URL to download the LLVM register allocator eviction model")
+  set(LLVM_RAEVICT_MODEL_CURRENT_URL "<UNSPECIFIED>")
 
   if (DEFINED LLVM_HAVE_TF_AOT)
     tf_find_and_compile(
@@ -101,7 +101,6 @@ add_llvm_component_library(LLVMCodeGen
   MachineBlockFrequencyInfo.cpp
   MachineBlockPlacement.cpp
   MachineBranchProbabilityInfo.cpp
-  MachineCFGPrinter.cpp
   MachineCombiner.cpp
   MachineCopyPropagation.cpp
   MachineCSE.cpp

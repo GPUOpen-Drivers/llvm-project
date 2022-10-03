@@ -69,11 +69,11 @@ Triplet &Triplet::set_stride(Expr<SubscriptInteger> &&expr) {
   return *this;
 }
 
-std::optional<bool> Triplet::IsStrideOne() const {
+bool Triplet::IsStrideOne() const {
   if (auto stride{ToInt64(stride_.value())}) {
     return stride == 1;
   } else {
-    return std::nullopt;
+    return false;
   }
 }
 

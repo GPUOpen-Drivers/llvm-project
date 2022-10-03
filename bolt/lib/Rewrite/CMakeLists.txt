@@ -33,8 +33,6 @@ add_llvm_library(LLVMBOLTRewrite
   MachORewriteInstance.cpp
   RewriteInstance.cpp
 
-  DISABLE_LLVM_LINK_LLVM_DYLIB
-
   LINK_LIBS
   ${LLVM_PTHREAD_LIB}
   )

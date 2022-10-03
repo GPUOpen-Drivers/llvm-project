@@ -663,7 +663,7 @@ LogicalResult ReductionOp::verify() {
                             "reduction clause interface";
   while (op) {
     for (const auto &var :
-         cast<ReductionClauseInterface>(op).getAllReductionVars())
+         cast<ReductionClauseInterface>(op).getReductionVars())
       if (var == accumulator())
         return success();
     op = op->getParentWithTrait<ReductionClauseInterface::Trait>();
@@ -689,7 +689,7 @@ LogicalResult TaskGroupOp::verify() {
 //===----------------------------------------------------------------------===//
 // TaskLoopOp
 //===----------------------------------------------------------------------===//
-SmallVector<Value> TaskLoopOp::getAllReductionVars() {
+SmallVector<Value> TaskLoopOp::getReductionVars() {
   SmallVector<Value> allReductionNvars(in_reduction_vars().begin(),
                                        in_reduction_vars().end());
   allReductionNvars.insert(allReductionNvars.end(), reduction_vars().begin(),

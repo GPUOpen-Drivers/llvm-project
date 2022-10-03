@@ -89,17 +89,11 @@ static bool isLoopDead(Loop *L, ScalarEvolution &SE,
       if (!AllOutgoingValuesSame)
         break;
 
-      if (Instruction *I = dyn_cast<Instruction>(incoming)) {
+      if (Instruction *I = dyn_cast<Instruction>(incoming))
         if (!L->makeLoopInvariant(I, Changed, Preheader->getTerminator())) {
           AllEntriesInvariant = false;
           break;
         }
-        if (Changed) {
-          // Moving I to a different location may change its block disposition,
-          // so invalidate its SCEV.
-          SE.forgetValue(I);
-        }
-      }
     }
   }
 

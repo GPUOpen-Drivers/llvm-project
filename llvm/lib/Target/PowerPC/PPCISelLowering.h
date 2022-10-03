@@ -954,9 +954,9 @@ namespace llvm {
     MachineBasicBlock *emitProbedAlloca(MachineInstr &MI,
                                         MachineBasicBlock *MBB) const;
 
-    bool hasInlineStackProbe(const MachineFunction &MF) const override;
+    bool hasInlineStackProbe(MachineFunction &MF) const override;
 
-    unsigned getStackProbeSize(const MachineFunction &MF) const;
+    unsigned getStackProbeSize(MachineFunction &MF) const;
 
     ConstraintType getConstraintType(StringRef Constraint) const override;
 

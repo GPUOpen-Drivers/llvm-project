@@ -195,7 +195,7 @@ template <typename Bitfield, typename StorageType> struct Impl {
 /// API.
 template <typename T, bool = std::is_enum<T>::value>
 struct ResolveUnderlyingType {
-  using type = std::underlying_type_t<T>;
+  using type = typename std::underlying_type<T>::type;
 };
 template <typename T> struct ResolveUnderlyingType<T, false> {
   using type = T;

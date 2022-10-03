@@ -214,14 +214,8 @@ struct NodeBuilderContext {
   const CFGBlock *Block;
   const LocationContext *LC;
 
-  NodeBuilderContext(const CoreEngine &E, const CFGBlock *B,
-                     const LocationContext *L)
-      : Eng(E), Block(B), LC(L) {
-    assert(B);
-  }
-
   NodeBuilderContext(const CoreEngine &E, const CFGBlock *B, ExplodedNode *N)
-      : NodeBuilderContext(E, B, N->getLocationContext()) {}
+      : Eng(E), Block(B), LC(N->getLocationContext()) { assert(B); }
 
   /// Return the CFGBlock associated with this builder.
   const CFGBlock *getBlock() const { return Block; }

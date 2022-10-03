@@ -19,7 +19,6 @@
 #include "llvm/IR/IntrinsicsDirectX.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/FormatVariadic.h"
 
 using namespace clang;
 using namespace CodeGen;
@@ -108,13 +107,6 @@ void clang::CodeGen::CGHLSLRuntime::setHLSLEntryAttributes(
   const StringRef ShaderAttrKindStr = "hlsl.shader";
   Fn->addFnAttr(ShaderAttrKindStr,
                 ShaderAttr->ConvertShaderTypeToStr(ShaderAttr->getType()));
-  if (HLSLNumThreadsAttr *NumThreadsAttr = FD->getAttr<HLSLNumThreadsAttr>()) {
-    const StringRef NumThreadsKindStr = "hlsl.numthreads";
-    std::string NumThreadsStr =
-        formatv("{0},{1},{2}", NumThreadsAttr->getX(), NumThreadsAttr->getY(),
-                NumThreadsAttr->getZ());
-    Fn->addFnAttr(NumThreadsKindStr, NumThreadsStr);
-  }
 }
 
 llvm::Value *CGHLSLRuntime::emitInputSemantic(IRBuilder<> &B,
@@ -151,7 +143,6 @@ void CGHLSLRuntime::emitEntryFunction(const FunctionDecl *FD,
   IRBuilder<> B(BB);
   llvm::SmallVector<Value *> Args;
   // FIXME: support struct parameters where semantics are on members.
-  // See: https://github.com/llvm/llvm-project/issues/57874
   for (const auto *Param : FD->parameters()) {
     Args.push_back(emitInputSemantic(B, *Param));
   }
@@ -159,7 +150,6 @@ void CGHLSLRuntime::emitEntryFunction(const FunctionDecl *FD,
   CallInst *CI = B.CreateCall(FunctionCallee(Fn), Args);
   (void)CI;
   // FIXME: Handle codegen for return type semantics.
-  // See: https://github.com/llvm/llvm-project/issues/57875
   B.CreateRetVoid();
 }
 

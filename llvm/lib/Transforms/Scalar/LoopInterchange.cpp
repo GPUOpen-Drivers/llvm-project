@@ -44,7 +44,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include <cassert>
@@ -573,7 +572,11 @@ struct LoopInterchange {
     LLVM_DEBUG(dbgs() << "Loops interchanged.\n");
     LoopsInterchanged++;
 
-    llvm::formLCSSARecursively(*OuterLoop, *DT, LI, SE);
+    assert(InnerLoop->isLCSSAForm(*DT) &&
+           "Inner loop not left in LCSSA form after loop interchange!");
+    assert(OuterLoop->isLCSSAForm(*DT) &&
+           "Outer loop not left in LCSSA form after loop interchange!");
+
     return true;
   }
 };
@@ -1350,11 +1353,9 @@ bool LoopInterchangeTransform::transform() {
     for (Instruction *InnerIndexVar : InnerIndexVarList)
       WorkList.insert(cast<Instruction>(InnerIndexVar));
     MoveInstructions();
-  }
 
-  // Ensure the inner loop phi nodes have a separate basic block.
-  BasicBlock *InnerLoopHeader = InnerLoop->getHeader();
-  if (InnerLoopHeader->getFirstNonPHI() != InnerLoopHeader->getTerminator()) {
+    // Splits the inner loops phi nodes out into a separate basic block.
+    BasicBlock *InnerLoopHeader = InnerLoop->getHeader();
     SplitBlock(InnerLoopHeader, InnerLoopHeader->getFirstNonPHI(), DT, LI);
     LLVM_DEBUG(dbgs() << "splitting InnerLoopHeader done\n");
   }
@@ -1765,6 +1766,5 @@ PreservedAnalyses LoopInterchangePass::run(LoopNest &LN,
   OptimizationRemarkEmitter ORE(&F);
   if (!LoopInterchange(&AR.SE, &AR.LI, &DI, &AR.DT, CC, &ORE).run(LN))
     return PreservedAnalyses::all();
-  U.markLoopNestChanged(true);
   return getLoopPassPreservedAnalyses();
 }

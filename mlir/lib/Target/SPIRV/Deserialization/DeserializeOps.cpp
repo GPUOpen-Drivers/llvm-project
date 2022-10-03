@@ -40,26 +40,26 @@ static inline spirv::Opcode extractOpcode(uint32_t word) {
 
 Value spirv::Deserializer::getValue(uint32_t id) {
   if (auto constInfo = getConstant(id)) {
-    // Materialize a `spirv.Constant` op at every use site.
+    // Materialize a `spv.Constant` op at every use site.
     return opBuilder.create<spirv::ConstantOp>(unknownLoc, constInfo->second,
                                                constInfo->first);
   }
   if (auto varOp = getGlobalVariable(id)) {
     auto addressOfOp = opBuilder.create<spirv::AddressOfOp>(
-        unknownLoc, varOp.getType(), SymbolRefAttr::get(varOp.getOperation()));
-    return addressOfOp.getPointer();
+        unknownLoc, varOp.type(), SymbolRefAttr::get(varOp.getOperation()));
+    return addressOfOp.pointer();
   }
   if (auto constOp = getSpecConstant(id)) {
     auto referenceOfOp = opBuilder.create<spirv::ReferenceOfOp>(
-        unknownLoc, constOp.getDefaultValue().getType(),
+        unknownLoc, constOp.default_value().getType(),
         SymbolRefAttr::get(constOp.getOperation()));
-    return referenceOfOp.getReference();
+    return referenceOfOp.reference();
   }
   if (auto constCompositeOp = getSpecConstantComposite(id)) {
     auto referenceOfOp = opBuilder.create<spirv::ReferenceOfOp>(
-        unknownLoc, constCompositeOp.getType(),
+        unknownLoc, constCompositeOp.type(),
         SymbolRefAttr::get(constCompositeOp.getOperation()));
-    return referenceOfOp.getReference();
+    return referenceOfOp.reference();
   }
   if (auto specConstOperationInfo = getSpecConstantOperation(id)) {
     return materializeSpecConstantOperation(
@@ -149,7 +149,7 @@ LogicalResult spirv::Deserializer::processInstruction(
   case spirv::Opcode::OpSourceContinued:
   case spirv::Opcode::OpSourceExtension:
     // TODO: This is debug information embedded in the binary which should be
-    // translated into the spirv.module.
+    // translated into the spv.module.
     return success();
   case spirv::Opcode::OpTypeVoid:
   case spirv::Opcode::OpTypeBool:

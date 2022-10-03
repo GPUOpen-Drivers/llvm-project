@@ -1,5 +1,4 @@
 import("//llvm/lib/Target/targets.gni")
-import("//llvm/lib/Target/targets_with_exegesis.gni")
 
 static_library("lib") {
   output_name = "LLVMExegesis"
@@ -39,5 +38,13 @@ static_library("lib") {
     "UopsBenchmarkRunner.cpp",
   ]
 
-  deps += targets_with_exegesis
+  if (llvm_build_AArch64) {
+    deps += [ "AArch64" ]
+  }
+  if (llvm_build_PowerPC) {
+    deps += [ "PowerPC" ]
+  }
+  if (llvm_build_X86) {
+    deps += [ "X86" ]
+  }
 }

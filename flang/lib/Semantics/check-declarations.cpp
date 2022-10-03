@@ -201,9 +201,7 @@ void CheckHelper::Check(
 }
 
 void CheckHelper::Check(const Symbol &symbol) {
-  if (symbol.name().size() > common::maxNameLen &&
-      &symbol == &symbol.GetUltimate() &&
-      !FindModuleFileContaining(symbol.owner())) {
+  if (symbol.name().size() > common::maxNameLen) {
     messages_.Say(symbol.name(),
         "%s has length %d, which is greater than the maximum name length "
         "%d"_port_en_US,
@@ -618,8 +616,7 @@ void CheckHelper::CheckObjectEntity(
       messages_.Say("A dummy argument must not be initialized"_err_en_US);
     } else if (IsFunctionResult(symbol)) {
       messages_.Say("A function result must not be initialized"_err_en_US);
-    } else if (IsInBlankCommon(symbol) &&
-        !FindModuleFileContaining(symbol.owner())) {
+    } else if (IsInBlankCommon(symbol)) {
       messages_.Say(
           "A variable in blank COMMON should not be initialized"_port_en_US);
     }
@@ -1191,22 +1188,15 @@ void CheckHelper::CheckGeneric(
 void CheckHelper::CheckSpecificsAreDistinguishable(
     const Symbol &generic, const GenericDetails &details) {
   GenericKind kind{details.kind()};
-  if (!kind.IsName()) {
+  const SymbolVector &specifics{details.specificProcs()};
+  std::size_t count{specifics.size()};
+  if (count < 2 || !kind.IsName()) {
     return;
   }
   DistinguishabilityHelper helper{context_};
-  for (const Symbol &specific : details.specificProcs()) {
+  for (const Symbol &specific : specifics) {
     if (const Procedure * procedure{Characterize(specific)}) {
-      if (procedure->HasExplicitInterface()) {
-        helper.Add(generic, kind, specific, *procedure);
-      } else {
-        if (auto *msg{messages_.Say(specific.name(),
-                "Specific procedure '%s' of generic interface '%s' must have an explicit interface"_err_en_US,
-                specific.name(), generic.name())}) {
-          msg->Attach(
-              generic.name(), "Definition of '%s'"_en_US, generic.name());
-        }
-      }
+      helper.Add(generic, kind, specific, *procedure);
     }
   }
   helper.Check(generic.owner());
@@ -1967,8 +1957,7 @@ void CheckHelper::CheckBindC(const Symbol &symbol) {
         }
       }
     }
-    if (derived->componentNames().empty() &&
-        !FindModuleFileContaining(symbol.owner())) { // C1805
+    if (derived->componentNames().empty()) { // C1805
       messages_.Say(symbol.name(),
           "A derived type with the BIND attribute is empty"_port_en_US);
     }

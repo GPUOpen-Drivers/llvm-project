@@ -888,7 +888,6 @@ shouldPartialUnroll(const unsigned LoopSize, const unsigned TripCount,
 // refactored into it own function.
 bool llvm::computeUnrollCount(
     Loop *L, const TargetTransformInfo &TTI, DominatorTree &DT, LoopInfo *LI,
-    AssumptionCache *AC,
     ScalarEvolution &SE, const SmallPtrSetImpl<const Value *> &EphValues,
     OptimizationRemarkEmitter *ORE, unsigned TripCount, unsigned MaxTripCount,
     bool MaxOrZero, unsigned TripMultiple, unsigned LoopSize,
@@ -979,7 +978,7 @@ bool llvm::computeUnrollCount(
   }
 
   // 5th priority is loop peeling.
-  computePeelCount(L, LoopSize, PP, TripCount, DT, SE, AC, UP.Threshold);
+  computePeelCount(L, LoopSize, PP, TripCount, DT, SE, UP.Threshold);
   if (PP.PeelCount) {
     UP.Runtime = false;
     UP.Count = 1;
@@ -1273,7 +1272,7 @@ static LoopUnrollResult tryToUnrollLoop(
   // fully unroll the loop.
   bool UseUpperBound = false;
   bool IsCountSetExplicitly = computeUnrollCount(
-    L, TTI, DT, LI, &AC, SE, EphValues, &ORE, TripCount, MaxTripCount, MaxOrZero,
+      L, TTI, DT, LI, SE, EphValues, &ORE, TripCount, MaxTripCount, MaxOrZero,
       TripMultiple, LoopSize, UP, PP, UseUpperBound);
   if (!UP.Count)
     return LoopUnrollResult::Unmodified;

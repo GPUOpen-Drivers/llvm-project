@@ -18,8 +18,7 @@ void foo2 (void)
 void foo3 (void)
 {
  void* x = 0;
- void* y = &*x; /* expected-warning{{address of an expression of type 'void'}}
-                   expected-warning {{ISO C does not allow indirection on operand of type 'void *'}} */
+ void* y = &*x; /* expected-warning{{address of an expression of type 'void'}} */
 }
 
 extern const void cv1;

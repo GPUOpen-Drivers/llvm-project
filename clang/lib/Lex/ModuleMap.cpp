@@ -567,11 +567,9 @@ static bool isBetterKnownHeader(const ModuleMap::KnownHeader &New,
 }
 
 ModuleMap::KnownHeader ModuleMap::findModuleForHeader(const FileEntry *File,
-                                                      bool AllowTextual,
-                                                      bool AllowExcluded) {
+                                                      bool AllowTextual) {
   auto MakeResult = [&](ModuleMap::KnownHeader R) -> ModuleMap::KnownHeader {
-    if ((!AllowTextual && R.getRole() & ModuleMap::TextualHeader) ||
-        (!AllowExcluded && R.getRole() & ModuleMap::ExcludedHeader))
+    if (!AllowTextual && R.getRole() & ModuleMap::TextualHeader)
       return {};
     return R;
   };
@@ -701,9 +699,6 @@ ModuleMap::isHeaderUnavailableInModule(const FileEntry *Header,
              I = Known->second.begin(),
              E = Known->second.end();
          I != E; ++I) {
-
-      if (I->getRole() == ModuleMap::ExcludedHeader)
-        continue;
 
       if (I->isAvailable() &&
           (!RequestingModule ||
@@ -1266,13 +1261,11 @@ void ModuleMap::addHeader(Module *Mod, Module::Header Header,
 }
 
 void ModuleMap::excludeHeader(Module *Mod, Module::Header Header) {
-  KnownHeader KH(Mod, ModuleHeaderRole::ExcludedHeader);
-
   // Add this as a known header so we won't implicitly add it to any
   // umbrella directory module.
   // FIXME: Should we only exclude it from umbrella modules within the
   // specified module?
-  Headers[Header.Entry].push_back(KH);
+  (void) Headers[Header.Entry];
 
   Mod->Headers[Module::HK_Excluded].push_back(std::move(Header));
 }

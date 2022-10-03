@@ -844,9 +844,6 @@ unsigned getVGPRAllocGranule(const MCSubtargetInfo *STI,
       *EnableWavefrontSize32 :
       STI->getFeatureBits().test(FeatureWavefrontSize32);
 
-  if (STI->getFeatureBits().test(FeatureGFX11FullVGPRs))
-    return IsWave32 ? 24 : 12;
-
   if (hasGFX10_3Insts(*STI))
     return IsWave32 ? 16 : 8;
 
@@ -870,10 +867,7 @@ unsigned getTotalNumVGPRs(const MCSubtargetInfo *STI) {
     return 512;
   if (!isGFX10Plus(*STI))
     return 256;
-  bool IsWave32 = STI->getFeatureBits().test(FeatureWavefrontSize32);
-  if (STI->getFeatureBits().test(FeatureGFX11FullVGPRs))
-    return IsWave32 ? 1536 : 768;
-  return IsWave32 ? 1024 : 512;
+  return STI->getFeatureBits().test(FeatureWavefrontSize32) ? 1024 : 512;
 }
 
 unsigned getAddressableNumVGPRs(const MCSubtargetInfo *STI) {

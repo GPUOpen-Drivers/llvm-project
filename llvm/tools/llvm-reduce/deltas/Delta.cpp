@@ -263,7 +263,7 @@ void llvm::runDeltaPass(TestRunner &Test,
 
 #ifndef NDEBUG
     // Make sure that the number of chunks does not change as we reduce.
-    std::vector<Chunk> NoChunks = {{0, INT_MAX}};
+    std::vector<Chunk> NoChunks;
     Oracle NoChunksCounter(NoChunks);
     std::unique_ptr<ReducerWorkItem> Clone =
         cloneReducerWorkItem(Test.getProgram(), Test.getTargetMachine());

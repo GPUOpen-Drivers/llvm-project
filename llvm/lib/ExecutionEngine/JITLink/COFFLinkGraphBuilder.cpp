@@ -289,7 +289,8 @@ Error COFFLinkGraphBuilder::handleDirectiveSection(StringRef Str) {
     case COFF_OPT_incl: {
       auto DataCopy = G->allocateString(S);
       StringRef StrCopy(DataCopy.data(), DataCopy.size());
-      ExternalSymbols[StrCopy] = &G->addExternalSymbol(StrCopy, 0, false);
+      ExternalSymbols[StrCopy] =
+          &G->addExternalSymbol(StrCopy, 0, Linkage::Strong);
       ExternalSymbols[StrCopy]->setLive(true);
       break;
     }
@@ -360,7 +361,7 @@ Symbol *COFFLinkGraphBuilder::createExternalSymbol(
     object::COFFSymbolRef Symbol, const object::coff_section *Section) {
   if (!ExternalSymbols.count(SymbolName))
     ExternalSymbols[SymbolName] =
-        &G->addExternalSymbol(SymbolName, Symbol.getValue(), false);
+        &G->addExternalSymbol(SymbolName, Symbol.getValue(), Linkage::Strong);
 
   LLVM_DEBUG({
     dbgs() << "    " << SymIndex

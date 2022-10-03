@@ -76,10 +76,8 @@ public:
   bool EvaluateInstruction(uint32_t options) override;
   bool TestEmulation(Stream *out_stream, ArchSpec &arch,
                      OptionValueDictionary *test_data) override;
-  using EmulateInstruction::GetRegisterInfo;
-
-  llvm::Optional<RegisterInfo> GetRegisterInfo(lldb::RegisterKind reg_kind,
-                                               uint32_t reg_num) override;
+  bool GetRegisterInfo(lldb::RegisterKind reg_kind, uint32_t reg_num,
+                       RegisterInfo &reg_info) override;
 
   lldb::addr_t ReadPC(bool &success);
   bool WritePC(lldb::addr_t pc);

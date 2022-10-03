@@ -496,7 +496,6 @@ def StdC : StandardSpec<"stdc"> {
           Macro<"_IOFBF">,
           Macro<"_IOLBF">,
           Macro<"_IONBF">,
-          Macro<"EOF">,
       ], // Macros
       [ // Types
           SizeTType,
@@ -534,17 +533,6 @@ def StdC : StandardSpec<"stdc"> {
               RetValSpec<FILEPtr>,
               [ArgSpec<ConstCharPtr>,
                ArgSpec<ConstCharPtr>]
-          >,
-          FunctionSpec<
-              "fputs",
-              RetValSpec<IntType>,
-              [ArgSpec<ConstCharRestrictedPtr>,
-               ArgSpec<FILERestrictedPtr>]
-          >,
-          FunctionSpec<
-              "puts",
-              RetValSpec<IntType>,
-              [ArgSpec<ConstCharRestrictedPtr>]
           >,
           FunctionSpec<
               "fread",

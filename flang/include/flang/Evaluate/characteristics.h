@@ -16,7 +16,6 @@
 #include "common.h"
 #include "expression.h"
 #include "shape.h"
-#include "tools.h"
 #include "type.h"
 #include "flang/Common/Fortran-features.h"
 #include "flang/Common/Fortran.h"

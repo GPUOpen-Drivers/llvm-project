@@ -1798,8 +1798,6 @@ protected:
 
     unsigned : NumTypeBits;
 
-    unsigned HasNonCanonicalUnderlyingType : 1;
-
     /// Represents the index within a pack if this represents a substitution
     /// from a pack expansion. This index starts at the end of the pack and
     /// increments towards the beginning.
@@ -3892,10 +3890,7 @@ protected:
   }
 
   Qualifiers getFastTypeQuals() const {
-    if (isFunctionProtoType())
-      return Qualifiers::fromFastMask(FunctionTypeBits.FastTypeQuals);
-
-    return Qualifiers();
+    return Qualifiers::fromFastMask(FunctionTypeBits.FastTypeQuals);
   }
 
 public:
@@ -4990,12 +4985,8 @@ public:
 /// been replaced with these.  They are used solely to record that a
 /// type was originally written as a template type parameter;
 /// therefore they are never canonical.
-class SubstTemplateTypeParmType final
-    : public Type,
-      public llvm::FoldingSetNode,
-      private llvm::TrailingObjects<SubstTemplateTypeParmType, QualType> {
+class SubstTemplateTypeParmType : public Type, public llvm::FoldingSetNode {
   friend class ASTContext;
-  friend class llvm::TrailingObjects<SubstTemplateTypeParmType, QualType>;
 
   // The original type parameter.
   const TemplateTypeParmType *Replaced;
@@ -5012,9 +5003,7 @@ public:
   /// Gets the type that was substituted for the template
   /// parameter.
   QualType getReplacementType() const {
-    return SubstTemplateTypeParmTypeBits.HasNonCanonicalUnderlyingType
-               ? *getTrailingObjects<QualType>()
-               : getCanonicalTypeInternal();
+    return getCanonicalTypeInternal();
   }
 
   Optional<unsigned> getPackIndex() const {
@@ -5034,7 +5023,7 @@ public:
                       const TemplateTypeParmType *Replaced,
                       QualType Replacement, Optional<unsigned> PackIndex) {
     ID.AddPointer(Replaced);
-    Replacement.Profile(ID);
+    ID.AddPointer(Replacement.getAsOpaquePtr());
     ID.AddInteger(PackIndex ? *PackIndex - 1 : 0);
   }
 

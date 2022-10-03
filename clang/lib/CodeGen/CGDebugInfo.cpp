@@ -48,8 +48,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MD5.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/SHA1.h"
-#include "llvm/Support/SHA256.h"
 #include "llvm/Support/TimeProfiler.h"
 using namespace clang;
 using namespace clang::CodeGen;
@@ -346,7 +344,7 @@ StringRef CGDebugInfo::getClassName(const RecordDecl *RD) {
 }
 
 Optional<llvm::DIFile::ChecksumKind>
-CGDebugInfo::computeChecksum(FileID FID, SmallString<64> &Checksum) const {
+CGDebugInfo::computeChecksum(FileID FID, SmallString<32> &Checksum) const {
   Checksum.clear();
 
   if (!CGM.getCodeGenOpts().EmitCodeView &&
@@ -358,19 +356,10 @@ CGDebugInfo::computeChecksum(FileID FID, SmallString<64> &Checksum) const {
   if (!MemBuffer)
     return None;
 
-  auto Data = llvm::arrayRefFromStringRef(MemBuffer->getBuffer());
-  switch (CGM.getCodeGenOpts().getDebugSrcHash()) {
-  case clang::CodeGenOptions::DSH_MD5:
-    llvm::toHex(llvm::MD5::hash(Data), /*LowerCase=*/true, Checksum);
-    return llvm::DIFile::CSK_MD5;
-  case clang::CodeGenOptions::DSH_SHA1:
-    llvm::toHex(llvm::SHA1::hash(Data), /*LowerCase=*/true, Checksum);
-    return llvm::DIFile::CSK_SHA1;
-  case clang::CodeGenOptions::DSH_SHA256:
-    llvm::toHex(llvm::SHA256::hash(Data), /*LowerCase=*/true, Checksum);
-    return llvm::DIFile::CSK_SHA256;
-  }
-  llvm_unreachable("Unhandled DebugSrcHashKind enum");
+  llvm::toHex(
+      llvm::MD5::hash(llvm::arrayRefFromStringRef(MemBuffer->getBuffer())),
+      /*LowerCase*/ true, Checksum);
+  return llvm::DIFile::CSK_MD5;
 }
 
 Optional<StringRef> CGDebugInfo::getSource(const SourceManager &SM,
@@ -417,7 +406,7 @@ llvm::DIFile *CGDebugInfo::getOrCreateFile(SourceLocation Loc) {
       return cast<llvm::DIFile>(V);
   }
 
-  SmallString<64> Checksum;
+  SmallString<32> Checksum;
 
   Optional<llvm::DIFile::ChecksumKind> CSKind = computeChecksum(FID, Checksum);
   Optional<llvm::DIFile::ChecksumInfo<StringRef>> CSInfo;
@@ -511,7 +500,7 @@ StringRef CGDebugInfo::getCurrentDirname() {
 }
 
 void CGDebugInfo::CreateCompileUnit() {
-  SmallString<64> Checksum;
+  SmallString<32> Checksum;
   Optional<llvm::DIFile::ChecksumKind> CSKind;
   Optional<llvm::DIFile::ChecksumInfo<StringRef>> CSInfo;
 
@@ -1294,33 +1283,6 @@ llvm::DIType *CGDebugInfo::CreateType(const TemplateSpecializationType *Ty,
                                 getDeclContextDescriptor(AliasDecl));
 }
 
-/// Convert an AccessSpecifier into the corresponding DINode flag.
-/// As an optimization, return 0 if the access specifier equals the
-/// default for the containing type.
-static llvm::DINode::DIFlags getAccessFlag(AccessSpecifier Access,
-                                           const RecordDecl *RD) {
-  AccessSpecifier Default = clang::AS_none;
-  if (RD && RD->isClass())
-    Default = clang::AS_private;
-  else if (RD && (RD->isStruct() || RD->isUnion()))
-    Default = clang::AS_public;
-
-  if (Access == Default)
-    return llvm::DINode::FlagZero;
-
-  switch (Access) {
-  case clang::AS_private:
-    return llvm::DINode::FlagPrivate;
-  case clang::AS_protected:
-    return llvm::DINode::FlagProtected;
-  case clang::AS_public:
-    return llvm::DINode::FlagPublic;
-  case clang::AS_none:
-    return llvm::DINode::FlagZero;
-  }
-  llvm_unreachable("unexpected access enumerator");
-}
-
 llvm::DIType *CGDebugInfo::CreateType(const TypedefType *Ty,
                                       llvm::DIFile *Unit) {
   llvm::DIType *Underlying =
@@ -1336,16 +1298,10 @@ llvm::DIType *CGDebugInfo::CreateType(const TypedefType *Ty,
   uint32_t Align = getDeclAlignIfRequired(Ty->getDecl(), CGM.getContext());
   // Typedefs are derived from some other type.
   llvm::DINodeArray Annotations = CollectBTFDeclTagAnnotations(Ty->getDecl());
-
-  llvm::DINode::DIFlags Flags = llvm::DINode::FlagZero;
-  const DeclContext *DC = Ty->getDecl()->getDeclContext();
-  if (isa<RecordDecl>(DC))
-    Flags = getAccessFlag(Ty->getDecl()->getAccess(), cast<RecordDecl>(DC));
-
   return DBuilder.createTypedef(Underlying, Ty->getDecl()->getName(),
                                 getOrCreateFile(Loc), getLineNumber(Loc),
                                 getDeclContextDescriptor(Ty->getDecl()), Align,
-                                Flags, Annotations);
+                                Annotations);
 }
 
 static unsigned getDwarfCC(CallingConv CC) {
@@ -1437,6 +1393,33 @@ llvm::DIType *CGDebugInfo::CreateType(const FunctionType *Ty,
   llvm::DIType *F = DBuilder.createSubroutineType(
       EltTypeArray, Flags, getDwarfCC(Ty->getCallConv()));
   return F;
+}
+
+/// Convert an AccessSpecifier into the corresponding DINode flag.
+/// As an optimization, return 0 if the access specifier equals the
+/// default for the containing type.
+static llvm::DINode::DIFlags getAccessFlag(AccessSpecifier Access,
+                                           const RecordDecl *RD) {
+  AccessSpecifier Default = clang::AS_none;
+  if (RD && RD->isClass())
+    Default = clang::AS_private;
+  else if (RD && (RD->isStruct() || RD->isUnion()))
+    Default = clang::AS_public;
+
+  if (Access == Default)
+    return llvm::DINode::FlagZero;
+
+  switch (Access) {
+  case clang::AS_private:
+    return llvm::DINode::FlagPrivate;
+  case clang::AS_protected:
+    return llvm::DINode::FlagProtected;
+  case clang::AS_public:
+    return llvm::DINode::FlagPublic;
+  case clang::AS_none:
+    return llvm::DINode::FlagZero;
+  }
+  llvm_unreachable("unexpected access enumerator");
 }
 
 llvm::DIType *CGDebugInfo::createBitFieldType(const FieldDecl *BitFieldDecl,

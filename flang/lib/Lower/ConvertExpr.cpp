@@ -1903,9 +1903,6 @@ public:
           loc, fldTy, name, recTy, fir::getTypeParams(obj)));
       ty = recTy.getType(name);
     }
-    // If parent component is referred then it has no coordinate argument.
-    if (coorArgs.size() == 0)
-      return obj;
     ty = builder.getRefType(ty);
     return fir::factory::componentToExtendedValue(
         builder, loc,
@@ -2753,17 +2750,6 @@ public:
     // function return value.
     assert(call.getNumResults() == 1 &&
            "Expected exactly one result in FUNCTION call");
-
-    // Call a BIND(C) function that return a char.
-    if (caller.characterize().IsBindC() &&
-        funcType.getResults()[0].isa<fir::CharacterType>()) {
-      fir::CharacterType charTy =
-          funcType.getResults()[0].dyn_cast<fir::CharacterType>();
-      mlir::Value len = builder.createIntegerConstant(
-          loc, builder.getCharacterLengthType(), charTy.getLen());
-      return fir::CharBoxValue{call.getResult(0), len};
-    }
-
     return call.getResult(0);
   }
 
@@ -3071,11 +3057,7 @@ public:
   /// the creation of the temp if the actual is a variable and \p byValue is
   /// true. It handles the cases where the actual may be absent, and all of the
   /// copying has to be conditional at runtime.
-  /// If the actual argument may be dynamically absent, return an additional
-  /// boolean mlir::Value that if true means that the actual argument is
-  /// present.
-  std::pair<ExtValue, llvm::Optional<mlir::Value>>
-  prepareActualToBaseAddressLike(
+  ExtValue prepareActualToBaseAddressLike(
       const Fortran::lower::SomeExpr &expr,
       const Fortran::lower::CallerInterface::PassedEntity &arg,
       CopyOutPairs &copyOutPairs, bool byValue) {
@@ -3096,23 +3078,21 @@ public:
         (byValue || (isArray && !Fortran::evaluate::IsSimplyContiguous(
                                     expr, converter.getFoldingContext())));
     const bool needsCopy = isStaticConstantByValue || variableNeedsCopy;
-    auto [argAddr, isPresent] =
-        [&]() -> std::pair<ExtValue, llvm::Optional<mlir::Value>> {
+    auto argAddr = [&]() -> ExtValue {
       if (!actualArgIsVariable && !needsCopy)
         // Actual argument is not a variable. Make sure a variable address is
         // not passed.
-        return {genTempExtAddr(expr), llvm::None};
+        return genTempExtAddr(expr);
       ExtValue baseAddr;
       if (arg.isOptional() && Fortran::evaluate::MayBePassedAsAbsentOptional(
                                   expr, converter.getFoldingContext())) {
         auto [actualArgBind, isPresent] = prepareActualThatMayBeAbsent(expr);
         const ExtValue &actualArg = actualArgBind;
         if (!needsCopy)
-          return {actualArg, isPresent};
+          return actualArg;
 
         if (isArray)
-          return {genCopyIn(actualArg, arg, copyOutPairs, isPresent, byValue),
-                  isPresent};
+          return genCopyIn(actualArg, arg, copyOutPairs, isPresent, byValue);
         // Scalars, create a temp, and use it conditionally at runtime if
         // the argument is present.
         ExtValue temp =
@@ -3133,26 +3113,25 @@ public:
                   builder.create<fir::ResultOp>(loc, absent);
                 })
                 .getResults()[0];
-        return {fir::substBase(temp, selectAddr), isPresent};
+        return fir::substBase(temp, selectAddr);
       }
       // Actual cannot be absent, the actual argument can safely be
       // copied-in/copied-out without any care if needed.
       if (isArray) {
         ExtValue box = genBoxArg(expr);
         if (needsCopy)
-          return {genCopyIn(box, arg, copyOutPairs,
-                            /*restrictCopyAtRuntime=*/llvm::None, byValue),
-                  llvm::None};
+          return genCopyIn(box, arg, copyOutPairs,
+                           /*restrictCopyAtRuntime=*/llvm::None, byValue);
         // Contiguous: just use the box we created above!
         // This gets "unboxed" below, if needed.
-        return {box, llvm::None};
+        return box;
       }
       // Actual argument is a non-optional, non-pointer, non-allocatable
       // scalar.
       ExtValue actualArg = genExtAddr(expr);
       if (needsCopy)
-        return {createInMemoryScalarCopy(builder, loc, actualArg), llvm::None};
-      return {actualArg, llvm::None};
+        return createInMemoryScalarCopy(builder, loc, actualArg);
+      return actualArg;
     }();
     // Scalar and contiguous expressions may be lowered to a fir.box,
     // either to account for potential polymorphism, or because lowering
@@ -3161,7 +3140,7 @@ public:
     // is passed, not one of the dynamic type), and the expr is known to
     // be simply contiguous, so it is safe to unbox it and pass the
     // address without making a copy.
-    return {readIfBoxValue(argAddr), isPresent};
+    return readIfBoxValue(argAddr);
   }
 
   /// Lower a non-elemental procedure reference.
@@ -3271,8 +3250,7 @@ public:
         const bool byValue = arg.passBy == PassBy::BaseAddressValueAttribute ||
                              arg.passBy == PassBy::CharBoxValueAttribute;
         ExtValue argAddr =
-            prepareActualToBaseAddressLike(*expr, arg, copyOutPairs, byValue)
-                .first;
+            prepareActualToBaseAddressLike(*expr, arg, copyOutPairs, byValue);
         if (arg.passBy == PassBy::BaseAddress ||
             arg.passBy == PassBy::BaseAddressValueAttribute) {
           caller.placeInput(arg, fir::getBase(argAddr));
@@ -3302,49 +3280,13 @@ public:
           caller.placeInput(arg, boxChar);
         }
       } else if (arg.passBy == PassBy::Box) {
-        if (arg.mustBeMadeContiguous() &&
-            !Fortran::evaluate::IsSimplyContiguous(
-                *expr, converter.getFoldingContext())) {
-          // If the expression is a PDT, or a polymorphic entity, or an assumed
-          // rank, it cannot currently be safely handled by
-          // prepareActualToBaseAddressLike that is intended to prepare
-          // arguments that can be passed as simple base address.
-          if (auto dynamicType = expr->GetType())
-            if (dynamicType->IsPolymorphic())
-              TODO(loc, "passing a polymorphic entity to an OPTIONAL "
-                        "CONTIGUOUS argument");
-          if (fir::isRecordWithTypeParameters(
-                  fir::unwrapSequenceType(fir::unwrapPassByRefType(argTy))))
-            TODO(loc, "passing to an OPTIONAL CONTIGUOUS derived type argument "
-                      "with length parameters");
-          if (Fortran::evaluate::IsAssumedRank(*expr))
-            TODO(loc, "passing an assumed rank entity to an OPTIONAL "
-                      "CONTIGUOUS argument");
-          // Assumed shape VALUE are currently TODO in the call interface
-          // lowering.
-          const bool byValue = false;
-          auto [argAddr, isPresentValue] =
-              prepareActualToBaseAddressLike(*expr, arg, copyOutPairs, byValue);
-          mlir::Value box = builder.createBox(loc, argAddr);
-          if (isPresentValue) {
-            mlir::Value convertedBox = builder.createConvert(loc, argTy, box);
-            auto absent = builder.create<fir::AbsentOp>(loc, argTy);
-            caller.placeInput(arg,
-                              builder.create<mlir::arith::SelectOp>(
-                                  loc, *isPresentValue, convertedBox, absent));
-          } else {
-            caller.placeInput(arg, builder.createBox(loc, argAddr));
-          }
-
-        } else if (arg.isOptional() &&
-                   Fortran::evaluate::IsAllocatableOrPointerObject(
-                       *expr, converter.getFoldingContext())) {
-          // Before lowering to an address, handle the allocatable/pointer
-          // actual argument to optional fir.box dummy. It is legal to pass
-          // unallocated/disassociated entity to an optional. In this case, an
-          // absent fir.box must be created instead of a fir.box with a null
-          // value (Fortran 2018 15.5.2.12 point 1).
-          //
+        // Before lowering to an address, handle the allocatable/pointer actual
+        // argument to optional fir.box dummy. It is legal to pass
+        // unallocated/disassociated entity to an optional. In this case, an
+        // absent fir.box must be created instead of a fir.box with a null value
+        // (Fortran 2018 15.5.2.12 point 1).
+        if (arg.isOptional() && Fortran::evaluate::IsAllocatableOrPointerObject(
+                                    *expr, converter.getFoldingContext())) {
           // Note that passing an absent allocatable to a non-allocatable
           // optional dummy argument is illegal (15.5.2.12 point 3 (8)). So
           // nothing has to be done to generate an absent argument in this case,
@@ -3911,9 +3853,6 @@ public:
     // FIXME: If the lhs is in an explicit iteration space, the assignment may
     // be to an array of allocatable arrays rather than a single allocatable
     // array.
-    if (explicitSpaceIsActive() && lhs.Rank() > 0)
-      TODO(loc, "assignment to whole allocatable array inside FORALL");
-
     fir::MutableBoxValue mutableBox =
         Fortran::lower::createMutableBox(loc, converter, lhs, symMap);
     if (rhs.Rank() > 0)
@@ -7232,9 +7171,7 @@ private:
         if (components.hasExtendCoorRef()) {
           auto eleBoxTy =
               fir::applyPathToType(innerArg.getType(), iters.iterVec());
-          if (!eleBoxTy || !eleBoxTy.isa<fir::BoxType>())
-            TODO(loc, "assignment in a FORALL involving a designator with a "
-                      "POINTER or ALLOCATABLE component part-ref");
+          assert(eleBoxTy && eleBoxTy.isa<fir::BoxType>());
           auto arrayOp = builder.create<fir::ArrayAccessOp>(
               loc, builder.getRefType(eleBoxTy), innerArg, iters.iterVec(),
               fir::factory::getTypeParams(loc, builder, load));
@@ -7305,9 +7242,7 @@ private:
       }
       if (components.hasExtendCoorRef()) {
         auto eleBoxTy = fir::applyPathToType(load.getType(), iters.iterVec());
-        if (!eleBoxTy || !eleBoxTy.isa<fir::BoxType>())
-          TODO(loc, "assignment in a FORALL involving a designator with a "
-                    "POINTER or ALLOCATABLE component part-ref");
+        assert(eleBoxTy && eleBoxTy.isa<fir::BoxType>());
         auto access = builder.create<fir::ArrayAccessOp>(
             loc, builder.getRefType(eleBoxTy), load, iters.iterVec(),
             fir::factory::getTypeParams(loc, builder, load));
@@ -7808,115 +7743,16 @@ fir::MutableBoxValue Fortran::lower::createMutableBox(
       .genMutableBoxValue(expr);
 }
 
-bool isParentComponent(const Fortran::lower::SomeExpr &expr) {
-  if (const Fortran::semantics::Symbol * symbol{GetLastSymbol(expr)}) {
-    if (symbol->test(Fortran::semantics::Symbol::Flag::ParentComp))
-      return true;
-  }
-  return false;
-}
-
-template <typename OP>
-mlir::Value createSliceForParentComp(fir::FirOpBuilder &builder,
-                                     mlir::Location loc, OP boxOp,
-                                     fir::ExtendedValue box, mlir::Value field,
-                                     bool isArray) {
-  if (boxOp.getSlice()) {
-    mlir::Value existingSlice = boxOp.getSlice();
-    fir::SliceOp sliceOp =
-        mlir::dyn_cast<fir::SliceOp>(existingSlice.getDefiningOp());
-    llvm::SmallVector<mlir::Value> fields = sliceOp.getFields();
-    fields.push_back(field);
-    return builder.createSlice(loc, box, sliceOp.getTriples(), fields);
-  }
-  if (isArray)
-    return builder.createSlice(loc, box, {}, {field});
-  return {};
-}
-
-// Handling special case where the last component is referring to the
-// parent component.
-//
-// TYPE t
-//   integer :: a
-// END TYPE
-// TYPE, EXTENDS(t) :: t2
-//   integer :: b
-// END TYPE
-// TYPE(t2) :: y(2)
-// TYPE(t2) :: a
-// y(:)%t  ! just need to update the box with a slice pointing to the first
-//         ! component of `t`.
-// a%t     ! simple conversion to TYPE(t).
-fir::ExtendedValue
-updateBoxForParentComponent(Fortran::lower::AbstractConverter &converter,
-                            fir::ExtendedValue box,
-                            const Fortran::lower::SomeExpr &expr) {
-  mlir::Location loc = converter.getCurrentLocation();
-  auto &builder = converter.getFirOpBuilder();
-  mlir::Value boxBase = fir::getBase(box);
-  mlir::Operation *op = boxBase.getDefiningOp();
-  fir::BoxType boxTy = boxBase.getType().dyn_cast<fir::BoxType>();
-  mlir::Type boxEleTy = fir::unwrapAllRefAndSeqType(boxTy.getEleTy());
-  auto originalRecTy = boxEleTy.dyn_cast<fir::RecordType>();
-  mlir::Type actualTy = converter.genType(expr);
-  mlir::Type eleTy = fir::unwrapAllRefAndSeqType(actualTy);
-  auto parentCompTy = eleTy.dyn_cast<fir::RecordType>();
-  assert(parentCompTy && "expecting derived-type");
-
-  assert(
-      (mlir::dyn_cast<fir::EmboxOp>(op) || mlir::dyn_cast<fir::ReboxOp>(op)) &&
-      "expecting fir.embox or fir.rebox operation");
-
-  if (parentCompTy.getTypeList().empty())
-    TODO(loc, "parent component with no component");
-
-  // Creating a slice with a path to the first component of the parent component
-  // of the extended type.
-  auto firstComponent = parentCompTy.getTypeList().front();
-  auto fieldTy = fir::FieldType::get(boxTy.getContext());
-  auto field = builder.create<fir::FieldIndexOp>(
-      loc, fieldTy, firstComponent.first, originalRecTy,
-      /*typeParams=*/mlir::ValueRange{});
-
-  if (auto embox = mlir::dyn_cast<fir::EmboxOp>(op)) {
-    mlir::Value slice = createSliceForParentComp(builder, loc, embox, box,
-                                                 field, expr.Rank() > 0);
-    auto newBox = builder.create<fir::EmboxOp>(
-        loc, fir::BoxType::get(actualTy), embox.getMemref(), embox.getShape(),
-        slice, embox.getTypeparams());
-    return fir::substBase(box, fir::getBase(newBox));
-  }
-  if (auto rebox = mlir::dyn_cast<fir::ReboxOp>(op)) {
-    mlir::Value slice = createSliceForParentComp(builder, loc, rebox, box,
-                                                 field, expr.Rank() > 0);
-    auto newBox =
-        builder.create<fir::ReboxOp>(loc, fir::BoxType::get(actualTy),
-                                     rebox.getBox(), rebox.getShape(), slice);
-    return fir::substBase(box, fir::getBase(newBox));
-  }
-  return box;
-}
-
 fir::ExtendedValue Fortran::lower::createBoxValue(
     mlir::Location loc, Fortran::lower::AbstractConverter &converter,
     const Fortran::lower::SomeExpr &expr, Fortran::lower::SymMap &symMap,
     Fortran::lower::StatementContext &stmtCtx) {
   if (expr.Rank() > 0 && Fortran::evaluate::IsVariable(expr) &&
-      !Fortran::evaluate::HasVectorSubscript(expr)) {
-    fir::ExtendedValue result =
-        Fortran::lower::createSomeArrayBox(converter, expr, symMap, stmtCtx);
-    if (isParentComponent(expr))
-      result = updateBoxForParentComponent(converter, result, expr);
-    return result;
-  }
+      !Fortran::evaluate::HasVectorSubscript(expr))
+    return Fortran::lower::createSomeArrayBox(converter, expr, symMap, stmtCtx);
   fir::ExtendedValue addr = Fortran::lower::createSomeExtendedAddress(
       loc, converter, expr, symMap, stmtCtx);
-  fir::ExtendedValue result =
-      fir::BoxValue(converter.getFirOpBuilder().createBox(loc, addr));
-  if (isParentComponent(expr))
-    result = updateBoxForParentComponent(converter, result, expr);
-  return result;
+  return fir::BoxValue(converter.getFirOpBuilder().createBox(loc, addr));
 }
 
 mlir::Value Fortran::lower::createSubroutineCall(

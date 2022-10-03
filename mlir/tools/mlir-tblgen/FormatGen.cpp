@@ -483,8 +483,6 @@ bool mlir::tblgen::isValidLiteral(StringRef value,
   // Check the punctuation that are larger than a single character.
   if (value == "->")
     return true;
-  if (value == "...")
-    return true;
 
   // Otherwise, this must be an identifier.
   return canFormatStringAsKeyword(value, emitError);

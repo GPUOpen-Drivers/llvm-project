@@ -579,7 +579,7 @@ ParseResult LoopOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   if (executionMapping != acc::OpenACCExecMapping::NONE)
-    result.addAttribute(LoopOp::getExecutionMappingAttrStrName(),
+    result.addAttribute(LoopOp::getExecutionMappingAttrName(),
                         builder.getI64IntegerAttr(executionMapping));
 
   // Parse optional results in case there is a reduce.
@@ -662,16 +662,16 @@ void LoopOp::print(OpAsmPrinter &printer) {
                       /*printBlockTerminators=*/true);
 
   printer.printOptionalAttrDictWithKeyword(
-      (*this)->getAttrs(), {LoopOp::getExecutionMappingAttrStrName(),
+      (*this)->getAttrs(), {LoopOp::getExecutionMappingAttrName(),
                             LoopOp::getOperandSegmentSizeAttr()});
 }
 
 LogicalResult acc::LoopOp::verify() {
   // auto, independent and seq attribute are mutually exclusive.
   if ((auto_() && (independent() || seq())) || (independent() && seq())) {
-    return emitError("only one of " + acc::LoopOp::getAutoAttrStrName() + ", " +
-                     acc::LoopOp::getIndependentAttrStrName() + ", " +
-                     acc::LoopOp::getSeqAttrStrName() +
+    return emitError("only one of " + acc::LoopOp::getAutoAttrName() + ", " +
+                     acc::LoopOp::getIndependentAttrName() + ", " +
+                     acc::LoopOp::getSeqAttrName() +
                      " can be present at the same time");
   }
 

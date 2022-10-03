@@ -648,8 +648,7 @@ public:
   /// \param File The header that we wish to map to a module.
   /// \param AllowTextual Whether we want to find textual headers too.
   ModuleMap::KnownHeader findModuleForHeader(const FileEntry *File,
-                                             bool AllowTextual = false,
-                                             bool AllowExcluded = false) const;
+                                             bool AllowTextual = false) const;
 
   /// Retrieve all the modules corresponding to the given file.
   ///

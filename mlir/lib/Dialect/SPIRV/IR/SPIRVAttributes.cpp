@@ -614,7 +614,7 @@ static void print(spirv::VerCapExtAttr triple, DialectAsmPrinter &printer) {
 }
 
 static void print(spirv::TargetEnvAttr targetEnv, DialectAsmPrinter &printer) {
-  printer << spirv::TargetEnvAttr::getKindName() << "<#spirv.";
+  printer << spirv::TargetEnvAttr::getKindName() << "<#spv.";
   print(targetEnv.getTripleAttr(), printer);
   spirv::Vendor vendorID = targetEnv.getVendorID();
   spirv::DeviceType deviceType = targetEnv.getDeviceType();

@@ -180,8 +180,8 @@ Expr<Type<TypeCategory::Logical, KIND>> FoldIntrinsicFunction(
   } else if (name == "is_contiguous") {
     if (args.at(0)) {
       if (auto *expr{args[0]->UnwrapExpr()}) {
-        if (auto contiguous{IsContiguous(*expr, context)}) {
-          return Expr<T>{*contiguous};
+        if (IsSimplyContiguous(*expr, context)) {
+          return Expr<T>{true};
         }
       }
     }

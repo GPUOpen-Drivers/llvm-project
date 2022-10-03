@@ -768,8 +768,7 @@ void CodeGenFunction::StartObjCMethod(const ObjCMethodDecl *OMD,
   }
 
   args.push_back(OMD->getSelfDecl());
-  if (!OMD->isDirectMethod())
-    args.push_back(OMD->getCmdDecl());
+  args.push_back(OMD->getCmdDecl());
 
   args.append(OMD->param_begin(), OMD->param_end());
 

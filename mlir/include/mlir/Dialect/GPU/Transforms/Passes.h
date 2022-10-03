@@ -123,12 +123,6 @@ void registerGpuSerializeToCubinPass();
 /// annotation.
 void registerGpuSerializeToHsacoPass();
 
-/// Create an instance of the GPU kernel function to CUBIN binary serialization
-/// pass.
-std::unique_ptr<Pass> createGpuSerializeToCubinPass(StringRef triple,
-                                                    StringRef chip,
-                                                    StringRef features);
-
 /// Create an instance of the GPU kernel function to HSAco binary serialization
 /// pass.
 std::unique_ptr<Pass> createGpuSerializeToHsacoPass(StringRef triple,

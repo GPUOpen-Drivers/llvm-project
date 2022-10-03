@@ -2231,9 +2231,6 @@ public:
   /// Retrieves the module that we're currently building, if any.
   Module *getCurrentModule();
 
-  /// Retrieves the module whose implementation we're current compiling, if any.
-  Module *getCurrentModuleImplementation();
-
   /// Allocate a new MacroInfo object with the provided SourceLocation.
   MacroInfo *AllocateMacroInfo(SourceLocation L);
 

@@ -76,7 +76,7 @@ void mlir::sparse_tensor::buildSparseCompiler(
   pm.addNestedPass<func::FuncOp>(createConvertSCFToCFPass());
   pm.addPass(createLowerAffinePass());
   pm.addPass(createConvertVectorToLLVMPass(options.lowerVectorToLLVMOptions()));
-  pm.addPass(createMemRefToLLVMConversionPass());
+  pm.addPass(createMemRefToLLVMPass());
   pm.addNestedPass<func::FuncOp>(createConvertComplexToStandardPass());
   pm.addNestedPass<mlir::func::FuncOp>(
       mlir::arith::createArithmeticExpandOpsPass());

@@ -1664,16 +1664,14 @@ class LLDBTestCaseFactory(type):
                 # If any debug info categories were explicitly tagged, assume that list to be
                 # authoritative.  If none were specified, try with all debug
                 # info formats.
-                all_dbginfo_categories = set(test_categories.debug_info_categories.keys())
+                all_dbginfo_categories = set(test_categories.debug_info_categories)
                 categories = set(
                     getattr(
                         attrvalue,
                         "categories",
                         [])) & all_dbginfo_categories
                 if not categories:
-                    categories = [category for category, can_replicate \
-                                  in test_categories.debug_info_categories.items() \
-                                  if can_replicate]
+                    categories = all_dbginfo_categories
 
                 for cat in categories:
                     @decorators.add_test_categories([cat])

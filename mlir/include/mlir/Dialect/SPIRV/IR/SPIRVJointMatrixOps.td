@@ -15,7 +15,7 @@
 
 // -----
 
-def SPIRV_INTELJointMatrixWorkItemLengthOp : SPIRV_IntelVendorOp<"JointMatrixWorkItemLength",
+def SPV_INTELJointMatrixWorkItemLengthOp : SPV_IntelVendorOp<"JointMatrixWorkItemLength",
   [NoSideEffect]> {
   let summary = "See extension SPV_INTEL_joint_matrix";
 
@@ -28,39 +28,39 @@ def SPIRV_INTELJointMatrixWorkItemLengthOp : SPIRV_IntelVendorOp<"JointMatrixWor
     Type is a joint matrix type.
 
     ``` {.ebnf}
-    joint-matrix-length-op ::= ssa-id `=` `spirv.INTEL.JointMatrixWorkItemLength
+    joint-matrix-length-op ::= ssa-id `=` `spv.INTEL.JointMatrixWorkItemLength
                                     ` : ` joint-matrix-type
     ```
 
     For example:
 
     ```
-    %0 = spirv.INTEL.JointMatrixWorkItemLength : !spirv.jointmatrix<Subgroup, i32, 8, 16>
+    %0 = spv.INTEL.JointMatrixWorkItemLength : !spv.jointmatrix<Subgroup, i32, 8, 16>
     ```
   }];
 
-  let assemblyFormat = "attr-dict `:` $joint_matrix_type";
+  let assemblyFormat = "attr-dict `:` $type";
 
   let availability = [
-    MinVersion<SPIRV_V_1_0>,
-    MaxVersion<SPIRV_V_1_6>,
+    MinVersion<SPV_V_1_0>,
+    MaxVersion<SPV_V_1_6>,
     Extension<[SPV_INTEL_joint_matrix]>,
-    Capability<[SPIRV_C_JointMatrixINTEL]>
+    Capability<[SPV_C_JointMatrixINTEL]>
   ];
 
   let arguments = (ins
-    TypeAttr:$joint_matrix_type
+    TypeAttr:$type
   );
 
   let results = (outs
-    SPIRV_Int32:$result
+    SPV_Int32:$result
   );
   let hasVerifier = 0;
 }
 
 // -----
 
-def SPIRV_INTELJointMatrixLoadOp : SPIRV_IntelVendorOp<"JointMatrixLoad", []> {
+def SPV_INTELJointMatrixLoadOp : SPV_IntelVendorOp<"JointMatrixLoad", []> {
   let summary = "See extension SPV_INTEL_joint_matrix";
 
   let description = [{
@@ -85,10 +85,10 @@ def SPIRV_INTELJointMatrixLoadOp : SPIRV_IntelVendorOp<"JointMatrixLoad", []> {
 
     #### Example:
     ```mlir
-    %0 = spirv.INTEL.JointMatrixLoad <Subgroup> <RowMajor> %ptr, %stride
-         {memory_access = #spirv.memory_access<Volatile>} :
-         (!spirv.ptr<i32, CrossWorkgroup>, i32) ->
-         !spirv.jointmatrix<8x16xi32, ColumnMajor, Subgroup>
+    %0 = spv.INTEL.JointMatrixLoad <Subgroup> <RowMajor> %ptr, %stride
+         {memory_access = #spv.memory_access<Volatile>} :
+         (!spv.ptr<i32, CrossWorkgroup>, i32) ->
+         !spv.jointmatrix<8x16xi32, ColumnMajor, Subgroup>
     ```
   }];
 
@@ -97,29 +97,29 @@ def SPIRV_INTELJointMatrixLoadOp : SPIRV_IntelVendorOp<"JointMatrixLoad", []> {
   }];
 
   let availability = [
-    MinVersion<SPIRV_V_1_0>,
-    MaxVersion<SPIRV_V_1_6>,
+    MinVersion<SPV_V_1_0>,
+    MaxVersion<SPV_V_1_6>,
     Extension<[SPV_INTEL_joint_matrix]>,
-    Capability<[SPIRV_C_JointMatrixINTEL]>
+    Capability<[SPV_C_JointMatrixINTEL]>
   ];
 
   let arguments = (ins
-    SPIRV_AnyPtr:$pointer,
-    SPIRV_Integer:$stride,
-    SPIRV_MatrixLayoutAttr:$layout,
-    SPIRV_ScopeAttr:$scope,
-    OptionalAttr<SPIRV_MemoryAccessAttr>:$memory_access,
+    SPV_AnyPtr:$pointer,
+    SPV_Integer:$stride,
+    SPV_MatrixLayoutAttr:$layout,
+    SPV_ScopeAttr:$scope,
+    OptionalAttr<SPV_MemoryAccessAttr>:$memory_access,
     OptionalAttr<I32Attr>:$alignment
   );
 
   let results = (outs
-    SPIRV_AnyJointMatrix:$result
+    SPV_AnyJointMatrix:$result
   );
 }
 
 // -----
 
-def SPIRV_INTELJointMatrixMadOp : SPIRV_IntelVendorOp<"JointMatrixMad",
+def SPV_INTELJointMatrixMadOp : SPV_IntelVendorOp<"JointMatrixMad",
   [NoSideEffect, AllTypesMatch<["c", "result"]>]> {
   let summary = "See extension SPV_INTEL_joint_matrix";
 
@@ -149,10 +149,10 @@ def SPIRV_INTELJointMatrixMadOp : SPIRV_IntelVendorOp<"JointMatrixMad",
 
     #### Example:
     ```mlir
-    %r = spirv.INTEL.JointMatrixMad <Subgroup> %a, %b, %c :
-         !spirv.jointmatrix<8x32xi8, RowMajor, Subgroup>,
-         !spirv.jointmatrix<32x8xi8, ColumnMajor, Subgroup>
-         -> !spirv.jointmatrix<8x8xi32,  RowMajor, Subgroup>
+    %r = spv.INTEL.JointMatrixMad <Subgroup> %a, %b, %c :
+         !spv.jointmatrix<8x32xi8, RowMajor, Subgroup>,
+         !spv.jointmatrix<32x8xi8, ColumnMajor, Subgroup>
+         -> !spv.jointmatrix<8x8xi32,  RowMajor, Subgroup>
     ```
 
   }];
@@ -162,27 +162,27 @@ def SPIRV_INTELJointMatrixMadOp : SPIRV_IntelVendorOp<"JointMatrixMad",
   }];
 
   let availability = [
-    MinVersion<SPIRV_V_1_0>,
-    MaxVersion<SPIRV_V_1_6>,
+    MinVersion<SPV_V_1_0>,
+    MaxVersion<SPV_V_1_6>,
     Extension<[SPV_INTEL_joint_matrix]>,
-    Capability<[SPIRV_C_JointMatrixINTEL]>
+    Capability<[SPV_C_JointMatrixINTEL]>
   ];
 
   let arguments = (ins
-    SPIRV_AnyJointMatrix:$a,
-    SPIRV_AnyJointMatrix:$b,
-    SPIRV_AnyJointMatrix:$c,
-    SPIRV_ScopeAttr:$scope
+    SPV_AnyJointMatrix:$a,
+    SPV_AnyJointMatrix:$b,
+    SPV_AnyJointMatrix:$c,
+    SPV_ScopeAttr:$scope
   );
 
   let results = (outs
-    SPIRV_AnyJointMatrix:$result
+    SPV_AnyJointMatrix:$result
   );
 }
 
 // -----
 
-def SPIRV_INTELJointMatrixStoreOp : SPIRV_IntelVendorOp<"JointMatrixStore", []> {
+def SPV_INTELJointMatrixStoreOp : SPV_IntelVendorOp<"JointMatrixStore", []> {
   let summary = "See extension SPV_INTEL_joint_matrix";
 
   let description = [{
@@ -212,9 +212,9 @@ def SPIRV_INTELJointMatrixStoreOp : SPIRV_IntelVendorOp<"JointMatrixStore", []> 
 
     #### Example:
     ```mlir
-    spirv.INTEL.JointMatrixStore <Subgroup> <ColumnMajor> %ptr, %m, %stride
-    {memory_access = #spirv.memory_access<Volatile>} : (!spirv.ptr<i32, Workgroup>,
-    !spirv.jointmatrix<8x16xi32, RowMajor, Subgroup>, i32)
+    spv.INTEL.JointMatrixStore <Subgroup> <ColumnMajor> %ptr, %m, %stride
+    {memory_access = #spv.memory_access<Volatile>} : (!spv.ptr<i32, Workgroup>,
+    !spv.jointmatrix<8x16xi32, RowMajor, Subgroup>, i32)
     ```
 
   }];
@@ -224,19 +224,19 @@ def SPIRV_INTELJointMatrixStoreOp : SPIRV_IntelVendorOp<"JointMatrixStore", []> 
   }];
 
   let availability = [
-    MinVersion<SPIRV_V_1_0>,
-    MaxVersion<SPIRV_V_1_6>,
+    MinVersion<SPV_V_1_0>,
+    MaxVersion<SPV_V_1_6>,
     Extension<[SPV_INTEL_joint_matrix]>,
-    Capability<[SPIRV_C_JointMatrixINTEL]>
+    Capability<[SPV_C_JointMatrixINTEL]>
   ];
 
   let arguments = (ins
-    SPIRV_AnyPtr:$pointer,
-    SPIRV_AnyJointMatrix:$object,
-    SPIRV_Integer:$stride,
-    SPIRV_MatrixLayoutAttr:$layout,
-    SPIRV_ScopeAttr:$scope,
-    OptionalAttr<SPIRV_MemoryAccessAttr>:$memory_access,
+    SPV_AnyPtr:$pointer,
+    SPV_AnyJointMatrix:$object,
+    SPV_Integer:$stride,
+    SPV_MatrixLayoutAttr:$layout,
+    SPV_ScopeAttr:$scope,
+    OptionalAttr<SPV_MemoryAccessAttr>:$memory_access,
     OptionalAttr<I32Attr>:$alignment
   );
 

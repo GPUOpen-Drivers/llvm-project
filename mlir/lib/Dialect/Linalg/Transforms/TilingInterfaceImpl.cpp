@@ -90,13 +90,11 @@ struct LinalgOpTilingInterface
   }
 
   /// Return the loop iterator type.
-  SmallVector<utils::IteratorType> getLoopIteratorTypes(Operation *op) const {
+  SmallVector<StringRef> getLoopIteratorTypes(Operation *op) const {
     LinalgOpTy concreteOp = cast<LinalgOpTy>(op);
     return llvm::to_vector(
         llvm::map_range(concreteOp.iterator_types(), [](Attribute strAttr) {
-          return utils::symbolizeIteratorType(
-                     strAttr.cast<StringAttr>().getValue())
-              .value();
+          return strAttr.cast<StringAttr>().getValue();
         }));
   }
 

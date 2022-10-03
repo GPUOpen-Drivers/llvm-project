@@ -98,7 +98,6 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesAll();
     AU.addRequired<RegAllocEvictionAdvisorAnalysis>();
-    AU.addRequired<RegAllocPriorityAdvisorAnalysis>();
     AU.addRequired<MachineBlockFrequencyInfo>();
     MachineFunctionPass::getAnalysisUsage(AU);
   }
@@ -459,12 +458,6 @@ public:
     if (I == LogMap.end())
       return nullptr;
     return I->second.get();
-  }
-
-  void logRewardIfNeeded(const MachineFunction &MF,
-                         llvm::function_ref<float()> GetReward) override {
-    if (auto *Log = this->getLogger(MF))
-      Log->logFloatFinalReward(GetReward());
   }
 
 private:
@@ -1068,19 +1061,13 @@ int64_t DevelopmentModeEvictAdvisor::tryFindEvictionCandidatePosition(
 }
 
 bool RegAllocScoring::runOnMachineFunction(MachineFunction &MF) {
-  Optional<float> CachedReward;
-  auto GetReward = [&]() {
-    if (!CachedReward)
-      CachedReward = static_cast<float>(
+  if (auto *DevModeAnalysis = dyn_cast<DevelopmentModeEvictionAdvisorAnalysis>(
+          &getAnalysis<RegAllocEvictionAdvisorAnalysis>()))
+    if (auto *Log = DevModeAnalysis->getLogger(MF))
+      Log->logFloatFinalReward(static_cast<float>(
           calculateRegAllocScore(MF, getAnalysis<MachineBlockFrequencyInfo>())
-              .getScore());
-    return *CachedReward;
-  };
+              .getScore()));
 
-  getAnalysis<RegAllocEvictionAdvisorAnalysis>().logRewardIfNeeded(MF,
-                                                                   GetReward);
-  getAnalysis<RegAllocPriorityAdvisorAnalysis>().logRewardIfNeeded(MF,
-                                                                   GetReward);
   return false;
 }
 #endif // #ifdef LLVM_HAVE_TF_API

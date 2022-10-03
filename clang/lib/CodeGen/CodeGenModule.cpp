@@ -583,8 +583,9 @@ void CodeGenModule::Release() {
     }
     // Emit amdgpu_code_object_version module flag, which is code object version
     // times 100.
-    if (getTarget().getTargetOpts().CodeObjectVersion !=
-        TargetOptions::COV_None) {
+    // ToDo: Enable module flag for all code object version when ROCm device
+    // library is ready.
+    if (getTarget().getTargetOpts().CodeObjectVersion == TargetOptions::COV_5) {
       getModule().addModuleFlag(llvm::Module::Error,
                                 "amdgpu_code_object_version",
                                 getTarget().getTargetOpts().CodeObjectVersion);

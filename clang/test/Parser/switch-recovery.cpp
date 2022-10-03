@@ -160,15 +160,15 @@ void test12(int x) {
 void missing_statement_case(int x) {
   switch (x) {
     case 1:
-    case 0:
-  } // expected-warning {{label at end of compound statement is a C++2b extension}}
+    case 0: // expected-error {{label at end of switch compound statement: expected statement}}
+  }
 }
 
 void missing_statement_default(int x) {
   switch (x) {
     case 0:
-    default:
-  } // expected-warning {{label at end of compound statement is a C++2b extension}}
+    default: // expected-error {{label at end of switch compound statement: expected statement}}
+  }
 }
 
 void pr19022_1() {
@@ -178,8 +178,9 @@ void pr19022_1() {
 
 void pr19022_1a(int x) {
   switch(x) {
-  case 1  // expected-error{{expected ':' after 'case'}}
-  } // expected-warning {{label at end of compound statement is a C++2b extension}}
+  case 1  // expected-error{{expected ':' after 'case'}} \
+          // expected-error{{label at end of switch compound statement: expected statement}}
+  }
 }
 
 void pr19022_1b(int x) {
@@ -209,9 +210,9 @@ int pr19022_4(int x) {
 
 void pr19022_5(int x) {
   switch(x) {
-  case 1: case // expected-error{{expected ':' after 'case'}}
-  }  // expected-error{{expected expression}} \
-     // expected-warning {{label at end of compound statement is a C++2b extension}}
+  case 1: case // expected-error{{expected ':' after 'case'}} \
+               // expected-error{{expected statement}}
+  }  // expected-error{{expected expression}}
 }
 
 namespace pr19022 {

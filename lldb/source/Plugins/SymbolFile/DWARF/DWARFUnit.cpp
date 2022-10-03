@@ -76,7 +76,6 @@ void DWARFUnit::ExtractUnitDIEIfNeeded() {
     return;
 
   m_has_parsed_non_skeleton_unit = true;
-  m_dwo_error.Clear();
 
   if (!m_dwo_id)
     return; // No DWO file.
@@ -88,24 +87,13 @@ void DWARFUnit::ExtractUnitDIEIfNeeded() {
 
   DWARFUnit *dwo_cu = dwo_symbol_file->GetDWOCompileUnitForHash(*m_dwo_id);
 
-  if (!dwo_cu) {
-    SetDwoError(
-        Status("unable to load .dwo file from \"%s\" due to ID (0x%16.16" PRIx64
-               ") mismatch for skeleton DIE at 0x%8.8" PRIx32,
-               dwo_symbol_file->GetObjectFile()->GetFileSpec().GetPath().c_str(),
-               *m_dwo_id, m_first_die.GetOffset()));
+  if (!dwo_cu)
     return; // Can't fetch the compile unit from the dwo file.
-  }
   dwo_cu->SetUserData(this);
 
   DWARFBaseDIE dwo_cu_die = dwo_cu->GetUnitDIEOnly();
-  if (!dwo_cu_die.IsValid()) {
-    // Can't fetch the compile unit DIE from the dwo file.
-    SetDwoError(
-        Status("unable to extract compile unit DIE from .dwo file for skeleton "
-               "DIE at 0x%8.8" PRIx32, m_first_die.GetOffset()));
-    return;
-  }
+  if (!dwo_cu_die.IsValid())
+    return; // Can't fetch the compile unit DIE from the dwo file.
 
   // Here for DWO CU we want to use the address base set in the skeleton unit
   // (DW_AT_addr_base) if it is available and use the DW_AT_GNU_addr_base

@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: opt -mtriple=amdgcn-- -mcpu=gfx600 -S -amdgpu-unify-divergent-exit-nodes -verify -structurizecfg -verify -si-annotate-control-flow -simplifycfg-require-and-preserve-domtree=1 %s | FileCheck -check-prefix=IR %s
 ; RUN: opt -mtriple=amdgcn-- -mcpu=gfx1100 -mattr=-wavefrontsize32,+wavefrontsize64 -S -amdgpu-unify-divergent-exit-nodes -verify -structurizecfg -verify -si-annotate-control-flow -simplifycfg-require-and-preserve-domtree=1 %s | FileCheck -check-prefix=IR %s
 ; RUN: llc -march=amdgcn -verify-machineinstrs -simplifycfg-require-and-preserve-domtree=1 < %s | FileCheck -check-prefix=GCN %s

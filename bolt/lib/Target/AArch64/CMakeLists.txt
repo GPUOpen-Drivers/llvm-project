@@ -1,4 +1,5 @@
 set(LLVM_LINK_COMPONENTS
+  BOLTCore
   MC
   Support
   AArch64Desc
@@ -7,13 +8,9 @@ set(LLVM_LINK_COMPONENTS
 add_llvm_library(LLVMBOLTTargetAArch64
   AArch64MCPlusBuilder.cpp
 
-  DISABLE_LLVM_LINK_LLVM_DYLIB
-
   DEPENDS
   AArch64CommonTableGen
   )
-
-target_link_libraries(LLVMBOLTTargetAArch64 PRIVATE LLVMBOLTCore)
 
 include_directories(
   ${LLVM_MAIN_SRC_DIR}/lib/Target/AArch64

@@ -1538,8 +1538,6 @@ DEF_TRAVERSE_DECL(CapturedDecl, {
 
 DEF_TRAVERSE_DECL(EmptyDecl, {})
 
-DEF_TRAVERSE_DECL(HLSLBufferDecl, {})
-
 DEF_TRAVERSE_DECL(LifetimeExtendedTemporaryDecl, {
   TRY_TO(TraverseStmt(D->getTemporaryExpr()));
 })

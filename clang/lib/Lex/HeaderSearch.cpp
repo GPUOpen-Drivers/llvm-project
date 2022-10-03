@@ -1522,14 +1522,14 @@ bool HeaderSearch::hasModuleMap(StringRef FileName,
 }
 
 ModuleMap::KnownHeader
-HeaderSearch::findModuleForHeader(const FileEntry *File, bool AllowTextual,
-                                  bool AllowExcluded) const {
+HeaderSearch::findModuleForHeader(const FileEntry *File,
+                                  bool AllowTextual) const {
   if (ExternalSource) {
     // Make sure the external source has handled header info about this file,
     // which includes whether the file is part of a module.
     (void)getExistingFileInfo(File);
   }
-  return ModMap.findModuleForHeader(File, AllowTextual, AllowExcluded);
+  return ModMap.findModuleForHeader(File, AllowTextual);
 }
 
 ArrayRef<ModuleMap::KnownHeader>

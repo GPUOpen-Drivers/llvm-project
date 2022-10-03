@@ -229,16 +229,19 @@ LLVMPointerType::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+namespace {
+/// The positions of different values in the data layout entry.
+enum class DLEntryPos { Size = 0, Abi = 1, Preferred = 2, Address = 3 };
+} // namespace
+
 constexpr const static unsigned kDefaultPointerSizeBits = 64;
 constexpr const static unsigned kDefaultPointerAlignment = 8;
 
-Optional<unsigned> mlir::LLVM::extractPointerSpecValue(Attribute attr,
-                                                       PtrDLEntryPos pos) {
-  auto spec = attr.cast<DenseIntElementsAttr>();
-  auto idx = static_cast<unsigned>(pos);
-  if (idx >= spec.size())
-    return None;
-  return spec.getValues<unsigned>()[idx];
+/// Returns the value that corresponds to named position `pos` from the
+/// attribute `attr` assuming it's a dense integer elements attribute.
+static unsigned extractPointerSpecValue(Attribute attr, DLEntryPos pos) {
+  return attr.cast<DenseIntElementsAttr>()
+      .getValues<unsigned>()[static_cast<unsigned>(pos)];
 }
 
 /// Returns the part of the data layout entry that corresponds to `pos` for the
@@ -247,7 +250,7 @@ Optional<unsigned> mlir::LLVM::extractPointerSpecValue(Attribute attr,
 /// do not provide a custom one, for other address spaces returns None.
 static Optional<unsigned>
 getPointerDataLayoutEntry(DataLayoutEntryListRef params, LLVMPointerType type,
-                          PtrDLEntryPos pos) {
+                          DLEntryPos pos) {
   // First, look for the entry for the pointer in the current address space.
   Attribute currentEntry;
   for (DataLayoutEntryInterface entry : params) {
@@ -260,15 +263,15 @@ getPointerDataLayoutEntry(DataLayoutEntryListRef params, LLVMPointerType type,
     }
   }
   if (currentEntry) {
-    return *extractPointerSpecValue(currentEntry, pos) /
-           (pos == PtrDLEntryPos::Size ? 1 : kBitsInByte);
+    return extractPointerSpecValue(currentEntry, pos) /
+           (pos == DLEntryPos::Size ? 1 : kBitsInByte);
   }
 
   // If not found, and this is the pointer to the default memory space, assume
   // 64-bit pointers.
   if (type.getAddressSpace() == 0) {
-    return pos == PtrDLEntryPos::Size ? kDefaultPointerSizeBits
-                                      : kDefaultPointerAlignment;
+    return pos == DLEntryPos::Size ? kDefaultPointerSizeBits
+                                   : kDefaultPointerAlignment;
   }
 
   return llvm::None;
@@ -278,7 +281,7 @@ unsigned
 LLVMPointerType::getTypeSizeInBits(const DataLayout &dataLayout,
                                    DataLayoutEntryListRef params) const {
   if (Optional<unsigned> size =
-          getPointerDataLayoutEntry(params, *this, PtrDLEntryPos::Size))
+          getPointerDataLayoutEntry(params, *this, DLEntryPos::Size))
     return *size;
 
   // For other memory spaces, use the size of the pointer to the default memory
@@ -291,7 +294,7 @@ LLVMPointerType::getTypeSizeInBits(const DataLayout &dataLayout,
 unsigned LLVMPointerType::getABIAlignment(const DataLayout &dataLayout,
                                           DataLayoutEntryListRef params) const {
   if (Optional<unsigned> alignment =
-          getPointerDataLayoutEntry(params, *this, PtrDLEntryPos::Abi))
+          getPointerDataLayoutEntry(params, *this, DLEntryPos::Abi))
     return *alignment;
 
   if (isOpaque())
@@ -303,7 +306,7 @@ unsigned
 LLVMPointerType::getPreferredAlignment(const DataLayout &dataLayout,
                                        DataLayoutEntryListRef params) const {
   if (Optional<unsigned> alignment =
-          getPointerDataLayoutEntry(params, *this, PtrDLEntryPos::Preferred))
+          getPointerDataLayoutEntry(params, *this, DLEntryPos::Preferred))
     return *alignment;
 
   if (isOpaque())
@@ -336,13 +339,13 @@ bool LLVMPointerType::areCompatible(DataLayoutEntryListRef oldLayout,
       });
     }
     if (it != oldLayout.end()) {
-      size = *extractPointerSpecValue(*it, PtrDLEntryPos::Size);
-      abi = *extractPointerSpecValue(*it, PtrDLEntryPos::Abi);
+      size = extractPointerSpecValue(*it, DLEntryPos::Size);
+      abi = extractPointerSpecValue(*it, DLEntryPos::Abi);
     }
 
     Attribute newSpec = newEntry.getValue().cast<DenseIntElementsAttr>();
-    unsigned newSize = *extractPointerSpecValue(newSpec, PtrDLEntryPos::Size);
-    unsigned newAbi = *extractPointerSpecValue(newSpec, PtrDLEntryPos::Abi);
+    unsigned newSize = extractPointerSpecValue(newSpec, DLEntryPos::Size);
+    unsigned newAbi = extractPointerSpecValue(newSpec, DLEntryPos::Abi);
     if (size != newSize || abi < newAbi || abi % newAbi != 0)
       return false;
   }
@@ -366,8 +369,8 @@ LogicalResult LLVMPointerType::verifyEntries(DataLayoutEntryListRef entries,
       return emitError(loc) << "unexpected layout attribute for pointer to "
                             << key.getElementType();
     }
-    if (extractPointerSpecValue(values, PtrDLEntryPos::Abi) >
-        extractPointerSpecValue(values, PtrDLEntryPos::Preferred)) {
+    if (extractPointerSpecValue(values, DLEntryPos::Abi) >
+        extractPointerSpecValue(values, DLEntryPos::Preferred)) {
       return emitError(loc) << "preferred alignment is expected to be at least "
                                "as large as ABI alignment";
     }

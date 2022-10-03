@@ -74,7 +74,7 @@ static void visit(Operation *op, DenseSet<Operation *> &visited) {
   // Traverse the operands / parent.
   TypeSwitch<Operation *>(op)
       .Case<OperationOp>([&visited](auto operation) {
-        for (Value operand : operation.getOperandValues())
+        for (Value operand : operation.operands())
           visit(operand.getDefiningOp(), visited);
       })
       .Case<ResultOp, ResultsOp>([&visited](auto result) {
@@ -111,7 +111,7 @@ LogicalResult ApplyNativeRewriteOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult AttributeOp::verify() {
-  Value attrType = getValueType();
+  Value attrType = type();
   Optional<Attribute> attrValue = value();
 
   if (!attrValue) {
@@ -189,7 +189,7 @@ static LogicalResult verifyResultTypesAreInferrable(OperationOp op,
     if (!replOpUser || use.getOperandNumber() == 0)
       return false;
     // Make sure the replaced operation was defined before this one.
-    Operation *replacedOp = replOpUser.getOpValue().getDefiningOp();
+    Operation *replacedOp = replOpUser.operation().getDefiningOp();
     return replacedOp->getBlock() != rewriterBlock ||
            replacedOp->isBeforeInBlock(op);
   };
@@ -203,7 +203,7 @@ static LogicalResult verifyResultTypesAreInferrable(OperationOp op,
   if (resultTypes.empty()) {
     // If we don't know the concrete operation, don't attempt any verification.
     // We can't make assumptions if we don't know the concrete operation.
-    Optional<StringRef> rawOpName = op.getOpName();
+    Optional<StringRef> rawOpName = op.name();
     if (!rawOpName)
       return success();
     Optional<RegisteredOperationName> opName =
@@ -246,12 +246,10 @@ static LogicalResult verifyResultTypesAreInferrable(OperationOp op,
              isa<OperandOp, OperandsOp, OperationOp>(user);
     };
     if (TypeOp typeOp = dyn_cast<TypeOp>(resultTypeOp)) {
-      if (typeOp.getConstantType() ||
-          llvm::any_of(typeOp->getUsers(), constrainsInput))
+      if (typeOp.type() || llvm::any_of(typeOp->getUsers(), constrainsInput))
         continue;
     } else if (TypesOp typeOp = dyn_cast<TypesOp>(resultTypeOp)) {
-      if (typeOp.getConstantTypes() ||
-          llvm::any_of(typeOp->getUsers(), constrainsInput))
+      if (typeOp.types() || llvm::any_of(typeOp->getUsers(), constrainsInput))
         continue;
     }
 
@@ -266,11 +264,11 @@ static LogicalResult verifyResultTypesAreInferrable(OperationOp op,
 
 LogicalResult OperationOp::verify() {
   bool isWithinRewrite = isa<RewriteOp>((*this)->getParentOp());
-  if (isWithinRewrite && !getOpName())
+  if (isWithinRewrite && !name())
     return emitOpError("must have an operation name when nested within "
                        "a `pdl.rewrite`");
-  ArrayAttr attributeNames = getAttributeValueNamesAttr();
-  auto attributeValues = getAttributeValues();
+  ArrayAttr attributeNames = attributeNamesAttr();
+  auto attributeValues = attributes();
   if (attributeNames.size() != attributeValues.size()) {
     return emitOpError()
            << "expected the same number of attribute values and attribute "
@@ -282,7 +280,7 @@ LogicalResult OperationOp::verify() {
   // If the operation is within a rewrite body and doesn't have type inference,
   // ensure that the result types can be resolved.
   if (isWithinRewrite && !mightHaveTypeInference()) {
-    if (failed(verifyResultTypesAreInferrable(*this, getTypeValues())))
+    if (failed(verifyResultTypesAreInferrable(*this, types())))
       return failure();
   }
 
@@ -290,7 +288,7 @@ LogicalResult OperationOp::verify() {
 }
 
 bool OperationOp::hasTypeInference() {
-  if (Optional<StringRef> rawOpName = getOpName()) {
+  if (Optional<StringRef> rawOpName = name()) {
     OperationName opName(*rawOpName, getContext());
     return opName.hasInterface<InferTypeOpInterface>();
   }
@@ -298,7 +296,7 @@ bool OperationOp::hasTypeInference() {
 }
 
 bool OperationOp::mightHaveTypeInference() {
-  if (Optional<StringRef> rawOpName = getOpName()) {
+  if (Optional<StringRef> rawOpName = name()) {
     OperationName opName(*rawOpName, getContext());
     return opName.mightHaveInterface<InferTypeOpInterface>();
   }
@@ -389,7 +387,7 @@ void PatternOp::build(OpBuilder &builder, OperationState &state,
 
 /// Returns the rewrite operation of this pattern.
 RewriteOp PatternOp::getRewriter() {
-  return cast<RewriteOp>(getBodyRegion().front().getTerminator());
+  return cast<RewriteOp>(body().front().getTerminator());
 }
 
 /// The default dialect is `pdl`.
@@ -443,7 +441,7 @@ LogicalResult ResultsOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult RewriteOp::verifyRegions() {
-  Region &rewriteRegion = getBodyRegion();
+  Region &rewriteRegion = body();
 
   // Handle the case where the rewrite is external.
   if (name()) {
@@ -479,7 +477,7 @@ StringRef RewriteOp::getDefaultDialect() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TypeOp::verify() {
-  if (!getConstantTypeAttr())
+  if (!typeAttr())
     return verifyHasBindingUse(*this);
   return success();
 }
@@ -489,7 +487,7 @@ LogicalResult TypeOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TypesOp::verify() {
-  if (!getConstantTypesAttr())
+  if (!typesAttr())
     return verifyHasBindingUse(*this);
   return success();
 }

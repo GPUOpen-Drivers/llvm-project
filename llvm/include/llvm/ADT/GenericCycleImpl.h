@@ -144,12 +144,8 @@ private:
 };
 
 template <typename ContextT>
-auto GenericCycleInfo<ContextT>::getTopLevelParentCycle(BlockT *Block)
-    -> CycleT * {
-  auto Cycle = BlockMapTopLevel.find(Block);
-  if (Cycle != BlockMapTopLevel.end())
-    return Cycle->second;
-
+auto GenericCycleInfo<ContextT>::getTopLevelParentCycle(
+    const BlockT *Block) const -> CycleT * {
   auto MapIt = BlockMap.find(Block);
   if (MapIt == BlockMap.end())
     return nullptr;
@@ -157,15 +153,12 @@ auto GenericCycleInfo<ContextT>::getTopLevelParentCycle(BlockT *Block)
   auto *C = MapIt->second;
   while (C->ParentCycle)
     C = C->ParentCycle;
-  BlockMapTopLevel.try_emplace(Block, C);
   return C;
 }
 
 template <typename ContextT>
-void GenericCycleInfo<ContextT>::moveTopLevelCycleToNewParent(CycleT *NewParent,
-                                                              CycleT *Child) {
-  assert((!Child->ParentCycle && !NewParent->ParentCycle) &&
-         "NewParent and Child must be both top level cycle!\n");
+void GenericCycleInfo<ContextT>::moveToNewParent(CycleT *NewParent,
+                                                 CycleT *Child) {
   auto &CurrentContainer =
       Child->ParentCycle ? Child->ParentCycle->Children : TopLevelCycles;
   auto Pos = llvm::find_if(CurrentContainer, [=](const auto &Ptr) -> bool {
@@ -176,13 +169,6 @@ void GenericCycleInfo<ContextT>::moveTopLevelCycleToNewParent(CycleT *NewParent,
   *Pos = std::move(CurrentContainer.back());
   CurrentContainer.pop_back();
   Child->ParentCycle = NewParent;
-
-  NewParent->Blocks.insert(NewParent->Blocks.end(), Child->block_begin(),
-                           Child->block_end());
-
-  for (auto &It : BlockMapTopLevel)
-    if (It.second == Child)
-      It.second = NewParent;
 }
 
 /// \brief Main function of the cycle info computations.
@@ -254,7 +240,10 @@ void GenericCycleInfoCompute<ContextT>::run(BlockT *EntryBlock) {
                      << "discovered child cycle "
                      << Info.Context.print(BlockParent->getHeader()) << "\n");
           // Make BlockParent the child of NewCycle.
-          Info.moveTopLevelCycleToNewParent(NewCycle.get(), BlockParent);
+          Info.moveToNewParent(NewCycle.get(), BlockParent);
+          NewCycle->Blocks.insert(NewCycle->Blocks.end(),
+                                  BlockParent->block_begin(),
+                                  BlockParent->block_end());
 
           for (auto *ChildEntry : BlockParent->entries())
             ProcessPredecessors(ChildEntry);
@@ -268,7 +257,6 @@ void GenericCycleInfoCompute<ContextT>::run(BlockT *EntryBlock) {
         assert(!is_contained(NewCycle->Blocks, Block));
         NewCycle->Blocks.push_back(Block);
         ProcessPredecessors(Block);
-        Info.BlockMapTopLevel.try_emplace(Block, NewCycle.get());
       }
     } while (!Worklist.empty());
 
@@ -348,7 +336,6 @@ void GenericCycleInfoCompute<ContextT>::dfs(BlockT *EntryBlock) {
 template <typename ContextT> void GenericCycleInfo<ContextT>::clear() {
   TopLevelCycles.clear();
   BlockMap.clear();
-  BlockMapTopLevel.clear();
 }
 
 /// \brief Compute the cycle info for a function.

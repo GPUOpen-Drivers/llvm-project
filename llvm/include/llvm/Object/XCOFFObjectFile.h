@@ -491,6 +491,7 @@ private:
   const XCOFFSectionHeader64 *toSection64(DataRefImpl Ref) const;
   uintptr_t getSectionHeaderTableAddress() const;
   uintptr_t getEndOfSymbolTableAddress() const;
+  Expected<uintptr_t> getLoaderSectionAddress() const;
 
   DataRefImpl getSectionByType(XCOFF::SectionTypeFlags SectType) const;
   uint64_t getSectionFileOffsetToRawData(DataRefImpl Sec) const;

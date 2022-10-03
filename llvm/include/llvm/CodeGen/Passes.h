@@ -408,9 +408,6 @@ namespace llvm {
   /// RemoveRedundantDebugValues pass.
   extern char &RemoveRedundantDebugValuesID;
 
-  /// MachineCFGPrinter pass.
-  extern char &MachineCFGPrinterID;
-
   /// LiveDebugValues pass
   extern char &LiveDebugValuesID;
 

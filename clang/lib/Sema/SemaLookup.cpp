@@ -519,8 +519,7 @@ void LookupResult::resolveKind() {
     D = cast<NamedDecl>(D->getCanonicalDecl());
 
     // Ignore an invalid declaration unless it's the only one left.
-    // Also ignore HLSLBufferDecl which not have name conflict with other Decls.
-    if ((D->isInvalidDecl() || isa<HLSLBufferDecl>(D)) && !(I == 0 && N == 1)) {
+    if (D->isInvalidDecl() && !(I == 0 && N == 1)) {
       Decls[I] = Decls[--N];
       continue;
     }

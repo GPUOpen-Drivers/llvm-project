@@ -76,11 +76,11 @@ def Async_ExecuteOp :
   }];
 
   let arguments = (ins Variadic<Async_TokenType>:$dependencies,
-                       Variadic<Async_AnyValueOrTokenType>:$bodyOperands);
+                       Variadic<Async_AnyValueOrTokenType>:$operands);
 
   let results = (outs Async_TokenType:$token,
-                      Variadic<Async_ValueType>:$bodyResults);
-  let regions = (region SizedRegion<1>:$bodyRegion);
+                      Variadic<Async_ValueType>:$results);
+  let regions = (region SizedRegion<1>:$body);
 
   let hasCustomAssemblyFormat = 1;
   let skipDefaultBuilders = 1;

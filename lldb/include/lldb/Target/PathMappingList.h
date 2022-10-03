@@ -37,9 +37,7 @@ public:
 
   void Append(const PathMappingList &rhs, bool notify);
 
-  /// Append <path, replacement> pair without duplication.
-  /// \return whether appending suceeds without duplication or not.
-  bool AppendUnique(llvm::StringRef path, llvm::StringRef replacement,
+  void AppendUnique(llvm::StringRef path, llvm::StringRef replacement,
                     bool notify);
 
   void Clear(bool notify);

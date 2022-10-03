@@ -250,12 +250,8 @@ inline void TypedPartialMaxOrMinLoc(const char *intrinsic, Descriptor &result,
       maskToUse = nullptr;
     } else {
       // For scalar MASK arguments that are .FALSE., return all zeroes
-
-      // Element size of the destination descriptor is the size
-      // of {TypeCategory::Integer, kind}.
-      CreatePartialReductionResult(result, x,
-          Descriptor::BytesFor(TypeCategory::Integer, kind), dim, terminator,
-          intrinsic, TypeCode{TypeCategory::Integer, kind});
+      CreatePartialReductionResult(result, x, dim, terminator, intrinsic,
+          TypeCode{TypeCategory::Integer, kind});
       std::memset(
           result.OffsetElement(), 0, result.Elements() * result.ElementBytes());
       return;
@@ -364,9 +360,6 @@ static void DoMaxMinNorm2(Descriptor &result, const Descriptor &x, int dim,
   ACCUMULATOR accumulator{x};
   if (dim == 0 || x.rank() == 1) {
     // Total reduction
-
-    // Element size of the destination descriptor is the same
-    // as the element size of the source.
     result.Establish(x.type(), x.ElementBytes(), nullptr, 0, nullptr,
         CFI_attribute_allocatable);
     if (int stat{result.Allocate()}) {
@@ -377,11 +370,8 @@ static void DoMaxMinNorm2(Descriptor &result, const Descriptor &x, int dim,
     accumulator.GetResult(result.OffsetElement<Type>());
   } else {
     // Partial reduction
-
-    // Element size of the destination descriptor is the same
-    // as the element size of the source.
-    PartialReduction<ACCUMULATOR, CAT, KIND>(result, x, x.ElementBytes(), dim,
-        mask, terminator, intrinsic, accumulator);
+    PartialReduction<ACCUMULATOR, CAT, KIND>(
+        result, x, dim, mask, terminator, intrinsic, accumulator);
   }
 }
 

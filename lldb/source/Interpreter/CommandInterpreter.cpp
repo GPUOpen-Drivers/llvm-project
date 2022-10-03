@@ -2471,12 +2471,8 @@ bool CommandInterpreter::DidProcessStopAbnormally() const {
 
   for (const auto &thread_sp : process_sp->GetThreadList().Threads()) {
     StopInfoSP stop_info = thread_sp->GetStopInfo();
-    if (!stop_info) {
-      // If there's no stop_info, keep iterating through the other threads;
-      // it's enough that any thread has got a stop_info that indicates
-      // an abnormal stop, to consider the process to be stopped abnormally.
-      continue;
-    }
+    if (!stop_info)
+      return false;
 
     const StopReason reason = stop_info->GetStopReason();
     if (reason == eStopReasonException ||

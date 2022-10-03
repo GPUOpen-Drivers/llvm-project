@@ -464,9 +464,7 @@ bool EquivalenceSets::CheckCanEquivalence(
       }
     }
   }
-  if (msg &&
-      (!context_.IsInModuleFile(source) ||
-          msg->severity() == parser::Severity::Error)) {
+  if (msg) {
     context_.Say(source, std::move(*msg), sym1.name(), sym2.name());
     return false;
   }

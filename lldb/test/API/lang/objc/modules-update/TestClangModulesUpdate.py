@@ -10,7 +10,7 @@ from lldbsuite.test import lldbutil
 
 class TestClangModuleUpdate(TestBase):
 
-    @add_test_categories(["gmodules"])
+    @skipIf(debug_info=no_match(["gmodules"]))
     @skipIfDarwin # rdar://76540904
     def test_expr(self):
         with open(self.getBuildArtifact("module.modulemap"), "w") as f:

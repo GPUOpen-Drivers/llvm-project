@@ -51,7 +51,6 @@ public:
     uint8_t   returnAddressRegister;
 #if defined(_LIBUNWIND_TARGET_AARCH64)
     bool      addressesSignedWithBKey;
-    bool      mteTaggedFrame;
 #endif
   };
 
@@ -326,7 +325,6 @@ const char *CFI_Parser<A>::parseCIE(A &addressSpace, pint_t cie,
   cieInfo->fdesHaveAugmentationData = false;
 #if defined(_LIBUNWIND_TARGET_AARCH64)
   cieInfo->addressesSignedWithBKey = false;
-  cieInfo->mteTaggedFrame = false;
 #endif
   cieInfo->cieStart = cie;
   pint_t p = cie;
@@ -395,9 +393,6 @@ const char *CFI_Parser<A>::parseCIE(A &addressSpace, pint_t cie,
 #if defined(_LIBUNWIND_TARGET_AARCH64)
       case 'B':
         cieInfo->addressesSignedWithBKey = true;
-        break;
-      case 'G':
-        cieInfo->mteTaggedFrame = true;
         break;
 #endif
       default:

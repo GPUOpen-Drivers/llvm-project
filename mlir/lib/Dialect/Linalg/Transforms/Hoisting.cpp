@@ -106,10 +106,8 @@ static HoistableRead findMatchingTransferRead(HoistableWrite write,
   if (write.insertSliceOp)
     LLVM_DEBUG(DBGS() << "findMatchingTransferRead inserSliceOp: "
                       << *write.insertSliceOp.getOperation() << "\n");
-  SmallVector<Operation *> users(srcTensor.getUsers().begin(),
-                                 srcTensor.getUsers().end());
-  while (!users.empty()) {
-    Operation *user = users.pop_back_val();
+
+  for (Operation *user : srcTensor.getUsers()) {
     LLVM_DEBUG(DBGS() << "findMatchingTransferRead inspect user: " << *user
                       << "\n");
 
@@ -155,16 +153,6 @@ static HoistableRead findMatchingTransferRead(HoistableWrite write,
     if (read && read.getIndices() == write.transferWriteOp.getIndices() &&
         read.getVectorType() == write.transferWriteOp.getVectorType())
       return HoistableRead{read, sliceOp};
-
-    if (isa<vector::TransferWriteOp>(user)) {
-      // If we find a write with disjoint indices recurse through its uses.
-      if (vector::isDisjointTransferIndices(
-              cast<VectorTransferOpInterface>(user),
-              cast<VectorTransferOpInterface>(
-                  write.transferWriteOp.getOperation()))) {
-        users.append(user->getUsers().begin(), user->getUsers().end());
-      }
-    }
   }
   return HoistableRead();
 }

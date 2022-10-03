@@ -51,10 +51,11 @@ using namespace lldb_private;
 
 LLDB_PLUGIN_DEFINE_ADV(EmulateInstructionARM64, InstructionARM64)
 
-static llvm::Optional<RegisterInfo> LLDBTableGetRegisterInfo(uint32_t reg_num) {
+static bool LLDBTableGetRegisterInfo(uint32_t reg_num, RegisterInfo &reg_info) {
   if (reg_num >= std::size(g_register_infos_arm64_le))
-    return {};
-  return g_register_infos_arm64_le[reg_num];
+    return false;
+  reg_info = g_register_infos_arm64_le[reg_num];
+  return true;
 }
 
 #define No_VFP 0
@@ -143,9 +144,9 @@ bool EmulateInstructionARM64::SetTargetTriple(const ArchSpec &arch) {
   return false;
 }
 
-llvm::Optional<RegisterInfo>
-EmulateInstructionARM64::GetRegisterInfo(RegisterKind reg_kind,
-                                         uint32_t reg_num) {
+bool EmulateInstructionARM64::GetRegisterInfo(RegisterKind reg_kind,
+                                              uint32_t reg_num,
+                                              RegisterInfo &reg_info) {
   if (reg_kind == eRegisterKindGeneric) {
     switch (reg_num) {
     case LLDB_REGNUM_GENERIC_PC:
@@ -170,13 +171,13 @@ EmulateInstructionARM64::GetRegisterInfo(RegisterKind reg_kind,
       break;
 
     default:
-      return {};
+      return false;
     }
   }
 
   if (reg_kind == eRegisterKindLLDB)
-    return LLDBTableGetRegisterInfo(reg_num);
-  return {};
+    return LLDBTableGetRegisterInfo(reg_num, reg_info);
+  return false;
 }
 
 EmulateInstructionARM64::Opcode *

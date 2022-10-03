@@ -487,7 +487,8 @@ private:
 
   Symbol &getTLSDescResolver(LinkGraph &G) {
     if (!TLSDescResolver)
-      TLSDescResolver = &G.addExternalSymbol("__tlsdesc_resolver", 8, false);
+      TLSDescResolver =
+          &G.addExternalSymbol("__tlsdesc_resolver", 8, Linkage::Strong);
     return *TLSDescResolver;
   }
 

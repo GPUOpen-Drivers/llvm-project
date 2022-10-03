@@ -943,7 +943,8 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
     ParenParseOption ParenExprType;
     switch (ParseKind) {
       case CastParseKind::UnaryExprOnly:
-        assert(getLangOpts().CPlusPlus && "not possible to get here in C");
+        if (!getLangOpts().CPlusPlus)
+          ParenExprType = CompoundLiteral;
         [[fallthrough]];
       case CastParseKind::AnyCastExpr:
         ParenExprType = ParenParseOption::CastExpr;
@@ -1360,8 +1361,7 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
     // Special treatment because of member pointers
     SourceLocation SavedLoc = ConsumeToken();
     PreferredType.enterUnary(Actions, Tok.getLocation(), tok::amp, SavedLoc);
-
-    Res = ParseCastExpression(AnyCastExpr, /*isAddressOfOperand=*/true);
+    Res = ParseCastExpression(AnyCastExpr, true);
     if (!Res.isInvalid()) {
       Expr *Arg = Res.get();
       Res = Actions.ActOnUnaryOp(getCurScope(), SavedLoc, SavedKind, Arg);
@@ -1386,8 +1386,7 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
     Res = ParseCastExpression(AnyCastExpr);
     if (!Res.isInvalid()) {
       Expr *Arg = Res.get();
-      Res = Actions.ActOnUnaryOp(getCurScope(), SavedLoc, SavedKind, Arg,
-                                 isAddressOfOperand);
+      Res = Actions.ActOnUnaryOp(getCurScope(), SavedLoc, SavedKind, Arg);
       if (Res.isInvalid())
         Res = Actions.CreateRecoveryExpr(SavedLoc, Arg->getEndLoc(), Arg);
     }

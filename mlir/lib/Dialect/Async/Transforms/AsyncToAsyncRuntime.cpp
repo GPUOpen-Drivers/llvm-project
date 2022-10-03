@@ -250,14 +250,13 @@ outlineExecuteOp(SymbolTable &symbolTable, ExecuteOp execute) {
 
   // Make sure that all constants will be inside the outlined async function to
   // reduce the number of function arguments.
-  cloneConstantsIntoTheRegion(execute.bodyRegion());
+  cloneConstantsIntoTheRegion(execute.body());
 
   // Collect all outlined function inputs.
   SetVector<mlir::Value> functionInputs(execute.dependencies().begin(),
                                         execute.dependencies().end());
-  functionInputs.insert(execute.bodyOperands().begin(),
-                        execute.bodyOperands().end());
-  getUsedValuesDefinedAbove(execute.bodyRegion(), functionInputs);
+  functionInputs.insert(execute.operands().begin(), execute.operands().end());
+  getUsedValuesDefinedAbove(execute.body(), functionInputs);
 
   // Collect types for the outlined function inputs and outputs.
   auto typesRange = llvm::map_range(
@@ -280,7 +279,7 @@ outlineExecuteOp(SymbolTable &symbolTable, ExecuteOp execute) {
   // Prepare for coroutine conversion by creating the body of the function.
   {
     size_t numDependencies = execute.dependencies().size();
-    size_t numOperands = execute.bodyOperands().size();
+    size_t numOperands = execute.operands().size();
 
     // Await on all dependencies before starting to execute the body region.
     for (size_t i = 0; i < numDependencies; ++i)
@@ -297,11 +296,11 @@ outlineExecuteOp(SymbolTable &symbolTable, ExecuteOp execute) {
     // arguments.
     BlockAndValueMapping valueMapping;
     valueMapping.map(functionInputs, func.getArguments());
-    valueMapping.map(execute.bodyRegion().getArguments(), unwrappedOperands);
+    valueMapping.map(execute.body().getArguments(), unwrappedOperands);
 
     // Clone all operations from the execute operation body into the outlined
     // function body.
-    for (Operation &op : execute.bodyRegion().getOps())
+    for (Operation &op : execute.body().getOps())
       builder.clone(op, valueMapping);
   }
 

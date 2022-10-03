@@ -102,7 +102,7 @@ void UpdateVCEPass::runOnOperation() {
 
   spirv::TargetEnvAttr targetAttr = spirv::lookupTargetEnv(module);
   if (!targetAttr) {
-    module.emitError("missing 'spirv.target_env' attribute");
+    module.emitError("missing 'spv.target_env' attribute");
     return signalPassFailure();
   }
 
@@ -151,7 +151,7 @@ void UpdateVCEPass::runOnOperation() {
     // Special treatment for global variables, whose type requirements are
     // conveyed by type attributes.
     if (auto globalVar = dyn_cast<spirv::GlobalVariableOp>(op))
-      valueTypes.push_back(globalVar.getType());
+      valueTypes.push_back(globalVar.type());
 
     // Requirements from values' types
     SmallVector<ArrayRef<spirv::Extension>, 4> typeExtensions;

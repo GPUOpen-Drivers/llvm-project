@@ -206,8 +206,7 @@ def LinalgStructuredInterface : OpInterface<"LinalgOp"> {
       /*args=*/(ins "SmallVectorImpl<unsigned> &":$res),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return findPositionsOfType($_op.iterator_types(),
-                                   getParallelIteratorTypeName(), res);
+        return getDimsOfType($_op, getParallelIteratorTypeName(), res);
       }]
     >,
     InterfaceMethod<
@@ -232,8 +231,7 @@ def LinalgStructuredInterface : OpInterface<"LinalgOp"> {
       /*args=*/(ins "SmallVectorImpl<unsigned> &":$res),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return findPositionsOfType($_op.iterator_types(),
-                                   getReductionIteratorTypeName(), res);
+        return getDimsOfType($_op, getReductionIteratorTypeName(), res);
       }]
     >,
     InterfaceMethod<
@@ -258,8 +256,7 @@ def LinalgStructuredInterface : OpInterface<"LinalgOp"> {
       /*args=*/(ins "SmallVectorImpl<unsigned> &":$res),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return findPositionsOfType($_op.iterator_types(),
-                                   getWindowIteratorTypeName(), res);
+        return getDimsOfType($_op.getOperation(), getWindowIteratorTypeName(), res);
       }]
     >,
     InterfaceMethod<
@@ -569,21 +566,6 @@ def LinalgStructuredInterface : OpInterface<"LinalgOp"> {
       /*args=*/(ins),
       /*methodBody=*/"",
       /*defaultImplementation=*/""
-    >,
-    InterfaceMethod<
-      /*desc=*/[{
-        Return op operands that have a corresponding argument in the basic block.
-        By default, the block should have an argument for each operand, but there
-        are expection. For example, in `map` output operand isn't used in
-        the block.
-      }],
-      /*retTy=*/"OpOperandVector",
-      /*methodName=*/"getOpOperandsMatchingBBargs",
-      /*args=*/(ins),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return $_op.getInputAndOutputOperands();
-      }]
     >,
     //===------------------------------------------------------------------===//
     // Linalg generalization hooks.

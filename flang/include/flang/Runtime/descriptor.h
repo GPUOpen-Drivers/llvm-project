@@ -145,10 +145,9 @@ public:
   Descriptor(const Descriptor &);
   Descriptor &operator=(const Descriptor &);
 
-  // Returns the number of bytes occupied by an element of the given
-  // category and kind including any alignment padding required
-  // between adjacent elements.
-  static std::size_t BytesFor(TypeCategory category, int kind);
+  static constexpr std::size_t BytesFor(TypeCategory category, int kind) {
+    return category == TypeCategory::Complex ? kind * 2 : kind;
+  }
 
   void Establish(TypeCode t, std::size_t elementBytes, void *p = nullptr,
       int rank = maxRank, const SubscriptValue *extent = nullptr,
