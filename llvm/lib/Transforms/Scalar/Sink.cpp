@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -213,6 +215,9 @@ static bool ProcessBlock(BasicBlock &BB, DominatorTree &DT, LoopInfo &LI,
 
 static bool iterativelySinkInstructions(Function &F, DominatorTree &DT,
                                         LoopInfo &LI, AAResults &AA) {
+  if (F.hasFnAttribute("disable-code-sinking"))
+    return false;
+
   bool MadeChange, EverMadeChange = false;
 
   do {

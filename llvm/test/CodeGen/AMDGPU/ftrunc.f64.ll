@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=tahiti < %s | FileCheck -check-prefix=SI -check-prefix=FUNC %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=bonaire < %s | FileCheck -check-prefix=CI -check-prefix=FUNC %s
 ; RUN: llc -amdgpu-scalarize-global-loads=false -march=amdgcn -mcpu=tonga < %s | FileCheck -check-prefix=CI -check-prefix=FUNC %s

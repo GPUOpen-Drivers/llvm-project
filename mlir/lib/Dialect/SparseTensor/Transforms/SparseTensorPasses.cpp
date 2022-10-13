@@ -47,21 +47,24 @@ struct SparsificationPass
     vectorLength = options.vectorLength;
     enableSIMDIndex32 = options.enableSIMDIndex32;
     enableVLAVectorization = options.enableVLAVectorization;
+    enableRuntimeLibrary = options.enableRuntimeLibrary;
   }
 
   void runOnOperation() override {
     auto *ctx = &getContext();
-    // Apply pre-rewriting.
     RewritePatternSet prePatterns(ctx);
-    populateSparseTensorRewriting(prePatterns);
-    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(prePatterns));
     // Translate strategy flags to strategy options.
     SparsificationOptions options(parallelization, vectorization, vectorLength,
-                                  enableSIMDIndex32, enableVLAVectorization);
+                                  enableSIMDIndex32, enableVLAVectorization,
+                                  enableRuntimeLibrary);
+    // Apply pre-rewriting.
+    populateSparseTensorRewriting(prePatterns, options.enableRuntimeLibrary);
+    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(prePatterns));
     // Apply sparsification and vector cleanup rewriting.
     RewritePatternSet patterns(ctx);
     populateSparsificationPatterns(patterns, options);
     vector::populateVectorToVectorCanonicalizationPatterns(patterns);
+    scf::ForOp::getCanonicalizationPatterns(patterns, ctx);
     (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
   }
 };
@@ -175,7 +178,9 @@ struct SparseTensorCodegenPass
         [&](bufferization::DeallocTensorOp op) {
           return converter.isLegal(op.getTensor().getType());
         });
-    // Legal dialects may occur in generated code.
+    // The following operations and dialects may be introduced by the
+    // codegen rules, and are therefore marked as legal.
+    target.addLegalOp<linalg::FillOp>();
     target.addLegalDialect<arith::ArithmeticDialect,
                            bufferization::BufferizationDialect,
                            memref::MemRefDialect, scf::SCFDialect>();

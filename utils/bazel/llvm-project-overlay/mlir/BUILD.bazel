@@ -21,7 +21,10 @@ package(
 
 licenses(["notice"])
 
-exports_files(["LICENSE.TXT"])
+exports_files([
+    "LICENSE.TXT",
+    "run_lit.sh",
+])
 
 filegroup(
     name = "c_headers",
@@ -2108,6 +2111,7 @@ cc_library(
         ":SparseTensorDialect",
         ":SparseTensorTransforms",
         ":TensorTransforms",
+        ":Transforms",
         ":VectorToLLVM",
         ":VectorTransforms",
     ],
@@ -5057,12 +5061,14 @@ cc_library(
     hdrs = [
         "include/mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h",
         "include/mlir/Dialect/Tensor/Transforms/Passes.h",
+        "include/mlir/Dialect/Tensor/Transforms/TransformUtils.h",
         "include/mlir/Dialect/Tensor/Transforms/Transforms.h",
     ],
     includes = ["include"],
     deps = [
         ":AffineDialect",
         ":ArithmeticDialect",
+        ":ArithmeticUtils",
         ":BufferizationDialect",
         ":BufferizationTransforms",
         ":DialectUtils",
@@ -6415,6 +6421,7 @@ cc_binary(
         "//llvm:Support",
         "//mlir/test:TestAffine",
         "//mlir/test:TestAnalysis",
+        "//mlir/test:TestArithmetic",
         "//mlir/test:TestDLTI",
         "//mlir/test:TestDialect",
         "//mlir/test:TestFunc",
@@ -6433,6 +6440,7 @@ cc_binary(
         "//mlir/test:TestSPIRV",
         "//mlir/test:TestShapeDialect",
         "//mlir/test:TestTensor",
+        "//mlir/test:TestTestDynDialect",
         "//mlir/test:TestTilingInterface",
         "//mlir/test:TestTosaDialect",
         "//mlir/test:TestTransformDialect",
@@ -7540,6 +7548,7 @@ cc_library(
         ":ArithmeticDialect",
         ":AsmParser",
         ":ControlFlowDialect",
+        ":GPUDialect",
         ":IR",
         ":LinalgDialect",
         ":LinalgTransformOpsIncGen",
@@ -8568,10 +8577,9 @@ cc_library(
         "lib/Dialect/Arithmetic/Transforms/*.cpp",
         "lib/Dialect/Arithmetic/Transforms/*.h",
     ]),
-    hdrs = [
-        "include/mlir/Dialect/Arithmetic/Transforms/BufferizableOpInterfaceImpl.h",
-        "include/mlir/Dialect/Arithmetic/Transforms/Passes.h",
-    ],
+    hdrs = glob([
+        "include/mlir/Dialect/Arithmetic/Transforms/*.h",
+    ]),
     includes = ["include"],
     deps = [
         ":Analysis",
@@ -8581,12 +8589,14 @@ cc_library(
         ":BufferizationDialect",
         ":BufferizationTransforms",
         ":FuncDialect",
+        ":FuncTransforms",
         ":IR",
         ":InferIntRangeInterface",
         ":MemRefDialect",
         ":Pass",
         ":TransformUtils",
         ":Transforms",
+        ":VectorDialect",
         "//llvm:Support",
     ],
 )
@@ -8859,6 +8869,7 @@ cc_library(
         ":AffineUtils",
         ":ArithmeticDialect",
         ":ArithmeticTransforms",
+        ":ArithmeticUtils",
         ":DialectUtils",
         ":FuncDialect",
         ":IR",

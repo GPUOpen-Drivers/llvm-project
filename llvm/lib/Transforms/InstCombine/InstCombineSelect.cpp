@@ -952,8 +952,8 @@ static Value *foldSelectCttzCtlz(ICmpInst *ICI, Value *TrueVal, Value *FalseVal,
   Value *CmpLHS = ICI->getOperand(0);
   Value *CmpRHS = ICI->getOperand(1);
 
-  // Check if the condition value compares a value for equality against zero.
-  if (!ICI->isEquality() || !match(CmpRHS, m_Zero()))
+  // Check if the select condition compares a value for equality.
+  if (!ICI->isEquality())
     return nullptr;
 
   Value *SelectArg = FalseVal;
@@ -969,8 +969,15 @@ static Value *foldSelectCttzCtlz(ICmpInst *ICI, Value *TrueVal, Value *FalseVal,
 
   // Check that 'Count' is a call to intrinsic cttz/ctlz. Also check that the
   // input to the cttz/ctlz is used as LHS for the compare instruction.
-  if (!match(Count, m_Intrinsic<Intrinsic::cttz>(m_Specific(CmpLHS))) &&
-      !match(Count, m_Intrinsic<Intrinsic::ctlz>(m_Specific(CmpLHS))))
+  Value *X;
+  if (!match(Count, m_Intrinsic<Intrinsic::cttz>(m_Value(X))) &&
+      !match(Count, m_Intrinsic<Intrinsic::ctlz>(m_Value(X))))
+    return nullptr;
+
+  // (X == 0) ? BitWidth : ctz(X)
+  // (X == -1) ? BitWidth : ctz(~X)
+  if ((X != CmpLHS || !match(CmpRHS, m_Zero())) &&
+      (!match(X, m_Not(m_Specific(CmpLHS))) || !match(CmpRHS, m_AllOnes())))
     return nullptr;
 
   IntrinsicInst *II = cast<IntrinsicInst>(Count);
@@ -2655,6 +2662,51 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
   if (Instruction *I = canonicalizeScalarSelectOfVecs(SI, *this))
     return I;
 
+  // If the type of select is not an integer type or if the condition and
+  // the selection type are not both scalar nor both vector types, there is no
+  // point in attempting to match these patterns.
+  if (!isa<Constant>(CondVal) && SelType->isIntOrIntVectorTy() &&
+      CondVal->getType()->isVectorTy() == SelType->isVectorTy()) {
+    auto *One = ConstantInt::get(SelType, 1);
+    auto *Zero = ConstantInt::get(SelType, 0);
+    auto *AllOnes = ConstantInt::get(SelType, -1, /*isSigned*/ true);
+
+    // select a, a, b -> select a, 1, b
+    // select a, zext(a), b -> select a, 1, b
+    if (match(TrueVal, m_ZExtOrSelf(m_Specific(CondVal))))
+      return replaceOperand(SI, 1, One);
+
+    // select a, sext(a), b -> select a, -1, b
+    if (match(TrueVal, m_SExt(m_Specific(CondVal))))
+      return replaceOperand(SI, 1, AllOnes);
+
+    // select a, b, a -> select a, b, 0
+    // select a, b, zext(a) -> select a, b, 0
+    // select a, b, sext(a) -> select a, b, 0
+    if (match(FalseVal, m_ZExtOrSExtOrSelf(m_Specific(CondVal))))
+      return replaceOperand(SI, 2, Zero);
+
+    Value *NotCond;
+
+    // select a, !a, b -> select !a, b, 0
+    // select a, sext(!a), b -> select !a, b, 0
+    // select a, zext(!a), b -> select !a, b, 0
+    if (match(TrueVal, m_ZExtOrSExtOrSelf(m_CombineAnd(
+                           m_Value(NotCond), m_Not(m_Specific(CondVal))))))
+      return SelectInst::Create(NotCond, FalseVal, Zero);
+
+    // select a, b, !a -> select !a, 1, b
+    // select a, b, zext(!a) -> select !a, 1, b
+    if (match(FalseVal, m_ZExtOrSelf(m_CombineAnd(m_Value(NotCond),
+                                                  m_Not(m_Specific(CondVal))))))
+      return SelectInst::Create(NotCond, One, TrueVal);
+
+    // select a, b, sext(!a) -> select !a, -1, b
+    if (match(FalseVal, m_SExt(m_CombineAnd(m_Value(NotCond),
+                                            m_Not(m_Specific(CondVal))))))
+      return SelectInst::Create(NotCond, AllOnes, TrueVal);
+  }
+
   // Avoid potential infinite loops by checking for non-constant condition.
   // TODO: Can we assert instead by improving canonicalizeSelectToShuffle()?
   //       Scalar select must have simplified?
@@ -2703,20 +2755,6 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
       Value *NotCond = Builder.CreateNot(CondVal, "not." + CondVal->getName());
       return SelectInst::Create(NotCond, One, TrueVal);
     }
-
-    // select a, a, b -> select a, true, b
-    if (CondVal == TrueVal)
-      return replaceOperand(SI, 1, One);
-    // select a, b, a -> select a, b, false
-    if (CondVal == FalseVal)
-      return replaceOperand(SI, 2, Zero);
-
-    // select a, !a, b -> select !a, b, false
-    if (match(TrueVal, m_Not(m_Specific(CondVal))))
-      return SelectInst::Create(TrueVal, FalseVal, Zero);
-    // select a, b, !a -> select !a, true, b
-    if (match(FalseVal, m_Not(m_Specific(CondVal))))
-      return SelectInst::Create(FalseVal, One, TrueVal);
 
     Value *A, *B;
 

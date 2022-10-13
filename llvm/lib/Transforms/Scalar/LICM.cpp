@@ -510,7 +510,7 @@ bool LoopInvariantCodeMotion::runOnLoop(
     MSSA->verifyMemorySSA();
 
   if (Changed && SE)
-    SE->forgetLoopDispositions(L);
+    SE->forgetLoopDispositions();
   return Changed;
 }
 
@@ -1197,13 +1197,13 @@ bool llvm::canSinkOrHoistInst(Instruction &I, AAResults *AA, DominatorTree *DT,
 
     // Handle simple cases by querying alias analysis.
     FunctionModRefBehavior Behavior = AA->getModRefBehavior(CI);
-    if (Behavior == FMRB_DoesNotAccessMemory)
+    if (Behavior.doesNotAccessMemory())
       return true;
-    if (AAResults::onlyReadsMemory(Behavior)) {
+    if (Behavior.onlyReadsMemory()) {
       // A readonly argmemonly function only reads from memory pointed to by
       // it's arguments with arbitrary offsets.  If we can prove there are no
       // writes to this memory in the loop, we can hoist or sink.
-      if (AAResults::onlyAccessesArgPointees(Behavior)) {
+      if (Behavior.onlyAccessesArgPointees()) {
         // TODO: expand to writeable arguments
         for (Value *Op : CI->args())
           if (Op->getType()->isPointerTy() &&
@@ -1736,7 +1736,8 @@ static bool isSafeToExecuteUnconditionally(
     const Loop *CurLoop, const LoopSafetyInfo *SafetyInfo,
     OptimizationRemarkEmitter *ORE, const Instruction *CtxI,
     bool AllowSpeculation) {
-  if (AllowSpeculation && isSafeToSpeculativelyExecute(&Inst, CtxI, DT, TLI))
+  if (AllowSpeculation &&
+      isSafeToSpeculativelyExecute(&Inst, CtxI, nullptr, DT, TLI))
     return true;
 
   bool GuaranteedToExecute =
@@ -2090,10 +2091,12 @@ bool llvm::promoteLoopAccessesToScalars(
         if (!DereferenceableInPH) {
           DereferenceableInPH = isDereferenceableAndAlignedPointer(
               Store->getPointerOperand(), Store->getValueOperand()->getType(),
-              Store->getAlign(), MDL, Preheader->getTerminator(), DT, TLI);
+              Store->getAlign(), MDL, Preheader->getTerminator(),
+              nullptr, // FIXME
+              DT, TLI);
         }
       } else
-        return false; // Not a load or store.
+        continue; // Not a load or store.
 
       if (!AccessTy)
         AccessTy = getLoadStoreType(UI);
@@ -2254,12 +2257,13 @@ collectPromotionCandidates(MemorySSA *MSSA, AliasAnalysis *AA, Loop *L) {
     return {}; // Nothing to promote...
 
   // Discard any sets for which there is an aliasing non-promotable access.
+  BatchAAResults BatchAA(*AA);
   foreachMemoryAccess(MSSA, L, [&](Instruction *I) {
     if (AttemptingPromotion.contains(I))
       return;
 
     llvm::erase_if(Sets, [&](const AliasSet *AS) {
-      return AS->aliasesUnknownInst(I, *AA);
+      return AS->aliasesUnknownInst(I, BatchAA);
     });
   });
 

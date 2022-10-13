@@ -911,7 +911,8 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
 /// by Dirs.
 ///
 static bool searchForFile(SmallVectorImpl<char> &FilePath,
-                          ArrayRef<StringRef> Dirs, StringRef FileName) {
+                          ArrayRef<StringRef> Dirs, StringRef FileName,
+                          llvm::vfs::FileSystem &FS) {
   SmallString<128> WPath;
   for (const StringRef &Dir : Dirs) {
     if (Dir.empty())
@@ -919,7 +920,8 @@ static bool searchForFile(SmallVectorImpl<char> &FilePath,
     WPath.clear();
     llvm::sys::path::append(WPath, Dir, FileName);
     llvm::sys::path::native(WPath);
-    if (llvm::sys::fs::is_regular_file(WPath)) {
+    auto Status = FS.status(WPath);
+    if (Status && Status->getType() == llvm::sys::fs::file_type::regular_file) {
       FilePath = std::move(WPath);
       return true;
     }
@@ -930,7 +932,7 @@ static bool searchForFile(SmallVectorImpl<char> &FilePath,
 bool Driver::readConfigFile(StringRef FileName) {
   // Try reading the given file.
   SmallVector<const char *, 32> NewCfgArgs;
-  if (!llvm::cl::readConfigFile(FileName, Saver, NewCfgArgs)) {
+  if (!llvm::cl::readConfigFile(FileName, Saver, NewCfgArgs, getVFS())) {
     Diag(diag::err_drv_cannot_read_config_file) << FileName;
     return true;
   }
@@ -962,7 +964,6 @@ bool Driver::readConfigFile(StringRef FileName) {
 
 bool Driver::loadConfigFile() {
   std::string CfgFileName;
-  bool FileSpecifiedExplicitly = false;
 
   // Process options that change search path for config files.
   if (CLOptions) {
@@ -970,7 +971,7 @@ bool Driver::loadConfigFile() {
       SmallString<128> CfgDir;
       CfgDir.append(
           CLOptions->getLastArgValue(options::OPT_config_system_dir_EQ));
-      if (CfgDir.empty() || llvm::sys::fs::make_absolute(CfgDir))
+      if (CfgDir.empty() || getVFS().makeAbsolute(CfgDir))
         SystemConfigDir.clear();
       else
         SystemConfigDir = static_cast<std::string>(CfgDir);
@@ -979,14 +980,18 @@ bool Driver::loadConfigFile() {
       SmallString<128> CfgDir;
       CfgDir.append(
           CLOptions->getLastArgValue(options::OPT_config_user_dir_EQ));
-      if (CfgDir.empty() || llvm::sys::fs::make_absolute(CfgDir))
+      if (CfgDir.empty() || getVFS().makeAbsolute(CfgDir))
         UserConfigDir.clear();
       else
         UserConfigDir = static_cast<std::string>(CfgDir);
     }
   }
 
+  // Prepare list of directories where config file is searched for.
+  StringRef CfgFileSearchDirs[] = {UserConfigDir, SystemConfigDir, Dir};
+
   // First try to find config file specified in command line.
+  llvm::SmallString<128> CfgFilePath;
   if (CLOptions) {
     std::vector<std::string> ConfigFiles =
         CLOptions->getAllArgValues(options::OPT_config);
@@ -1004,26 +1009,43 @@ bool Driver::loadConfigFile() {
       // If argument contains directory separator, treat it as a path to
       // configuration file.
       if (llvm::sys::path::has_parent_path(CfgFileName)) {
-        SmallString<128> CfgFilePath;
-        if (llvm::sys::path::is_relative(CfgFileName))
-          llvm::sys::fs::current_path(CfgFilePath);
-        llvm::sys::path::append(CfgFilePath, CfgFileName);
-        if (!llvm::sys::fs::is_regular_file(CfgFilePath)) {
-          Diag(diag::err_drv_config_file_not_exist) << CfgFilePath;
-          return true;
+        SmallString<128> CfgFilePath(CfgFileName);
+        if (llvm::sys::path::is_relative(CfgFilePath)) {
+          if (getVFS().makeAbsolute(CfgFilePath))
+            return true;
+          auto Status = getVFS().status(CfgFilePath);
+          if (!Status ||
+              Status->getType() != llvm::sys::fs::file_type::regular_file) {
+            Diag(diag::err_drv_config_file_not_exist) << CfgFilePath;
+            return true;
+          }
         }
         return readConfigFile(CfgFilePath);
       }
 
-      FileSpecifiedExplicitly = true;
+      // Look for the configuration file in the usual locations.
+      if (searchForFile(CfgFilePath, CfgFileSearchDirs, CfgFileName, getVFS()))
+        return readConfigFile(CfgFilePath);
+
+      // Report error but only if config file was specified explicitly, by
+      // option --config. If it was deduced from executable name, it is not an
+      // error.
+      Diag(diag::err_drv_config_file_not_found) << CfgFileName;
+      for (const StringRef &SearchDir : CfgFileSearchDirs)
+        if (!SearchDir.empty())
+          Diag(diag::note_drv_config_file_searched_in) << SearchDir;
+      return true;
     }
   }
 
-  // If config file is not specified explicitly, try to deduce configuration
-  // from executable name. For instance, an executable 'armv7l-clang' will
-  // search for config file 'armv7l-clang.cfg'.
-  if (CfgFileName.empty() && !ClangNameParts.TargetPrefix.empty())
-    CfgFileName = ClangNameParts.TargetPrefix + '-' + ClangNameParts.ModeSuffix;
+  if (!(CLOptions && CLOptions->hasArg(options::OPT_no_default_config))) {
+    // If config file is not specified explicitly, try to deduce configuration
+    // from executable name. For instance, an executable 'armv7l-clang' will
+    // search for config file 'armv7l-clang.cfg'.
+    if (CfgFileName.empty() && !ClangNameParts.TargetPrefix.empty())
+      CfgFileName =
+          ClangNameParts.TargetPrefix + '-' + ClangNameParts.ModeSuffix;
+  }
 
   if (CfgFileName.empty())
     return false;
@@ -1051,8 +1073,8 @@ bool Driver::loadConfigFile() {
     // Get architecture name from config file name like 'i386.cfg' or
     // 'armv7l-clang.cfg'.
     // Check if command line options changes effective triple.
-    llvm::Triple EffectiveTriple = computeTargetTriple(*this,
-                                             CfgTriple.getTriple(), *CLOptions);
+    llvm::Triple EffectiveTriple =
+        computeTargetTriple(*this, CfgTriple.getTriple(), *CLOptions);
     if (CfgTriple.getArch() != EffectiveTriple.getArch()) {
       FixedConfigFile = EffectiveTriple.getArchName();
       FixedArchPrefixLen = FixedConfigFile.size();
@@ -1063,23 +1085,21 @@ bool Driver::loadConfigFile() {
     }
   }
 
-  // Prepare list of directories where config file is searched for.
-  StringRef CfgFileSearchDirs[] = {UserConfigDir, SystemConfigDir, Dir};
-
   // Try to find config file. First try file with corrected architecture.
-  llvm::SmallString<128> CfgFilePath;
   if (!FixedConfigFile.empty()) {
-    if (searchForFile(CfgFilePath, CfgFileSearchDirs, FixedConfigFile))
+    if (searchForFile(CfgFilePath, CfgFileSearchDirs, FixedConfigFile,
+                      getVFS()))
       return readConfigFile(CfgFilePath);
     // If 'x86_64-clang.cfg' was not found, try 'x86_64.cfg'.
     FixedConfigFile.resize(FixedArchPrefixLen);
     FixedConfigFile.append(".cfg");
-    if (searchForFile(CfgFilePath, CfgFileSearchDirs, FixedConfigFile))
+    if (searchForFile(CfgFilePath, CfgFileSearchDirs, FixedConfigFile,
+                      getVFS()))
       return readConfigFile(CfgFilePath);
   }
 
   // Then try original file name.
-  if (searchForFile(CfgFilePath, CfgFileSearchDirs, CfgFileName))
+  if (searchForFile(CfgFilePath, CfgFileSearchDirs, CfgFileName, getVFS()))
     return readConfigFile(CfgFilePath);
 
   // Finally try removing driver mode part: 'x86_64-clang.cfg' -> 'x86_64.cfg'.
@@ -1087,20 +1107,12 @@ bool Driver::loadConfigFile() {
       !ClangNameParts.TargetPrefix.empty()) {
     CfgFileName.assign(ClangNameParts.TargetPrefix);
     CfgFileName.append(".cfg");
-    if (searchForFile(CfgFilePath, CfgFileSearchDirs, CfgFileName))
+    if (searchForFile(CfgFilePath, CfgFileSearchDirs, CfgFileName, getVFS()))
       return readConfigFile(CfgFilePath);
   }
 
-  // Report error but only if config file was specified explicitly, by option
-  // --config. If it was deduced from executable name, it is not an error.
-  if (FileSpecifiedExplicitly) {
-    Diag(diag::err_drv_config_file_not_found) << CfgFileName;
-    for (const StringRef &SearchDir : CfgFileSearchDirs)
-      if (!SearchDir.empty())
-        Diag(diag::note_drv_config_file_searched_in) << SearchDir;
-    return true;
-  }
-
+  // If we were unable to find a config file deduced from executable name,
+  // do not report an error.
   return false;
 }
 
@@ -2726,7 +2738,7 @@ class OffloadingActionBuilder final {
 
     /// Update the state to include the provided host action \a HostAction as a
     /// dependency of the current device action. By default it is inactive.
-    virtual ActionBuilderReturnCode addDeviceDepences(Action *HostAction) {
+    virtual ActionBuilderReturnCode addDeviceDependences(Action *HostAction) {
       return ABRT_Inactive;
     }
 
@@ -2814,7 +2826,7 @@ class OffloadingActionBuilder final {
                           Action::OffloadKind OFKind)
         : DeviceActionBuilder(C, Args, Inputs, OFKind) {}
 
-    ActionBuilderReturnCode addDeviceDepences(Action *HostAction) override {
+    ActionBuilderReturnCode addDeviceDependences(Action *HostAction) override {
       // While generating code for CUDA, we only depend on the host input action
       // to trigger the creation of all the CUDA device actions.
 
@@ -3593,7 +3605,7 @@ public:
       if (!SB->isValid())
         continue;
 
-      auto RetCode = SB->addDeviceDepences(HostAction);
+      auto RetCode = SB->addDeviceDependences(HostAction);
 
       // Host dependences for device actions are not compatible with that same
       // action being ignored.
@@ -4381,7 +4393,7 @@ Action *Driver::BuildOffloadingActions(Compilation &C,
     Action *PackagerAction =
         C.MakeAction<OffloadPackagerJobAction>(OffloadActions, types::TY_Image);
     DDep.add(*PackagerAction, *C.getSingleOffloadToolChain<Action::OFK_Host>(),
-             nullptr, Action::OFK_None);
+             nullptr, C.getActiveOffloadKinds());
   }
 
   // If we are unable to embed a single device output into the host, we need to
