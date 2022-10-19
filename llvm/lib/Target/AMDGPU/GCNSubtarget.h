@@ -195,8 +195,6 @@ protected:
   bool HasImageGather4D16Bug = false;
   bool HasVOPDInsts = false;
 
-  bool HasGetPcStallHazard = false;
-
   // Dummy feature to use for assembler in tablegen.
   bool FeatureDisable = false;
 
@@ -1058,7 +1056,7 @@ public:
 
   bool hasVALUTransUseHazard() const { return getGeneration() >= GFX11; }
 
-  bool hasGetPcStallHazard() const { return HasGetPcStallHazard; }
+  bool hasVALUMaskWriteHazard() const { return getGeneration() >= GFX11; }
 
   /// Return if operations acting on VGPR tuples require even alignment.
   bool needsAlignedVGPRs() const { return GFX90AInsts; }
@@ -1086,6 +1084,8 @@ public:
   // GFX940 is a derivation to GFX90A. hasGFX940Insts() being true implies that
   // hasGFX90AInsts is also true.
   bool hasGFX940Insts() const { return GFX940Insts; }
+
+  bool hasDSAddTid() const { return getGeneration() >= GFX9; }
 
   /// Return the maximum number of waves per SIMD for kernels using \p SGPRs
   /// SGPRs
@@ -1251,6 +1251,11 @@ public:
   /// unit requirement.
   unsigned getMaxNumVGPRs(const MachineFunction &MF) const;
 
+  /// \returns Maximum amount of LDS space to be used for spilling explicitly
+  /// requested using "amdgpu-lds-spill-limit-dwords attribute attached to
+  /// function \p F.
+  unsigned getLdsSpillLimitDwords(const MachineFunction &MF) const;
+
   void getPostRAMutations(
       std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations)
       const override;
@@ -1305,6 +1310,10 @@ public:
   // \returns true if it's beneficial on this subtarget for the scheduler to
   // cluster stores as well as loads.
   bool shouldClusterStores() const { return getGeneration() >= GFX11; }
+
+  // \returns the number of address arguments from which to enable MIMG NSA
+  // on supported architectures.
+  unsigned getNSAThreshold(const MachineFunction &MF) const;
 };
 
 } // end namespace llvm

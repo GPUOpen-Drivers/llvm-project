@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 
@@ -733,4 +735,19 @@ bool SIMachineFunctionInfo::usesAGPRs(const MachineFunction &MF) const {
 
   UsesAGPRs = false;
   return false;
+}
+
+bool SIMachineFunctionInfo::ldsSpillingEnabled(
+    const MachineFunction &MF) const {
+  const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
+  if (!ST.hasDSAddTid())
+    return false;
+
+  if (MF.getFrameInfo().hasCalls())
+    return false;
+
+  if (ST.getLdsSpillLimitDwords(MF) == 0)
+    return false;
+
+  return true;
 }

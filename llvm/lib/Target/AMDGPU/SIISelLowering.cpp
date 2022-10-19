@@ -251,6 +251,7 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
       case ISD::STORE:
       case ISD::BUILD_VECTOR:
       case ISD::BITCAST:
+      case ISD::UNDEF:
       case ISD::EXTRACT_VECTOR_ELT:
       case ISD::INSERT_VECTOR_ELT:
       case ISD::EXTRACT_SUBVECTOR:
@@ -518,6 +519,7 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
         case ISD::STORE:
         case ISD::BUILD_VECTOR:
         case ISD::BITCAST:
+        case ISD::UNDEF:
         case ISD::EXTRACT_VECTOR_ELT:
         case ISD::INSERT_VECTOR_ELT:
         case ISD::INSERT_SUBVECTOR:
@@ -2573,6 +2575,31 @@ SDValue SITargetLowering::LowerFormalArguments(
     }
 
     InVals.push_back(Val);
+  }
+
+  SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
+  const GCNSubtarget &ST = MF.getSubtarget<GCNSubtarget>();
+  if (MFI->ldsSpillingEnabled(MF) &&
+      ST.getFlatWorkGroupSizes(Fn).second > ST.getWavefrontSize()) {
+
+    int WorkGroupInfoSgprNo =
+        AMDGPU::getIntegerAttribute(Fn, "amdgpu-work-group-info-arg-no", -1);
+    if (WorkGroupInfoSgprNo != -1)
+      for (unsigned i = 0, e = Ins.size(); i != e; ++i) {
+        const ISD::InputArg &Arg = Ins[i];
+        if (Arg.getOrigArgIndex() == (unsigned)WorkGroupInfoSgprNo) {
+
+          CCValAssign &VA = ArgLocs[i];
+          Register WorkGroupInfoReg = VA.getLocReg();
+          assert(AMDGPU::SGPR_32RegClass.contains(WorkGroupInfoReg));
+
+          Info->setWorkgroupInfoReg(WorkGroupInfoReg);
+          MF.addLiveIn(WorkGroupInfoReg, &AMDGPU::SGPR_32RegClass);
+          MF.front().addLiveIn(WorkGroupInfoReg, &AMDGPU::SGPR_32RegClass);
+
+          break;
+        }
+      }
   }
 
   // Start adding system SGPRs.
@@ -6525,7 +6552,7 @@ SDValue SITargetLowering::lowerImage(SDValue Op,
   // contiguous set of the remaining addresses.
   // This could help where there are more addresses than supported.
   bool UseNSA = ST->hasFeature(AMDGPU::FeatureNSAEncoding) &&
-                VAddrs.size() >= 3 &&
+                VAddrs.size() >= (unsigned)ST->getNSAThreshold(MF) &&
                 VAddrs.size() <= (unsigned)ST->getNSAMaxSize();
   SDValue VAddr;
   if (!UseNSA)

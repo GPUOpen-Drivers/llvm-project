@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -364,6 +366,11 @@ class SIMachineFunctionInfo final : public AMDGPUMachineFunction {
   // base to the beginning of the new function's frame.
   Register StackPtrOffsetReg = AMDGPU::SP_REG;
 
+  // This is WorkgroupInfo register set up for LDS spilling for cases where
+  // workgroup size is larger than wave size. It relies on user input
+  // registers set up by the front-end.
+  Register WorkgroupInfoReg = 0;
+
   AMDGPUFunctionArgInfo ArgInfo;
 
   // Graphics info.
@@ -472,6 +479,20 @@ public:
     bool IsDead = false;
   };
 
+  struct LdsSpill {
+    // Value to init m0 with.
+    Register M0InitVal;
+    // Register to save/restore current value of m0 for each spill. If
+    // NoRegister, the m0 initialization takes place in the prolog once.
+    Register M0SaveRestoreReg;
+    // Offset in LDS indexed by a stack object index. Value (-1) means there is
+    // no LDS spilling for such stack object index. The values are properly
+    // initialized only if TotalSize > 0.
+    SmallVector<int> LdsOffsets;
+    // Total size of all LDS spill objects in bytes (per thread).
+    unsigned TotalSize = 0;
+  };
+
   // Track VGPRs reserved for WWM.
   SmallSetVector<Register, 8> WWMReservedRegs;
 
@@ -508,6 +529,8 @@ private:
   // Emergency stack slot. Sometimes, we create this before finalizing the stack
   // frame, so save it here and add it to the RegScavenger later.
   Optional<int> ScavengeFI;
+
+  LdsSpill LdsSpillInfo;
 
 private:
   Register VGPRForAGPRCopy;
@@ -808,6 +831,13 @@ public:
     return StackPtrOffsetReg;
   }
 
+  void setWorkgroupInfoReg(Register Reg) {
+    assert(Reg != 0);
+    WorkgroupInfoReg = Reg;
+  }
+
+  Register getWorkgroupInfoReg() const { return WorkgroupInfoReg; }
+
   Register getQueuePtrUserSGPR() const {
     return ArgInfo.QueuePtr.getRegister();
   }
@@ -988,6 +1018,12 @@ public:
 
   // \returns true if a function needs or may need AGPRs.
   bool usesAGPRs(const MachineFunction &MF) const;
+
+  void setLdsSpill(LdsSpill Info) { LdsSpillInfo = Info; }
+
+  LdsSpill getLdsSpill() const { return LdsSpillInfo; }
+
+  bool ldsSpillingEnabled(const MachineFunction &MF) const;
 };
 
 } // end namespace llvm
