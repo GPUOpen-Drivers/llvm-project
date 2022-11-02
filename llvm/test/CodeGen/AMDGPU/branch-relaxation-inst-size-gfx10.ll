@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -march=amdgcn -mcpu=gfx1010 -verify-machineinstrs -amdgpu-s-branch-bits=4 < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GFX10 %s
 ; RUN: llc -march=amdgcn -mcpu=gfx900 -verify-machineinstrs -amdgpu-s-branch-bits=4 < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GFX9 %s
 ; RUN: llc -march=amdgcn -mcpu=gfx1100 -verify-machineinstrs -amdgpu-s-branch-bits=4 < %s | FileCheck -enable-var-scope -check-prefixes=GCN,GFX10 %s
@@ -6,7 +8,6 @@
 ; instruction, rather than 8 in previous generations.
 
 ; GCN-LABEL: {{^}}long_forward_branch_gfx10only:
-; GFX9: s_load_dwordx2
 ; GFX9: s_cmp_eq_u32
 ; GFX9-NEXT: s_cbranch_scc1
 

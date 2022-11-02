@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; RUN: llc -march=amdgcn -mcpu=gfx1100 -mattr=-wavefrontsize32,+wavefrontsize64 -verify-machineinstrs < %s | FileCheck %s
 
 declare <4 x float> @llvm.amdgcn.wmma.f32.16x16x16.f16(<16 x half>, <16 x half>, <4 x float>)
@@ -6,7 +8,7 @@ declare <4 x float> @llvm.amdgcn.wmma.f32.16x16x16.f16(<16 x half>, <16 x half>,
 
 define amdgpu_cs void @xyz () {
 ; CHECK-LABEL: xyz:
-; CHECK: v_wmma_f32_16x16x16_f16 v[0:3], v[4:11], v[4:11], v[0:3]
+; CHECK: v_wmma_f32_16x16x16_f16 v[0:3], v[0:7], v[0:7], v[0:3]
 
 .entry:
   br label %loop

@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14177,26 +14179,37 @@ SDValue DAGCombiner::visitFADDForFMACombine(SDNode *N) {
 
   // fadd (fma A, B, (fmul C, D)), E --> fma A, B, (fma C, D, E)
   // fadd E, (fma A, B, (fmul C, D)) --> fma A, B, (fma C, D, E)
+  // This also works with nested fma instructions:
+  // fadd (fma A, B, (fma (C, D, (fmul (E, F))))), G -->
+  // fma A, B, (fma C, D, fma (E, F, G))
+  // fadd (G, (fma A, B, (fma (C, D, (fmul (E, F)))))) -->
+  // fma A, B, (fma C, D, fma (E, F, G)).
   // This requires reassociation because it changes the order of operations.
-  SDValue FMA, E;
-  if (CanReassociate && isFusedOp(N0) &&
-      N0.getOperand(2).getOpcode() == ISD::FMUL && N0.hasOneUse() &&
-      N0.getOperand(2).hasOneUse()) {
-    FMA = N0;
-    E = N1;
-  } else if (CanReassociate && isFusedOp(N1) &&
-             N1.getOperand(2).getOpcode() == ISD::FMUL && N1.hasOneUse() &&
-             N1.getOperand(2).hasOneUse()) {
-    FMA = N1;
-    E = N0;
-  }
-  if (FMA && E) {
-    SDValue A = FMA.getOperand(0);
-    SDValue B = FMA.getOperand(1);
-    SDValue C = FMA.getOperand(2).getOperand(0);
-    SDValue D = FMA.getOperand(2).getOperand(1);
-    SDValue CDE = DAG.getNode(PreferredFusedOpcode, SL, VT, C, D, E);
-    return DAG.getNode(PreferredFusedOpcode, SL, VT, A, B, CDE);
+  if (CanReassociate) {
+    SDValue FMA, E;
+    if (isFusedOp(N0) && N0.hasOneUse()) {
+      FMA = N0;
+      E = N1;
+    } else if (isFusedOp(N1) && N1.hasOneUse()) {
+      FMA = N1;
+      E = N0;
+    }
+
+    SDValue TmpFMA = FMA;
+    while (E && isFusedOp(TmpFMA) && TmpFMA.hasOneUse()) {
+      SDValue FMul = TmpFMA->getOperand(2);
+      if (FMul.getOpcode() == ISD::FMUL && FMul.hasOneUse()) {
+        SDValue C = FMul.getOperand(0);
+        SDValue D = FMul.getOperand(1);
+        SDValue CDE = DAG.getNode(PreferredFusedOpcode, SL, VT, C, D, E);
+        DAG.ReplaceAllUsesOfValueWith(FMul, CDE);
+        // Replacing the inner FMul could cause the outer FMA to be simplified
+        // away.
+        return FMA.getOpcode() == ISD::DELETED_NODE ? SDValue() : FMA;
+      }
+
+      TmpFMA = TmpFMA->getOperand(2);
+    }
   }
 
   // Look through FP_EXTEND nodes to do more combining.
