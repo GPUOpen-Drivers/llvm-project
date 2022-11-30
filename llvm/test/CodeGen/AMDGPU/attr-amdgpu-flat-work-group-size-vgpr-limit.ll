@@ -1,3 +1,5 @@
+; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+; Notified per clause 4(b) of the license.
 ; -enable-misched=false makes the register usage more predictable
 ; -regalloc=basic just makes the test run faster
 ; RUN: llc -march=amdgcn -mcpu=gfx900 -amdgpu-function-calls=false -enable-misched=false -sgpr-regalloc=basic -vgpr-regalloc=basic -verify-machineinstrs < %s | FileCheck %s --check-prefixes=GCN,GFX9
@@ -557,8 +559,8 @@ attributes #256 = { nounwind "amdgpu-flat-work-group-size"="256,256" }
 ; GFX10CU-WAVE64: NumVgprs: 128
 ; GFX11WGP-WAVE32: NumVgprs: 256
 ; GFX11WGP-WAVE64: NumVgprs: 256
-; GFX11CU-WAVE32: NumVgprs: 128
-; GFX11CU-WAVE64: NumVgprs: 128
+; GFX11CU-WAVE32: NumVgprs: 192
+; GFX11CU-WAVE64: NumVgprs: 192
 define amdgpu_kernel void @f512() #512 {
   call void @foo()
   call void @use256vgprs()
@@ -574,10 +576,10 @@ attributes #512 = { nounwind "amdgpu-flat-work-group-size"="512,512" }
 ; GFX10WGP-WAVE64: NumVgprs: 128
 ; GFX10CU-WAVE32: NumVgprs: 64
 ; GFX10CU-WAVE64: NumVgprs: 64
-; GFX11WGP-WAVE32: NumVgprs: 128
-; GFX11WGP-WAVE64: NumVgprs: 128
-; GFX11CU-WAVE32: NumVgprs: 64
-; GFX11CU-WAVE64: NumVgprs: 64
+; GFX11WGP-WAVE32: NumVgprs: 192
+; GFX11WGP-WAVE64: NumVgprs: 192
+; GFX11CU-WAVE32: NumVgprs: 96
+; GFX11CU-WAVE64: NumVgprs: 96
 define amdgpu_kernel void @f1024() #1024 {
   call void @foo()
   call void @use256vgprs()

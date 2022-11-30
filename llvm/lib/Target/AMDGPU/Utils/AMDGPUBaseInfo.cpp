@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 
@@ -844,6 +846,9 @@ unsigned getVGPRAllocGranule(const MCSubtargetInfo *STI,
       *EnableWavefrontSize32 :
       STI->getFeatureBits().test(FeatureWavefrontSize32);
 
+  if (STI->getFeatureBits().test(FeatureGFX11FullVGPRs))
+    return IsWave32 ? 24 : 12;
+
   if (hasGFX10_3Insts(*STI))
     return IsWave32 ? 16 : 8;
 
@@ -867,7 +872,10 @@ unsigned getTotalNumVGPRs(const MCSubtargetInfo *STI) {
     return 512;
   if (!isGFX10Plus(*STI))
     return 256;
-  return STI->getFeatureBits().test(FeatureWavefrontSize32) ? 1024 : 512;
+  bool IsWave32 = STI->getFeatureBits().test(FeatureWavefrontSize32);
+  if (STI->getFeatureBits().test(FeatureGFX11FullVGPRs))
+    return IsWave32 ? 1536 : 768;
+  return IsWave32 ? 1024 : 512;
 }
 
 unsigned getAddressableNumVGPRs(const MCSubtargetInfo *STI) {
