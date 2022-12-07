@@ -3,6 +3,8 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -795,6 +797,13 @@ Vectorizer::getVectorizablePrefix(ArrayRef<Instruction *> Chain) {
 
 static ChainID getChainID(const Value *Ptr) {
   const Value *ObjPtr = getUnderlyingObject(Ptr);
+
+  // [amd-gfx] Try harder with typed pointers. This is required for decent
+  // codegen in a WMMA kernel. Remove this once the transition to opaque
+  // pointers is complete.
+  if (!ObjPtr->getType()->isOpaquePointerTy())
+    ObjPtr = getUnderlyingObject(ObjPtr, 4);
+
   if (const auto *Sel = dyn_cast<SelectInst>(ObjPtr)) {
     // The select's themselves are distinct instructions even if they share the
     // same condition and evaluate to consecutive pointers for true and false
