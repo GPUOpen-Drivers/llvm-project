@@ -152,7 +152,8 @@ DynamicLoader *DynamicLoaderDarwinKernel::CreateInstance(Process *process,
   if (!force) {
     // If the user provided an executable binary and it is not a kernel, this
     // plugin should not create an instance.
-    if (!is_kernel(process->GetTarget().GetExecutableModulePointer()))
+    Module *exec = process->GetTarget().GetExecutableModulePointer();
+    if (exec && !is_kernel(exec))
       return nullptr;
 
     // If the target's architecture does not look like an Apple environment,
@@ -185,7 +186,6 @@ DynamicLoader *DynamicLoaderDarwinKernel::CreateInstance(Process *process,
   // the kernel load address, we need to look around in memory to find it.
   const addr_t kernel_load_address = SearchForDarwinKernel(process);
   if (CheckForKernelImageAtAddress(kernel_load_address, process).IsValid()) {
-    process->SetCanRunCode(false);
     return new DynamicLoaderDarwinKernel(process, kernel_load_address);
   }
   return nullptr;
@@ -321,8 +321,8 @@ DynamicLoaderDarwinKernel::SearchForKernelNearPC(Process *process) {
   // Round the current pc down to the nearest page boundary.
   addr_t addr = pc & ~(pagesize - 1ULL);
 
-  // Search backwards for 32 megabytes, or first memory read error.
-  while (pc - addr < 32 * 0x100000) {
+  // Search backwards for 128 megabytes, or first memory read error.
+  while (pc - addr < 128 * 0x100000) {
     bool read_error;
     if (CheckForKernelImageAtAddress(addr, process, &read_error).IsValid())
       return addr;
@@ -413,13 +413,13 @@ DynamicLoaderDarwinKernel::ReadMachHeader(addr_t addr, Process *process, llvm::M
 
   if (header.magic == llvm::MachO::MH_CIGAM ||
       header.magic == llvm::MachO::MH_CIGAM_64) {
-    header.magic = llvm::ByteSwap_32(header.magic);
-    header.cputype = llvm::ByteSwap_32(header.cputype);
-    header.cpusubtype = llvm::ByteSwap_32(header.cpusubtype);
-    header.filetype = llvm::ByteSwap_32(header.filetype);
-    header.ncmds = llvm::ByteSwap_32(header.ncmds);
-    header.sizeofcmds = llvm::ByteSwap_32(header.sizeofcmds);
-    header.flags = llvm::ByteSwap_32(header.flags);
+    header.magic = llvm::byteswap<uint32_t>(header.magic);
+    header.cputype = llvm::byteswap<uint32_t>(header.cputype);
+    header.cpusubtype = llvm::byteswap<uint32_t>(header.cpusubtype);
+    header.filetype = llvm::byteswap<uint32_t>(header.filetype);
+    header.ncmds = llvm::byteswap<uint32_t>(header.ncmds);
+    header.sizeofcmds = llvm::byteswap<uint32_t>(header.sizeofcmds);
+    header.flags = llvm::byteswap<uint32_t>(header.flags);
   }
 
   return true;
@@ -508,6 +508,7 @@ DynamicLoaderDarwinKernel::DynamicLoaderDarwinKernel(Process *process,
       m_kext_summary_header(), m_known_kexts(), m_mutex(),
       m_break_id(LLDB_INVALID_BREAK_ID) {
   Status error;
+  process->SetCanRunCode(false);
   PlatformSP platform_sp =
       process->GetTarget().GetDebugger().GetPlatformList().Create(
           PlatformDarwinKernel::GetPluginNameStatic());

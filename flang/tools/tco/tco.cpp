@@ -53,6 +53,11 @@ static cl::opt<std::string> targetTriple("target",
                                          cl::desc("specify a target triple"),
                                          cl::init("native"));
 
+static cl::opt<bool> codeGenLLVM(
+    "code-gen-llvm",
+    cl::desc("Run only CodeGen passes and translate FIR to LLVM IR"),
+    cl::init(false));
+
 #include "flang/Tools/CLOptions.inc"
 
 static void printModuleBody(mlir::ModuleOp mod, raw_ostream &output) {
@@ -98,7 +103,8 @@ compileFIR(const mlir::PassPipelineCLParser &passPipeline) {
   fir::KindMapping kindMap{&context};
   fir::setTargetTriple(*owningRef, targetTriple);
   fir::setKindMapping(*owningRef, kindMap);
-  mlir::PassManager pm(&context, mlir::OpPassManager::Nesting::Implicit);
+  mlir::PassManager pm((*owningRef)->getName(),
+                       mlir::OpPassManager::Nesting::Implicit);
   pm.enableVerifier(/*verifyPasses=*/true);
   mlir::applyPassManagerCLOptions(pm);
   if (emitFir) {
@@ -112,15 +118,20 @@ compileFIR(const mlir::PassPipelineCLParser &passPipeline) {
     if (mlir::failed(passPipeline.addToPipeline(pm, errorHandler)))
       return mlir::failure();
   } else {
-    // Run tco with O2 by default.
-    fir::createMLIRToLLVMPassPipeline(pm, llvm::OptimizationLevel::O2);
+    if (codeGenLLVM) {
+      // Run only CodeGen passes.
+      fir::createDefaultFIRCodeGenPassPipeline(pm);
+    } else {
+      // Run tco with O2 by default.
+      fir::createMLIRToLLVMPassPipeline(pm, llvm::OptimizationLevel::O2);
+    }
     fir::addLLVMDialectToLLVMPass(pm, out.os());
   }
 
   // run the pass manager
   if (mlir::succeeded(pm.run(*owningRef))) {
     // passes ran successfully, so keep the output
-    if (emitFir || passPipeline.hasAnyOccurrences())
+    if ((emitFir || passPipeline.hasAnyOccurrences()) && !codeGenLLVM)
       printModuleBody(*owningRef, out.os());
     out.keep();
     return mlir::success();

@@ -13,12 +13,12 @@
 #include "mlir/Dialect/Async/Passes.h"
 
 #include "PassDetail.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/Async/Transforms.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/BlockAndValueMapping.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -425,7 +425,7 @@ static ParallelComputeFunction createParallelComputeFunction(
       }
 
       // Copy the body of the parallel op into the inner-most loop.
-      BlockAndValueMapping mapping;
+      IRMapping mapping;
       mapping.map(op.getInductionVars(), computeBlockInductionVars);
       mapping.map(computeFuncType.captures, captures);
 
@@ -555,7 +555,7 @@ createAsyncDispatchFunction(ParallelComputeFunction &computeFunc,
     // Create async.execute operation to dispatch half of the block range.
     auto execute = b.create<ExecuteOp>(TypeRange(), ValueRange(), ValueRange(),
                                        executeBodyBuilder);
-    b.create<AddToGroupOp>(indexTy, execute.token(), group);
+    b.create<AddToGroupOp>(indexTy, execute.getToken(), group);
     b.create<scf::YieldOp>(ValueRange({start, midIndex}));
   }
 
@@ -645,7 +645,7 @@ static void doAsyncDispatch(ImplicitLocOpBuilder &b, PatternRewriter &rewriter,
   };
 
   // Dispatch either single block compute function, or launch async dispatch.
-  b.create<scf::IfOp>(TypeRange(), isSingleBlock, syncDispatch, asyncDispatch);
+  b.create<scf::IfOp>(isSingleBlock, syncDispatch, asyncDispatch);
 }
 
 // Dispatch parallel compute functions by submitting all async compute tasks
@@ -702,7 +702,7 @@ doSequentialDispatch(ImplicitLocOpBuilder &b, PatternRewriter &rewriter,
     // Create async.execute operation to launch parallel computate function.
     auto execute = b.create<ExecuteOp>(TypeRange(), ValueRange(), ValueRange(),
                                        executeBodyBuilder);
-    b.create<AddToGroupOp>(rewriter.getIndexType(), execute.token(), group);
+    b.create<AddToGroupOp>(rewriter.getIndexType(), execute.getToken(), group);
     b.create<scf::YieldOp>();
   };
 
@@ -910,8 +910,8 @@ AsyncParallelForRewrite::matchAndRewrite(scf::ParallelOp op,
       Value useBlockAlignedComputeFn = b.create<arith::CmpIOp>(
           arith::CmpIPredicate::sge, blockSize, numIters);
 
-      b.create<scf::IfOp>(TypeRange(), useBlockAlignedComputeFn,
-                          dispatchBlockAligned, dispatchDefault);
+      b.create<scf::IfOp>(useBlockAlignedComputeFn, dispatchBlockAligned,
+                          dispatchDefault);
       b.create<scf::YieldOp>();
     } else {
       dispatchDefault(b, loc);
@@ -919,7 +919,7 @@ AsyncParallelForRewrite::matchAndRewrite(scf::ParallelOp op,
   };
 
   // Replace the `scf.parallel` operation with the parallel compute function.
-  b.create<scf::IfOp>(TypeRange(), isZeroIterations, noOp, dispatch);
+  b.create<scf::IfOp>(isZeroIterations, noOp, dispatch);
 
   // Parallel operation was replaced with a block iteration loop.
   rewriter.eraseOp(op);

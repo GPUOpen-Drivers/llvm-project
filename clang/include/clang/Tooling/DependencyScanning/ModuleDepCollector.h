@@ -19,6 +19,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -87,15 +88,12 @@ struct ModuleDeps {
   /// additionally appear in \c FileDeps as a dependency.
   std::string ClangModuleMapFile;
 
-  /// The path to where an implicit build would put the PCM for this module.
-  std::string ImplicitModulePCMPath;
-
   /// A collection of absolute paths to files that this module directly depends
   /// on, not including transitive dependencies.
   llvm::StringSet<> FileDeps;
 
   /// A collection of absolute paths to module map files that this module needs
-  /// to know about.
+  /// to know about. The ordering is significant.
   std::vector<std::string> ModuleMapFileDeps;
 
   /// A collection of prebuilt modular dependencies this module directly depends
@@ -134,7 +132,7 @@ public:
   void InclusionDirective(SourceLocation HashLoc, const Token &IncludeTok,
                           StringRef FileName, bool IsAngled,
                           CharSourceRange FilenameRange,
-                          Optional<FileEntryRef> File, StringRef SearchPath,
+                          OptionalFileEntryRef File, StringRef SearchPath,
                           StringRef RelativePath, const Module *Imported,
                           SrcMgr::CharacteristicKind FileType) override;
   void moduleImport(SourceLocation ImportLoc, ModuleIdPath Path,
@@ -161,7 +159,8 @@ private:
   /// Traverses the previously collected direct modular dependencies to discover
   /// transitive modular dependencies and fills the parent \c ModuleDepCollector
   /// with both.
-  ModuleID handleTopLevelModule(const Module *M);
+  /// Returns the ID or nothing if the dependency is spurious and is ignored.
+  std::optional<ModuleID> handleTopLevelModule(const Module *M);
   void addAllSubmoduleDeps(const Module *M, ModuleDeps &MD,
                            llvm::DenseSet<const Module *> &AddedModules);
   void addModuleDep(const Module *M, ModuleDeps &MD,
@@ -169,9 +168,9 @@ private:
 
   /// Traverses the affecting modules and updates \c MD with references to the
   /// parent \c ModuleDepCollector info.
-  void addAllAffectingModules(const Module *M, ModuleDeps &MD,
+  void addAllAffectingClangModules(const Module *M, ModuleDeps &MD,
                               llvm::DenseSet<const Module *> &AddedModules);
-  void addAffectingModule(const Module *M, ModuleDeps &MD,
+  void addAffectingClangModule(const Module *M, ModuleDeps &MD,
                           llvm::DenseSet<const Module *> &AddedModules);
 };
 
@@ -235,6 +234,10 @@ private:
   CompilerInvocation makeInvocationForModuleBuildWithoutOutputs(
       const ModuleDeps &Deps,
       llvm::function_ref<void(CompilerInvocation &)> Optimize) const;
+
+  /// Collect module map files for given modules.
+  llvm::DenseSet<const FileEntry *>
+  collectModuleMapFiles(ArrayRef<ModuleID> ClangModuleDeps) const;
 
   /// Add module map files to the invocation, if needed.
   void addModuleMapFiles(CompilerInvocation &CI,

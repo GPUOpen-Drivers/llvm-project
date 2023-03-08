@@ -1,6 +1,4 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
-; RUN: opt < %s  -instcombine  -S | FileCheck %s
+; RUN: opt -opaque-pointers=0 < %s -passes=instcombine -S | FileCheck %s
 
 define i32 @inttoptr_followed_by_bitcast(i32 %i0, i32 %i1, float %i2) {
 ; CHECK-LABEL: @inttoptr_followed_by_bitcast(

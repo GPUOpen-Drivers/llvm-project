@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -29,6 +27,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/CodeGen/ComplexDeinterleavingPass.h"
 #include "llvm/CodeGen/DAGCombine.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/LowLevelType.h"
@@ -63,6 +62,7 @@
 
 namespace llvm {
 
+class AssumptionCache;
 class CCState;
 class CCValAssign;
 class Constant;
@@ -259,6 +259,8 @@ public:
     MaskedIntrinsic,  // Use a target-specific intrinsic for the LL/SC loop.
     BitTestIntrinsic, // Use a target-specific intrinsic for special bit
                       // operations; used by X86.
+    CmpArithIntrinsic,// Use a target-specific intrinsic for special compare
+                      // operations; used by X86.
     Expand,           // Generic expansion in terms of other atomic operations.
 
     // Rewrite to a non-atomic form for use in a known non-preemptible
@@ -299,7 +301,7 @@ public:
     bool IsSwiftAsync : 1;
     bool IsSwiftError : 1;
     bool IsCFGuardTarget : 1;
-    MaybeAlign Alignment = None;
+    MaybeAlign Alignment = std::nullopt;
     Type *IndirectType = nullptr;
 
     ArgListEntry()
@@ -423,8 +425,10 @@ public:
     return MachineMemOperand::MONone;
   }
 
-  MachineMemOperand::Flags getLoadMemOperandFlags(const LoadInst &LI,
-                                                  const DataLayout &DL) const;
+  MachineMemOperand::Flags
+  getLoadMemOperandFlags(const LoadInst &LI, const DataLayout &DL,
+                         AssumptionCache *AC = nullptr,
+                         const TargetLibraryInfo *LibInfo = nullptr) const;
   MachineMemOperand::Flags getStoreMemOperandFlags(const StoreInst &SI,
                                                    const DataLayout &DL) const;
   MachineMemOperand::Flags getAtomicMemOperandFlags(const Instruction &AI,
@@ -572,24 +576,7 @@ public:
   /// dag combiner.
   virtual bool isLoadBitCastBeneficial(EVT LoadVT, EVT BitcastVT,
                                        const SelectionDAG &DAG,
-                                       const MachineMemOperand &MMO) const {
-    // Don't do if we could do an indexed load on the original type, but not on
-    // the new one.
-    if (!LoadVT.isSimple() || !BitcastVT.isSimple())
-      return true;
-
-    MVT LoadMVT = LoadVT.getSimpleVT();
-
-    // Don't bother doing this if it's just going to be promoted again later, as
-    // doing so might interfere with other combines.
-    if (getOperationAction(ISD::LOAD, LoadMVT) == Promote &&
-        getTypeToPromoteTo(ISD::LOAD, LoadMVT) == BitcastVT.getSimpleVT())
-      return false;
-
-    bool Fast = false;
-    return allowsMemoryAccess(*DAG.getContext(), DAG.getDataLayout(), BitcastVT,
-                              MMO, &Fast) && Fast;
-  }
+                                       const MachineMemOperand &MMO) const;
 
   /// Return true if the following transform is beneficial:
   /// (store (y (conv x)), y*)) -> (store x, (x*))
@@ -802,6 +789,9 @@ public:
     return true;
   }
 
+  // Return true if the target wants to transform Op(Splat(X)) -> Splat(Op(X))
+  virtual bool preferScalarizeSplat(unsigned Opc) const { return true; }
+
   /// Return true if the target wants to use the optimization that
   /// turns ext(promotableInst1(...(promotableInstN(load)))) into
   /// promotedInst1(...(promotedInstN(ext(load)))).
@@ -925,11 +915,19 @@ public:
     return RepRegClassCostForVT[VT.SimpleTy];
   }
 
-  /// Return true if SHIFT instructions should be expanded to SHIFT_PARTS
-  /// instructions, and false if a library call is preferred (e.g for code-size
-  /// reasons).
-  virtual bool shouldExpandShift(SelectionDAG &DAG, SDNode *N) const {
-    return true;
+  /// Return the preferred strategy to legalize tihs SHIFT instruction, with
+  /// \p ExpansionFactor being the recursion depth - how many expansion needed.
+  enum class ShiftLegalizationStrategy {
+    ExpandToParts,
+    ExpandThroughStack,
+    LowerToLibcall
+  };
+  virtual ShiftLegalizationStrategy
+  preferredShiftLegalizationStrategy(SelectionDAG &DAG, SDNode *N,
+                                     unsigned ExpansionFactor) const {
+    if (ExpansionFactor == 1)
+      return ShiftLegalizationStrategy::ExpandToParts;
+    return ShiftLegalizationStrategy::ExpandThroughStack;
   }
 
   /// Return true if the target has native support for the specified value type.
@@ -998,7 +996,7 @@ public:
   /// register, this contains one step in the expansion to get to the smaller
   /// register. For illegal floating point types, this returns the integer type
   /// to transform to.
-  EVT getTypeToTransformTo(LLVMContext &Context, EVT VT) const {
+  virtual EVT getTypeToTransformTo(LLVMContext &Context, EVT VT) const {
     return getTypeConversion(Context, VT).second;
   }
 
@@ -1050,6 +1048,10 @@ public:
 
     // value representing memory location
     PointerUnion<const Value *, const PseudoSourceValue *> ptrVal;
+
+    // Fallback address space for use if ptrVal is nullptr. std::nullopt means
+    // unknown address space.
+    std::optional<unsigned> fallbackAddressSpace;
 
     int          offset = 0;       // offset off of ptrVal
     uint64_t     size = 0;         // the size of the memory location
@@ -1415,6 +1417,18 @@ public:
     return false;
   }
 
+  // Return true if the target supports a scatter/gather instruction with
+  // indices which are scaled by the particular value.  Note that all targets
+  // must by definition support scale of 1.
+  virtual bool isLegalScaleForGatherScatter(uint64_t Scale,
+                                            uint64_t ElemSize) const {
+    // MGATHER/MSCATTER are only required to support scaling by one or by the
+    // element size.
+    if (Scale != ElemSize && Scale != 1)
+      return false;
+    return true;
+  }
+
   /// Return how the condition code should be treated: either it is legal, needs
   /// to be expanded to some other code sequence, or the target has a custom
   /// expander for it.
@@ -1567,7 +1581,7 @@ public:
   /// instance with i128 inline assembly operands on SystemZ.
   virtual unsigned
   getNumRegisters(LLVMContext &Context, EVT VT,
-                  Optional<MVT> RegisterVT = None) const {
+                  std::optional<MVT> RegisterVT = std::nullopt) const {
     if (VT.isSimple()) {
       assert((unsigned)VT.getSimpleVT().SimpleTy <
              std::size(NumRegistersForVT));
@@ -1704,15 +1718,16 @@ public:
   ///
   /// This function returns true if the target allows unaligned memory accesses
   /// of the specified type in the given address space. If true, it also returns
-  /// whether the unaligned memory access is "fast" in the last argument by
-  /// reference. This is used, for example, in situations where an array
-  /// copy/move/set is converted to a sequence of store operations. Its use
-  /// helps to ensure that such replacements don't generate code that causes an
-  /// alignment error (trap) on the target machine.
+  /// a relative speed of the unaligned memory access in the last argument by
+  /// reference. The higher the speed number the faster the operation comparing
+  /// to a number returned by another such call. This is used, for example, in
+  /// situations where an array copy/move/set is converted to a sequence of
+  /// store operations. Its use helps to ensure that such replacements don't
+  /// generate code that causes an alignment error (trap) on the target machine.
   virtual bool allowsMisalignedMemoryAccesses(
       EVT, unsigned AddrSpace = 0, Align Alignment = Align(1),
       MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
-      bool * /*Fast*/ = nullptr) const {
+      unsigned * /*Fast*/ = nullptr) const {
     return false;
   }
 
@@ -1720,51 +1735,51 @@ public:
   virtual bool allowsMisalignedMemoryAccesses(
       LLT, unsigned AddrSpace = 0, Align Alignment = Align(1),
       MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
-      bool * /*Fast*/ = nullptr) const {
+      unsigned * /*Fast*/ = nullptr) const {
     return false;
   }
 
   /// This function returns true if the memory access is aligned or if the
   /// target allows this specific unaligned memory access. If the access is
-  /// allowed, the optional final parameter returns if the access is also fast
-  /// (as defined by the target).
+  /// allowed, the optional final parameter returns a relative speed of the
+  /// access (as defined by the target).
   bool allowsMemoryAccessForAlignment(
       LLVMContext &Context, const DataLayout &DL, EVT VT,
       unsigned AddrSpace = 0, Align Alignment = Align(1),
       MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
-      bool *Fast = nullptr) const;
+      unsigned *Fast = nullptr) const;
 
   /// Return true if the memory access of this type is aligned or if the target
   /// allows this specific unaligned access for the given MachineMemOperand.
-  /// If the access is allowed, the optional final parameter returns if the
-  /// access is also fast (as defined by the target).
+  /// If the access is allowed, the optional final parameter returns a relative
+  /// speed of the access (as defined by the target).
   bool allowsMemoryAccessForAlignment(LLVMContext &Context,
                                       const DataLayout &DL, EVT VT,
                                       const MachineMemOperand &MMO,
-                                      bool *Fast = nullptr) const;
+                                      unsigned *Fast = nullptr) const;
 
   /// Return true if the target supports a memory access of this type for the
   /// given address space and alignment. If the access is allowed, the optional
-  /// final parameter returns if the access is also fast (as defined by the
-  /// target).
+  /// final parameter returns the relative speed of the access (as defined by
+  /// the target).
   virtual bool
   allowsMemoryAccess(LLVMContext &Context, const DataLayout &DL, EVT VT,
                      unsigned AddrSpace = 0, Align Alignment = Align(1),
                      MachineMemOperand::Flags Flags = MachineMemOperand::MONone,
-                     bool *Fast = nullptr) const;
+                     unsigned *Fast = nullptr) const;
 
   /// Return true if the target supports a memory access of this type for the
   /// given MachineMemOperand. If the access is allowed, the optional
-  /// final parameter returns if the access is also fast (as defined by the
+  /// final parameter returns the relative access speed (as defined by the
   /// target).
   bool allowsMemoryAccess(LLVMContext &Context, const DataLayout &DL, EVT VT,
                           const MachineMemOperand &MMO,
-                          bool *Fast = nullptr) const;
+                          unsigned *Fast = nullptr) const;
 
   /// LLT handling variant.
   bool allowsMemoryAccess(LLVMContext &Context, const DataLayout &DL, LLT Ty,
                           const MachineMemOperand &MMO,
-                          bool *Fast = nullptr) const;
+                          unsigned *Fast = nullptr) const;
 
   /// Returns the target specific optimal type for load and store operations as
   /// a result of memset, memcpy, and memmove lowering.
@@ -1894,11 +1909,11 @@ public:
 
   /// Returns the name of the symbol used to emit stack probes or the empty
   /// string if not applicable.
-  virtual bool hasStackProbeSymbol(MachineFunction &MF) const { return false; }
+  virtual bool hasStackProbeSymbol(const MachineFunction &MF) const { return false; }
 
-  virtual bool hasInlineStackProbe(MachineFunction &MF) const { return false; }
+  virtual bool hasInlineStackProbe(const MachineFunction &MF) const { return false; }
 
-  virtual StringRef getStackProbeSymbolName(MachineFunction &MF) const {
+  virtual StringRef getStackProbeSymbolName(const MachineFunction &MF) const {
     return "";
   }
 
@@ -1943,6 +1958,12 @@ public:
     return MaxDivRemBitWidthSupported;
   }
 
+  /// Returns the size in bits of the maximum larget fp convert the backend
+  /// supports. Larger operations will be expanded by ExpandLargeFPConvert.
+  unsigned getMaxLargeFPConvertBitWidthSupported() const {
+    return MaxLargeFPConvertBitWidthSupported;
+  }
+
   /// Returns the size of the smallest cmpxchg or ll/sc instruction
   /// the backend supports.  Any smaller operations are widened in
   /// AtomicExpandPass.
@@ -1959,6 +1980,13 @@ public:
   /// ordering for this atomic. This should be true for most architectures with
   /// weak memory ordering. Defaults to false.
   virtual bool shouldInsertFencesForAtomic(const Instruction *I) const {
+    return false;
+  }
+
+  /// Whether AtomicExpandPass should automatically insert a trailing fence
+  /// without reducing the ordering for this atomic. Defaults to false.
+  virtual bool
+  shouldInsertTrailingFenceForAtomicStore(const Instruction *I) const {
     return false;
   }
 
@@ -1990,12 +2018,28 @@ public:
     llvm_unreachable("Masked atomicrmw expansion unimplemented on this target");
   }
 
+  /// Perform a atomicrmw expansion using a target-specific way. This is
+  /// expected to be called when masked atomicrmw and bit test atomicrmw don't
+  /// work, and the target supports another way to lower atomicrmw.
+  virtual void emitExpandAtomicRMW(AtomicRMWInst *AI) const {
+    llvm_unreachable(
+        "Generic atomicrmw expansion unimplemented on this target");
+  }
+
   /// Perform a bit test atomicrmw using a target-specific intrinsic. This
   /// represents the combined bit test intrinsic which will be lowered at a late
   /// stage by the backend.
   virtual void emitBitTestAtomicRMWIntrinsic(AtomicRMWInst *AI) const {
     llvm_unreachable(
         "Bit test atomicrmw expansion unimplemented on this target");
+  }
+
+  /// Perform a atomicrmw which the result is only used by comparison, using a
+  /// target-specific intrinsic. This represents the combined atomic and compare
+  /// intrinsic which will be lowered at a late stage by the backend.
+  virtual void emitCmpArithAtomicRMWIntrinsic(AtomicRMWInst *AI) const {
+    llvm_unreachable(
+        "Compare arith atomicrmw expansion unimplemented on this target");
   }
 
   /// Perform a masked cmpxchg using a target-specific intrinsic. This
@@ -2230,7 +2274,7 @@ public:
     if (Exponent < 0)
       Exponent = -Exponent;
     return !OptForSize ||
-           (countPopulation((unsigned int)Exponent) + Log2_32(Exponent) < 7);
+           (llvm::popcount((unsigned int)Exponent) + Log2_32(Exponent) < 7);
   }
 
   //===--------------------------------------------------------------------===//
@@ -2506,6 +2550,12 @@ protected:
     MaxDivRemBitWidthSupported = SizeInBits;
   }
 
+  /// Set the size in bits of the maximum fp convert the backend supports.
+  /// Larger operations will be expanded by ExpandLargeFPConvert.
+  void setMaxLargeFPConvertBitWidthSupported(unsigned SizeInBits) {
+    MaxLargeFPConvertBitWidthSupported = SizeInBits;
+  }
+
   /// Sets the minimum cmpxchg or ll/sc size supported by the backend.
   void setMinCmpXchgSizeInBits(unsigned SizeInBits) {
     MinCmpXchgSizeInBits = SizeInBits;
@@ -2644,6 +2694,8 @@ public:
     case ISD::AVGFLOORU:
     case ISD::AVGCEILS:
     case ISD::AVGCEILU:
+    case ISD::ABDS:
+    case ISD::ABDU:
       return true;
     default: return false;
     }
@@ -3085,6 +3137,26 @@ public:
     return isOperationLegalOrCustom(Op, VT);
   }
 
+  /// Does this target support complex deinterleaving
+  virtual bool isComplexDeinterleavingSupported() const { return false; }
+
+  /// Does this target support complex deinterleaving with the given operation
+  /// and type
+  virtual bool isComplexDeinterleavingOperationSupported(
+      ComplexDeinterleavingOperation Operation, Type *Ty) const {
+    return false;
+  }
+
+  /// Create the IR node for the given complex deinterleaving operation.
+  /// If one cannot be created using all the given inputs, nullptr should be
+  /// returned.
+  virtual Value *createComplexDeinterleavingIR(
+      Instruction *I, ComplexDeinterleavingOperation OperationType,
+      ComplexDeinterleavingRotation Rotation, Value *InputA, Value *InputB,
+      Value *Accumulator = nullptr) const {
+    return nullptr;
+  }
+
   //===--------------------------------------------------------------------===//
   // Runtime Library hooks
   //
@@ -3204,6 +3276,10 @@ private:
   /// Size in bits of the maximum div/rem size the backend supports.
   /// Larger operations will be expanded by ExpandLargeDivRem.
   unsigned MaxDivRemBitWidthSupported;
+
+  /// Size in bits of the maximum larget fp convert size the backend
+  /// supports. Larger operations will be expanded by ExpandLargeFPConvert.
+  unsigned MaxLargeFPConvertBitWidthSupported;
 
   /// Size in bits of the minimum cmpxchg or ll/sc operation the
   /// backend supports.
@@ -3520,6 +3596,21 @@ public:
   /// legal.  It is frequently not legal in PIC relocation models.
   virtual bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const;
 
+  /// Return true if the operand with index OpNo corresponding to a target
+  /// branch, for example, in following case
+  ///
+  /// call void asm "lea r8, $0\0A\09call qword ptr ${1:P}\0A\09ret",
+  ///               "*m,*m,~{r8},~{dirflag},~{fpsr},~{flags}"
+  ///                ([9 x i32]* @Arr), void (...)* @sincos_asm)
+  ///
+  /// the operand $1 (sincos_asm) is target branch in inline asm, but the
+  /// operand $0 (Arr) is not.
+  virtual bool
+  isInlineAsmTargetBranch(const SmallVectorImpl<StringRef> &AsmStrs,
+                          unsigned OpNo) const {
+    return false;
+  }
+
   bool isInTailCallPosition(SelectionDAG &DAG, SDNode *Node,
                             SDValue &Chain) const;
 
@@ -3827,6 +3918,7 @@ public:
   /// indicating any elements which may be undef in the output \p UndefElts.
   virtual bool isSplatValueForTargetNode(SDValue Op, const APInt &DemandedElts,
                                          APInt &UndefElts,
+                                         const SelectionDAG &DAG,
                                          unsigned Depth = 0) const;
 
   /// Returns true if the given Opc is considered a canonical constant for the
@@ -3987,20 +4079,32 @@ public:
                                        NegatibleCost &Cost,
                                        unsigned Depth = 0) const;
 
+  SDValue getCheaperOrNeutralNegatedExpression(
+      SDValue Op, SelectionDAG &DAG, bool LegalOps, bool OptForSize,
+      const NegatibleCost CostThreshold = NegatibleCost::Neutral,
+      unsigned Depth = 0) const {
+    NegatibleCost Cost = NegatibleCost::Expensive;
+    SDValue Neg =
+        getNegatedExpression(Op, DAG, LegalOps, OptForSize, Cost, Depth);
+    if (!Neg)
+      return SDValue();
+
+    if (Cost <= CostThreshold)
+      return Neg;
+
+    // Remove the new created node to avoid the side effect to the DAG.
+    if (Neg->use_empty())
+      DAG.RemoveDeadNode(Neg.getNode());
+    return SDValue();
+  }
+
   /// This is the helper function to return the newly negated expression only
   /// when the cost is cheaper.
   SDValue getCheaperNegatedExpression(SDValue Op, SelectionDAG &DAG,
                                       bool LegalOps, bool OptForSize,
                                       unsigned Depth = 0) const {
-    NegatibleCost Cost = NegatibleCost::Expensive;
-    SDValue Neg =
-        getNegatedExpression(Op, DAG, LegalOps, OptForSize, Cost, Depth);
-    if (Neg && Cost == NegatibleCost::Cheaper)
-      return Neg;
-    // Remove the new created node to avoid the side effect to the DAG.
-    if (Neg && Neg->use_empty())
-      DAG.RemoveDeadNode(Neg.getNode());
-    return SDValue();
+    return getCheaperOrNeutralNegatedExpression(Op, DAG, LegalOps, OptForSize,
+                                                NegatibleCost::Cheaper, Depth);
   }
 
   /// This is the helper function to return the newly negated expression if
@@ -4018,10 +4122,26 @@ public:
 
   /// Target-specific splitting of values into parts that fit a register
   /// storing a legal type
-  virtual bool splitValueIntoRegisterParts(SelectionDAG &DAG, const SDLoc &DL,
-                                           SDValue Val, SDValue *Parts,
-                                           unsigned NumParts, MVT PartVT,
-                                           Optional<CallingConv::ID> CC) const {
+  virtual bool splitValueIntoRegisterParts(
+      SelectionDAG & DAG, const SDLoc &DL, SDValue Val, SDValue *Parts,
+      unsigned NumParts, MVT PartVT, std::optional<CallingConv::ID> CC) const {
+    return false;
+  }
+
+  /// Allows the target to handle physreg-carried dependency
+  /// in target-specific way. Used from the ScheduleDAGSDNodes to decide whether
+  /// to add the edge to the dependency graph.
+  /// Def - input: Selection DAG node defininfg physical register
+  /// User - input: Selection DAG node using physical register
+  /// Op - input: Number of User operand
+  /// PhysReg - inout: set to the physical register if the edge is
+  /// necessary, unchanged otherwise
+  /// Cost - inout: physical register copy cost.
+  /// Returns 'true' is the edge is necessary, 'false' otherwise
+  virtual bool checkForPhysRegDependency(SDNode *Def, SDNode *User, unsigned Op,
+                                         const TargetRegisterInfo *TRI,
+                                         const TargetInstrInfo *TII,
+                                         unsigned &PhysReg, int &Cost) const {
     return false;
   }
 
@@ -4030,7 +4150,7 @@ public:
   joinRegisterPartsIntoValue(SelectionDAG &DAG, const SDLoc &DL,
                              const SDValue *Parts, unsigned NumParts,
                              MVT PartVT, EVT ValueVT,
-                             Optional<CallingConv::ID> CC) const {
+                             std::optional<CallingConv::ID> CC) const {
     return SDValue();
   }
 
@@ -4370,6 +4490,12 @@ public:
     return nullptr;
   }
 
+  /// Returns a 0 terminated array of rounding control registers that can be
+  /// attached into strict FP call.
+  virtual ArrayRef<MCPhysReg> getRoundingControlRegisters() const {
+    return ArrayRef<MCPhysReg>();
+  }
+
   /// This callback is used to prepare for a volatile or atomic load.
   /// It takes a chain node as input and returns the chain for the load itself.
   ///
@@ -4596,6 +4722,12 @@ public:
                                               const AsmOperandInfo &OpInfo,
                                               SelectionDAG &DAG) const;
 
+  // Targets may override this function to collect operands from the CallInst
+  // and for example, lower them into the SelectionDAG operands.
+  virtual void CollectTargetIntrinsicOperands(const CallInst &I,
+                                              SmallVectorImpl<SDValue> &Ops,
+                                              SelectionDAG &DAG) const;
+
   //===--------------------------------------------------------------------===//
   // Div utility functions
   //
@@ -4808,11 +4940,20 @@ public:
   /// \returns The expansion result or SDValue() if it fails.
   SDValue expandCTPOP(SDNode *N, SelectionDAG &DAG) const;
 
+  /// Expand VP_CTPOP nodes.
+  /// \returns The expansion result or SDValue() if it fails.
+  SDValue expandVPCTPOP(SDNode *N, SelectionDAG &DAG) const;
+
   /// Expand CTLZ/CTLZ_ZERO_UNDEF nodes. Expands vector/scalar CTLZ nodes,
   /// vector nodes can only succeed if all operations are legal/custom.
   /// \param N Node to expand
   /// \returns The expansion result or SDValue() if it fails.
   SDValue expandCTLZ(SDNode *N, SelectionDAG &DAG) const;
+
+  /// Expand VP_CTLZ/VP_CTLZ_ZERO_UNDEF nodes.
+  /// \param N Node to expand
+  /// \returns The expansion result or SDValue() if it fails.
+  SDValue expandVPCTLZ(SDNode *N, SelectionDAG &DAG) const;
 
   /// Expand CTTZ via Table Lookup.
   /// \param N Node to expand
@@ -4825,6 +4966,11 @@ public:
   /// \param N Node to expand
   /// \returns The expansion result or SDValue() if it fails.
   SDValue expandCTTZ(SDNode *N, SelectionDAG &DAG) const;
+
+  /// Expand VP_CTTZ/VP_CTTZ_ZERO_UNDEF nodes.
+  /// \param N Node to expand
+  /// \returns The expansion result or SDValue() if it fails.
+  SDValue expandVPCTTZ(SDNode *N, SelectionDAG &DAG) const;
 
   /// Expand ABS nodes. Expands vector/scalar ABS nodes,
   /// vector nodes can only succeed if all operations are legal/custom.
@@ -4841,11 +4987,21 @@ public:
   /// \returns The expansion result or SDValue() if it fails.
   SDValue expandBSWAP(SDNode *N, SelectionDAG &DAG) const;
 
+  /// Expand VP_BSWAP nodes. Expands VP_BSWAP nodes with
+  /// i16/i32/i64 scalar types. Returns SDValue() if expand fails. \param N Node
+  /// to expand \returns The expansion result or SDValue() if it fails.
+  SDValue expandVPBSWAP(SDNode *N, SelectionDAG &DAG) const;
+
   /// Expand BITREVERSE nodes. Expands scalar/vector BITREVERSE nodes.
   /// Returns SDValue() if expand fails.
   /// \param N Node to expand
   /// \returns The expansion result or SDValue() if it fails.
   SDValue expandBITREVERSE(SDNode *N, SelectionDAG &DAG) const;
+
+  /// Expand VP_BITREVERSE nodes. Expands VP_BITREVERSE nodes with
+  /// i8/i16/i32/i64 scalar types. \param N Node to expand \returns The
+  /// expansion result or SDValue() if it fails.
+  SDValue expandVPBITREVERSE(SDNode *N, SelectionDAG &DAG) const;
 
   /// Turn load of vector type into a load of the individual elements.
   /// \param LD load to expand

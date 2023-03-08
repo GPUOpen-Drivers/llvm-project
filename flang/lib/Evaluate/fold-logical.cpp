@@ -180,8 +180,8 @@ Expr<Type<TypeCategory::Logical, KIND>> FoldIntrinsicFunction(
   } else if (name == "is_contiguous") {
     if (args.at(0)) {
       if (auto *expr{args[0]->UnwrapExpr()}) {
-        if (IsSimplyContiguous(*expr, context)) {
-          return Expr<T>{true};
+        if (auto contiguous{IsContiguous(*expr, context)}) {
+          return Expr<T>{*contiguous};
         }
       }
     }
@@ -222,7 +222,6 @@ Expr<Type<TypeCategory::Logical, KIND>> FoldIntrinsicFunction(
     }
   } else if (name == "__builtin_ieee_support_datatype" ||
       name == "__builtin_ieee_support_denormal" ||
-      name == "__builtin_ieee_support_divide" ||
       name == "__builtin_ieee_support_divide" ||
       name == "__builtin_ieee_support_inf" ||
       name == "__builtin_ieee_support_io" ||

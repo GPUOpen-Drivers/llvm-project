@@ -21,6 +21,8 @@ add_object_library(
     libc.src.__support.str_to_integer
     libc.src.__support.CPP.bit
     libc.src.__support.CPP.string_view
+    libc.src.__support.CPP.type_traits
+    libc.src.__support.common
 )
 
 add_object_library(
@@ -59,6 +61,7 @@ add_object_library(
     write_int_converter.h
     float_inf_nan_converter.h
     float_hex_converter.h
+    float_dec_converter.h
   DEPENDS
     .writer
     .core_structs
@@ -67,7 +70,11 @@ add_object_library(
     libc.src.__support.CPP.string_view
     libc.src.__support.FPUtil.fp_bits
     libc.src.__support.FPUtil.fenv_impl
+    libc.src.__support.common
+    libc.src.__support.uint
+    libc.src.__support.uint128
     libc.src.__support.integer_to_string
+    libc.src.__support.float_to_string
 )
 
 

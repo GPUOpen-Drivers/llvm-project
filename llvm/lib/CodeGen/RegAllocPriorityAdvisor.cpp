@@ -76,10 +76,12 @@ template <> Pass *llvm::callDefaultCtor<RegAllocPriorityAdvisorAnalysis>() {
     Ret = new DefaultPriorityAdvisorAnalysis(/*NotAsRequested*/ false);
     break;
   case RegAllocPriorityAdvisorAnalysis::AdvisorMode::Development:
-    // TODO: add implementation
+#if defined(LLVM_HAVE_TFLITE)
+    Ret = createDevelopmentModePriorityAdvisor();
+#endif
     break;
   case RegAllocPriorityAdvisorAnalysis::AdvisorMode::Release:
-    // TODO: add implementation
+    Ret = createReleaseModePriorityAdvisor();
     break;
   }
   if (Ret)

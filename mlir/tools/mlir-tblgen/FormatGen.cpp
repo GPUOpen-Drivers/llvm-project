@@ -444,6 +444,11 @@ bool mlir::tblgen::shouldEmitSpaceBefore(StringRef value,
 
 bool mlir::tblgen::canFormatStringAsKeyword(
     StringRef value, function_ref<void(Twine)> emitError) {
+  if (value.empty()) {
+    if (emitError)
+      emitError("keywords cannot be empty");
+    return false;
+  }
   if (!isalpha(value.front()) && value.front() != '_') {
     if (emitError)
       emitError("valid keyword starts with a letter or '_'");
@@ -482,6 +487,8 @@ bool mlir::tblgen::isValidLiteral(StringRef value,
   }
   // Check the punctuation that are larger than a single character.
   if (value == "->")
+    return true;
+  if (value == "...")
     return true;
 
   // Otherwise, this must be an identifier.

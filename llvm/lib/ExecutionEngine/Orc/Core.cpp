@@ -17,6 +17,7 @@
 
 #include <condition_variable>
 #include <future>
+#include <optional>
 
 #define DEBUG_TYPE "orc"
 
@@ -688,10 +689,11 @@ void JITDylib::removeGenerator(DefinitionGenerator &G) {
 
 Expected<SymbolFlagsMap>
 JITDylib::defineMaterializing(SymbolFlagsMap SymbolFlags) {
+  // TODO: Should we bail out early here if MR is defunct?
 
   return ES.runSessionLocked([&]() -> Expected<SymbolFlagsMap> {
-    std::vector<SymbolTable::iterator> AddedSyms;
-    std::vector<SymbolFlagsMap::iterator> RejectedWeakDefs;
+    std::vector<NonOwningSymbolStringPtr> AddedSyms;
+    std::vector<NonOwningSymbolStringPtr> RejectedWeakDefs;
 
     for (auto SFItr = SymbolFlags.begin(), SFEnd = SymbolFlags.end();
          SFItr != SFEnd; ++SFItr) {
@@ -707,27 +709,27 @@ JITDylib::defineMaterializing(SymbolFlagsMap SymbolFlags) {
         // If this is a strong definition then error out.
         if (!Flags.isWeak()) {
           // Remove any symbols already added.
-          for (auto &SI : AddedSyms)
-            Symbols.erase(SI);
+          for (auto &S : AddedSyms)
+            Symbols.erase(Symbols.find_as(S));
 
           // FIXME: Return all duplicates.
           return make_error<DuplicateDefinition>(std::string(*Name));
         }
 
         // Otherwise just make a note to discard this symbol after the loop.
-        RejectedWeakDefs.push_back(SFItr);
+        RejectedWeakDefs.push_back(NonOwningSymbolStringPtr(Name));
         continue;
       } else
         EntryItr =
           Symbols.insert(std::make_pair(Name, SymbolTableEntry(Flags))).first;
 
-      AddedSyms.push_back(EntryItr);
+      AddedSyms.push_back(NonOwningSymbolStringPtr(Name));
       EntryItr->second.setState(SymbolState::Materializing);
     }
 
     // Remove any rejected weak definitions from the SymbolFlags map.
     while (!RejectedWeakDefs.empty()) {
-      SymbolFlags.erase(RejectedWeakDefs.back());
+      SymbolFlags.erase(SymbolFlags.find_as(RejectedWeakDefs.back()));
       RejectedWeakDefs.pop_back();
     }
 
@@ -970,10 +972,9 @@ Error JITDylib::resolve(MaterializationResponsibility &MR,
             SymbolsInErrorState.insert(KV.first);
           else {
             auto Flags = KV.second.getFlags();
-            Flags &= ~(JITSymbolFlags::Weak | JITSymbolFlags::Common);
+            Flags &= ~JITSymbolFlags::Common;
             assert(Flags ==
-                       (SymI->second.getFlags() &
-                        ~(JITSymbolFlags::Weak | JITSymbolFlags::Common)) &&
+                       (SymI->second.getFlags() & ~JITSymbolFlags::Common) &&
                    "Resolved flags should match the declared flags");
 
             Worklist.push_back(
@@ -2244,8 +2245,8 @@ void ExecutionSession::dump(raw_ostream &OS) {
 void ExecutionSession::dispatchOutstandingMUs() {
   LLVM_DEBUG(dbgs() << "Dispatching MaterializationUnits...\n");
   while (true) {
-    Optional<std::pair<std::unique_ptr<MaterializationUnit>,
-                       std::unique_ptr<MaterializationResponsibility>>>
+    std::optional<std::pair<std::unique_ptr<MaterializationUnit>,
+                            std::unique_ptr<MaterializationResponsibility>>>
         JMU;
 
     {
@@ -2285,9 +2286,10 @@ Error ExecutionSession::removeResourceTracker(ResourceTracker &RT) {
 
   Error Err = Error::success();
 
+  auto &JD = RT.getJITDylib();
   for (auto *L : reverse(CurrentResourceManagers))
-    Err =
-        joinErrors(std::move(Err), L->handleRemoveResources(RT.getKeyUnsafe()));
+    Err = joinErrors(std::move(Err),
+                     L->handleRemoveResources(JD, RT.getKeyUnsafe()));
 
   for (auto &Q : QueriesToFail)
     Q->handleFailed(
@@ -2316,7 +2318,8 @@ void ExecutionSession::transferResourceTracker(ResourceTracker &DstRT,
     auto &JD = DstRT.getJITDylib();
     JD.transferTracker(DstRT, SrcRT);
     for (auto *L : reverse(ResourceManagers))
-      L->handleTransferResources(DstRT.getKeyUnsafe(), SrcRT.getKeyUnsafe());
+      L->handleTransferResources(JD, DstRT.getKeyUnsafe(),
+                                 SrcRT.getKeyUnsafe());
   });
 }
 
@@ -2909,13 +2912,13 @@ Error ExecutionSession::OL_notifyResolved(MaterializationResponsibility &MR,
   });
 #ifndef NDEBUG
   for (auto &KV : Symbols) {
-    auto WeakFlags = JITSymbolFlags::Weak | JITSymbolFlags::Common;
     auto I = MR.SymbolFlags.find(KV.first);
     assert(I != MR.SymbolFlags.end() &&
            "Resolving symbol outside this responsibility set");
     assert(!I->second.hasMaterializationSideEffectsOnly() &&
            "Can't resolve materialization-side-effects-only symbol");
-    assert((KV.second.getFlags() & ~WeakFlags) == (I->second & ~WeakFlags) &&
+    assert((KV.second.getFlags() & ~JITSymbolFlags::Common) ==
+               (I->second & ~JITSymbolFlags::Common) &&
            "Resolving symbol with incorrect flags");
   }
 #endif

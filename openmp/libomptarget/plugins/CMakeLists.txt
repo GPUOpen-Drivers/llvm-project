@@ -52,7 +52,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "${tmachine}$")
     install(TARGETS "omptarget.rtl.${tmachine_libname}"
       LIBRARY DESTINATION "${OPENMP_INSTALL_LIBDIR}")
     set_target_properties("omptarget.rtl.${tmachine_libname}" PROPERTIES
-      INSTALL_RPATH "$ORIGIN" BUILD_RPATH "$ORIGIN:${CMAKE_CURRENT_BINARY_DIR}/..")
+      INSTALL_RPATH "$ORIGIN" BUILD_RPATH "$ORIGIN:${CMAKE_CURRENT_BINARY_DIR}/.."
+      CXX_VISIBILITY_PRESET protected)
 
     target_include_directories( "omptarget.rtl.${tmachine_libname}" PRIVATE
       ${LIBOMPTARGET_INCLUDE_DIR}
@@ -62,8 +63,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "${tmachine}$")
       "omptarget.rtl.${tmachine_libname}")
 
     # Report to the parent scope that we are building a plugin.
-    set(LIBOMPTARGET_SYSTEM_TARGETS
-      "${LIBOMPTARGET_SYSTEM_TARGETS} ${tmachine_triple} ${tmachine_triple}-oldDriver" PARENT_SCOPE)
     set(LIBOMPTARGET_SYSTEM_TARGETS
       "${LIBOMPTARGET_SYSTEM_TARGETS} ${tmachine_triple} ${tmachine_triple}-LTO" PARENT_SCOPE)
     set(LIBOMPTARGET_TESTED_PLUGINS

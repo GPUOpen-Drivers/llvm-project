@@ -203,8 +203,9 @@ void SIShrinkInstructions::copyExtraImplicitOps(MachineInstr &NewMI,
                                                 MachineInstr &MI) const {
   MachineFunction &MF = *MI.getMF();
   for (unsigned i = MI.getDesc().getNumOperands() +
-         MI.getDesc().getNumImplicitUses() +
-         MI.getDesc().getNumImplicitDefs(), e = MI.getNumOperands();
+                    MI.getDesc().implicit_uses().size() +
+                    MI.getDesc().implicit_defs().size(),
+                e = MI.getNumOperands();
        i != e; ++i) {
     const MachineOperand &MO = MI.getOperand(i);
     if ((MO.isReg() && MO.isImplicit()) || MO.isRegMask())
@@ -292,6 +293,14 @@ void SIShrinkInstructions::shrinkMIMG(MachineInstr &MI) const {
     RC = &AMDGPU::VReg_224RegClass;
   } else if (Info->VAddrDwords == 8) {
     RC = &AMDGPU::VReg_256RegClass;
+  } else if (Info->VAddrDwords == 9) {
+    RC = &AMDGPU::VReg_288RegClass;
+  } else if (Info->VAddrDwords == 10) {
+    RC = &AMDGPU::VReg_320RegClass;
+  } else if (Info->VAddrDwords == 11) {
+    RC = &AMDGPU::VReg_352RegClass;
+  } else if (Info->VAddrDwords == 12) {
+    RC = &AMDGPU::VReg_384RegClass;
   } else {
     RC = &AMDGPU::VReg_512RegClass;
     NewAddrDwords = 16;
@@ -488,7 +497,7 @@ bool SIShrinkInstructions::shrinkScalarLogicOp(MachineInstr &MI) const {
 
   if (Opc == AMDGPU::S_AND_B32) {
     if (isPowerOf2_32(~Imm)) {
-      NewImm = countTrailingOnes(Imm);
+      NewImm = llvm::countr_one(Imm);
       Opc = AMDGPU::S_BITSET0_B32;
     } else if (AMDGPU::isInlinableLiteral32(~Imm, ST->hasInv2PiInlineImm())) {
       NewImm = ~Imm;
@@ -496,7 +505,7 @@ bool SIShrinkInstructions::shrinkScalarLogicOp(MachineInstr &MI) const {
     }
   } else if (Opc == AMDGPU::S_OR_B32) {
     if (isPowerOf2_32(Imm)) {
-      NewImm = countTrailingZeros(Imm);
+      NewImm = llvm::countr_zero(Imm);
       Opc = AMDGPU::S_BITSET1_B32;
     } else if (AMDGPU::isInlinableLiteral32(~Imm, ST->hasInv2PiInlineImm())) {
       NewImm = ~Imm;
@@ -587,8 +596,9 @@ SIShrinkInstructions::getSubRegForIndex(Register Reg, unsigned Sub,
 void SIShrinkInstructions::dropInstructionKeepingImpDefs(
     MachineInstr &MI) const {
   for (unsigned i = MI.getDesc().getNumOperands() +
-         MI.getDesc().getNumImplicitUses() +
-         MI.getDesc().getNumImplicitDefs(), e = MI.getNumOperands();
+                    MI.getDesc().implicit_uses().size() +
+                    MI.getDesc().implicit_defs().size(),
+                e = MI.getNumOperands();
        i != e; ++i) {
     const MachineOperand &Op = MI.getOperand(i);
     if (!Op.isDef())
@@ -637,9 +647,6 @@ MachineInstr *SIShrinkInstructions::matchSwap(MachineInstr &MovT) const {
   if (!TRI->isVGPR(*MRI, X))
     return nullptr;
 
-  if (MovT.hasRegisterImplicitUseOperand(AMDGPU::M0))
-    return nullptr;
-
   const unsigned SearchLimit = 16;
   unsigned Count = 0;
   bool KilledT = false;
@@ -654,8 +661,7 @@ MachineInstr *SIShrinkInstructions::matchSwap(MachineInstr &MovT) const {
          MovY->getOpcode() != AMDGPU::COPY) ||
         !MovY->getOperand(1).isReg()        ||
         MovY->getOperand(1).getReg() != T   ||
-        MovY->getOperand(1).getSubReg() != Tsub ||
-        MovY->hasRegisterImplicitUseOperand(AMDGPU::M0))
+        MovY->getOperand(1).getSubReg() != Tsub)
       continue;
 
     Register Y = MovY->getOperand(0).getReg();
@@ -688,9 +694,6 @@ MachineInstr *SIShrinkInstructions::matchSwap(MachineInstr &MovT) const {
         MovX = nullptr;
         break;
       }
-      // Implicit use of M0 is an indirect move.
-      if (I->hasRegisterImplicitUseOperand(AMDGPU::M0))
-        continue;
 
       if (Size > 1 && (I->getNumImplicitOperands() > (I->isCopy() ? 0U : 1U)))
         continue;

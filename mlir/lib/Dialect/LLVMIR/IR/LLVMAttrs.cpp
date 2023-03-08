@@ -1,0 +1,118 @@
+//===- LLVMAttrs.cpp - LLVM Attributes registration -----------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file defines the attribute details for the LLVM IR dialect in MLIR.
+//
+//===----------------------------------------------------------------------===//
+
+#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/DialectImplementation.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include <optional>
+
+using namespace mlir;
+using namespace mlir::LLVM;
+
+#include "mlir/Dialect/LLVMIR/LLVMOpsEnums.cpp.inc"
+#define GET_ATTRDEF_CLASSES
+#include "mlir/Dialect/LLVMIR/LLVMOpsAttrDefs.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// LLVMDialect registration
+//===----------------------------------------------------------------------===//
+
+void LLVMDialect::registerAttributes() {
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "mlir/Dialect/LLVMIR/LLVMOpsAttrDefs.cpp.inc"
+      >();
+}
+
+//===----------------------------------------------------------------------===//
+// DINodeAttr
+//===----------------------------------------------------------------------===//
+
+bool DINodeAttr::classof(Attribute attr) {
+  return llvm::isa<DIVoidResultTypeAttr, DIBasicTypeAttr, DICompileUnitAttr,
+                   DICompositeTypeAttr, DIDerivedTypeAttr, DIFileAttr,
+                   DILexicalBlockAttr, DILexicalBlockFileAttr,
+                   DILocalVariableAttr, DISubprogramAttr, DISubrangeAttr,
+                   DISubroutineTypeAttr>(attr);
+}
+
+//===----------------------------------------------------------------------===//
+// DIScopeAttr
+//===----------------------------------------------------------------------===//
+
+bool DIScopeAttr::classof(Attribute attr) {
+  return llvm::isa<DICompileUnitAttr, DICompositeTypeAttr, DIFileAttr,
+                   DILexicalBlockFileAttr, DILocalScopeAttr>(attr);
+}
+
+//===----------------------------------------------------------------------===//
+// DILocalScopeAttr
+//===----------------------------------------------------------------------===//
+
+bool DILocalScopeAttr::classof(Attribute attr) {
+  return llvm::isa<DILexicalBlockAttr, DISubprogramAttr>(attr);
+}
+
+//===----------------------------------------------------------------------===//
+// DITypeAttr
+//===----------------------------------------------------------------------===//
+
+bool DITypeAttr::classof(Attribute attr) {
+  return llvm::isa<DIVoidResultTypeAttr, DIBasicTypeAttr, DICompositeTypeAttr,
+                   DIDerivedTypeAttr, DISubroutineTypeAttr>(attr);
+}
+
+//===----------------------------------------------------------------------===//
+// DISubroutineTypeAttr
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+DISubroutineTypeAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                             unsigned int callingConventions,
+                             ArrayRef<DITypeAttr> types) {
+  ArrayRef<DITypeAttr> argumentTypes =
+      types.empty() ? types : types.drop_front();
+  if (llvm::any_of(argumentTypes, [](DITypeAttr type) {
+        return type.isa<DIVoidResultTypeAttr>();
+      }))
+    return emitError() << "expected subroutine to have non-void argument types";
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// MemoryEffectsAttr
+//===----------------------------------------------------------------------===//
+
+MemoryEffectsAttr MemoryEffectsAttr::get(MLIRContext *context,
+                                         ArrayRef<ModRefInfo> memInfoArgs) {
+  if (memInfoArgs.empty())
+    return MemoryEffectsAttr::get(context, ModRefInfo::ModRef,
+                                  ModRefInfo::ModRef, ModRefInfo::ModRef);
+  if (memInfoArgs.size() == 3)
+    return MemoryEffectsAttr::get(context, memInfoArgs[0], memInfoArgs[1],
+                                  memInfoArgs[2]);
+  return {};
+}
+
+bool MemoryEffectsAttr::isReadWrite() {
+  if (this->getArgMem() != ModRefInfo::ModRef)
+    return false;
+  if (this->getInaccessibleMem() != ModRefInfo::ModRef)
+    return false;
+  if (this->getOther() != ModRefInfo::ModRef)
+    return false;
+  return true;
+}

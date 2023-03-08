@@ -1,5 +1,3 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ; RUN: llc -march=amdgcn -mcpu=gfx1010 -mattr=-nsa-encoding -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,NONSA,GFX10-NONSA %s
 ; RUN: llc -march=amdgcn -mcpu=gfx1010 -amdgpu-nsa-threshold=32 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,NONSA,GFX10-NONSA %s
 ; RUN: llc -march=amdgcn -mcpu=gfx1010 -amdgpu-nsa-threshold=2 -verify-machineinstrs < %s | FileCheck -check-prefixes=GCN,NSA,NSA-T2 %s
@@ -34,9 +32,9 @@ main_body:
 }
 
 ; GCN-LABEL: {{^}}sample_d_3d:
-; GFX1010-NSA: image_sample_d v[0:3], v[7:22],
+; GFX1010-NSA: image_sample_d v[0:3], v[7:15],
 ; GFX1030-NSA: image_sample_d v[0:3], [v3, v8, v7, v5, v4, v6, v0, v2, v1],
-; GFX11-NSA: image_sample_d v[0:3], v[7:22],
+; GFX11-NSA: image_sample_d v[0:3], v[7:15],
 define amdgpu_ps <4 x float> @sample_d_3d(<8 x i32> inreg %rsrc, <4 x i32> inreg %samp, float %s, float %r, float %t, float %dsdh, float %dtdv, float %dsdv, float %drdv, float %drdh, float %dtdh) {
 main_body:
   %v = call <4 x float> @llvm.amdgcn.image.sample.d.3d.v4f32.f32(i32 15, float %dsdh, float %dtdh, float %drdh, float %dsdv, float %dtdv, float %drdv, float %s, float %t, float %r, <8 x i32> %rsrc, <4 x i32> %samp, i1 0, i32 0, i32 0)

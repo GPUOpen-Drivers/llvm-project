@@ -43,20 +43,22 @@ public:
 
     // construct/copy/destroy
     template<class U>
-      reference_wrapper(U&&);
-    reference_wrapper(const reference_wrapper<T>& x) noexcept;
+      constexpr reference_wrapper(U&&);                                   // constexpr since C++20
+    constexpr reference_wrapper(const reference_wrapper<T>& x) noexcept;  // constexpr since C++20
 
     // assignment
-    reference_wrapper& operator=(const reference_wrapper<T>& x) noexcept;
+    constexpr reference_wrapper&
+    operator=(const reference_wrapper<T>& x) noexcept;                    // constexpr since C++20
 
     // access
-    operator T& () const noexcept;
-    T& get() const noexcept;
+    constexpr operator T& () const noexcept;                              // constexpr since C++20
+    constexpr T& get() const noexcept;                                    // constexpr since C++20
 
     // invoke
     template <class... ArgTypes>
-      typename result_of<T&(ArgTypes&&...)>::type
-          operator() (ArgTypes&&...) const;
+      constexpr typename result_of<T&(ArgTypes&&...)>::type               // constexpr since C++20
+          operator() (ArgTypes&&...) const
+              noexcept(is_nothrow_invocable_v<T&, ArgTypes...>);          // noexcept since C++17
 };
 
 template <class T>
@@ -531,7 +533,6 @@ POLICY:  For non-variadic implementations, the number of arguments is limited
 #include <__functional/unary_negate.h>
 #include <__functional/unwrap_ref.h>
 #include <__utility/forward.h>
-#include <concepts>
 #include <exception>
 #include <memory> // TODO: find out why removing this breaks the modules build
 #include <type_traits>
@@ -543,6 +544,7 @@ POLICY:  For non-variadic implementations, the number of arguments is limited
 #endif
 
 #if !defined(_LIBCPP_REMOVE_TRANSITIVE_INCLUDES) && _LIBCPP_STD_VER <= 20
+#  include <concepts>
 #  include <tuple>
 #  include <utility>
 #endif

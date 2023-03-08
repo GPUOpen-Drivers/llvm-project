@@ -1,5 +1,3 @@
-# Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-# Notified per clause 4(b) of the license.
 add_llvm_component_group(AMDGPU)
 
 set(LLVM_TARGET_DEFINITIONS AMDGPU.td)
@@ -90,6 +88,7 @@ add_llvm_target(AMDGPUCodeGen
   AMDGPUPropagateAttributes.cpp
   AMDGPUPromoteKernelArguments.cpp
   AMDGPURegBankCombiner.cpp
+  AMDGPURegBankSelect.cpp
   AMDGPURegisterBankInfo.cpp
   AMDGPURegPressAnalysis.cpp
   AMDGPUReleaseVGPRs.cpp
@@ -182,6 +181,7 @@ add_llvm_target(AMDGPUCodeGen
   SelectionDAG
   Support
   Target
+  TargetParser
   TransformUtils
   Vectorize
   GlobalISel

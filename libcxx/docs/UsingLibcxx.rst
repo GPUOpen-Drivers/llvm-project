@@ -122,6 +122,21 @@ provide pretty-printers itself. Those can be used as:
         -ex "python register_libcxx_printer_loader()" \
         <args>
 
+.. _include-what-you-use:
+
+include-what-you-use (IWYU)
+===========================
+
+libc++ provides an IWYU `mapping file <https://github.com/include-what-you-use/include-what-you-use/blob/master/docs/IWYUMappings.md>`,
+which drastically improves the accuracy of the tool when using libc++. To use the mapping file with
+IWYU, you should run the tool like so:
+
+.. code-block:: bash
+
+  $ include-what-you-use -Xiwyu /path/to/libcxx/include/libcxx.imp file.cpp
+
+If you would prefer to not use that flag, then you can replace ``/path/to/include-what-you-use/share/libcxx.imp```
+file with the libc++-provided ``libcxx.imp`` file.
 
 .. _assertions-mode:
 
@@ -157,12 +172,19 @@ library provides a default function that prints an error message and calls ``std
 that this function is provided by the static or shared library, so it is only available when deploying
 to a platform where the compiled library is sufficiently recent. On older platforms, the program will
 terminate in an unspecified unsuccessful manner, but the quality of diagnostics won't be great.
-However, users can also override that function with their own, which can be useful to either provide
-custom behavior or when deploying to an older platform where the default function isn't available.
+However, users can also override that mechanism at two different levels. First, the mechanism can be
+overriden at compile-time by defining the ``_LIBCPP_VERBOSE_ABORT(format, args...)`` variadic macro.
+When that macro is defined, it will be called with a format string as the first argument, followed by
+a series of arguments to format using printf-style formatting. Compile-time customization may be
+interesting to get precise control over code generation, however it is also inconvenient to use in
+some cases. Indeed, compile-time customization of the verbose termination function requires that all
+translation units be compiled with a consistent definition for ``_LIBCPP_VERBOSE_ABORT`` to avoid ODR
+violations, which can add complexity in the build system of users.
 
-Replacing the default verbose termination function is done by defining the
-``_LIBCPP_AVAILABILITY_CUSTOM_VERBOSE_ABORT_PROVIDED`` macro in all translation units of your program
-and defining the following function in exactly one translation unit:
+Otherwise, if compile-time customization is not necessary, link-time customization of the handler is also
+possible, similarly to how replacing ``operator new`` works. This mechanism trades off fine-grained control
+over the call site where the termination is initiated in exchange for more ergonomics. Link-time customization
+is done by simply defining the following function in exactly one translation unit of your program:
 
 .. code-block:: cpp
 
@@ -393,6 +415,44 @@ which no dialect declares as such (See the second form described above).
 * ``search``
 * ``unique``
 * ``upper_bound``
+* ``ranges::adjacent_find``
+* ``ranges::all_of``
+* ``ranges::any_of``
+* ``ranges::binary_search``
+* ``ranges::clamp``
+* ``ranges::count_if``
+* ``ranges::count``
+* ``ranges::equal_range``
+* ``ranges::equal``
+* ``ranges::find_end``
+* ``ranges::find_first_of``
+* ``ranges::find_if_not``
+* ``ranges::find_if``
+* ``ranges::find``
+* ``ranges::get_temporary_buffer``
+* ``ranges::includes``
+* ``ranges::is_heap_until``
+* ``ranges::is_heap``
+* ``ranges::is_partitioned``
+* ``ranges::is_permutation``
+* ``ranges::is_sorted_until``
+* ``ranges::is_sorted``
+* ``ranges::lexicographical_compare``
+* ``ranges::lower_bound``
+* ``ranges::max_element``
+* ``ranges::max``
+* ``ranges::min_element``
+* ``ranges::min``
+* ``ranges::minmax_element``
+* ``ranges::minmax``
+* ``ranges::mismatch``
+* ``ranges::none_of``
+* ``ranges::remove_if``
+* ``ranges::remove``
+* ``ranges::search_n``
+* ``ranges::search``
+* ``ranges::unique``
+* ``ranges::upper_bound``
 * ``lock_guard``'s constructors
 * ``as_const``
 * ``bit_cast``
@@ -402,6 +462,29 @@ which no dialect declares as such (See the second form described above).
 * ``identity::operator()``
 * ``to_integer``
 * ``to_underlying``
+* ``signbit``
+* ``fpclassify``
+* ``isfinite``
+* ``isinf``
+* ``isnan``
+* ``isnormal``
+* ``isgreater``
+* ``isgreaterequal``
+* ``isless``
+* ``islessequal``
+* ``islessgreater``
+* ``isunordered``
+* ``ceil``
+* ``fabs``
+* ``floor``
+* ``cbrt``
+* ``copysign``
+* ``fmax``
+* ``fmin``
+* ``nearbyint``
+* ``rint``
+* ``round``
+* ``trunc``
 
 Extended integral type support
 ------------------------------

@@ -121,8 +121,6 @@ def SDT_X86EHRET : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
 
 def SDT_X86TCRET : SDTypeProfile<0, 2, [SDTCisPtrTy<0>, SDTCisVT<1, i32>]>;
 
-def SDT_X86MEMBARRIER : SDTypeProfile<0, 0, []>;
-
 def SDT_X86ENQCMD : SDTypeProfile<1, 2, [SDTCisVT<0, i32>,
                                          SDTCisPtrTy<1>, SDTCisSameAs<1, 2>]>;
 
@@ -131,10 +129,11 @@ def SDT_X86AESENCDECKL : SDTypeProfile<2, 2, [SDTCisVT<0, v2i64>,
                                               SDTCisVT<2, v2i64>,
                                               SDTCisPtrTy<3>]>;
 
-def X86MemBarrier : SDNode<"X86ISD::MEMBARRIER", SDT_X86MEMBARRIER,
-                            [SDNPHasChain,SDNPSideEffect]>;
-def X86MFence : SDNode<"X86ISD::MFENCE", SDT_X86MEMBARRIER,
-                        [SDNPHasChain]>;
+def SDTX86Cmpccxadd : SDTypeProfile<1, 4, [SDTCisSameAs<0, 2>,
+                                           SDTCisPtrTy<1>, SDTCisSameAs<2, 3>,
+                                           SDTCisVT<4, i8>]>;
+
+def X86MFence : SDNode<"X86ISD::MFENCE", SDTNone, [SDNPHasChain]>;
 
 
 def X86bsf     : SDNode<"X86ISD::BSF",      SDTUnaryArithWithFlags>;
@@ -340,6 +339,10 @@ def X86aesenc256kl : SDNode<"X86ISD::AESENC256KL", SDT_X86AESENCDECKL,
 def X86aesdec256kl : SDNode<"X86ISD::AESDEC256KL", SDT_X86AESENCDECKL,
                             [SDNPHasChain, SDNPMayLoad, SDNPSideEffect,
                              SDNPMemOperand]>;
+
+def X86cmpccxadd : SDNode<"X86ISD::CMPCCXADD", SDTX86Cmpccxadd,
+                          [SDNPHasChain, SDNPMayLoad, SDNPMayStore,
+                           SDNPMemOperand]>;
 
 //===----------------------------------------------------------------------===//
 // X86 Operand Definitions.
@@ -871,6 +874,7 @@ def TruePredicate : Predicate<"true">;
 def HasCMOV      : Predicate<"Subtarget->canUseCMOV()">;
 def NoCMOV       : Predicate<"!Subtarget->canUseCMOV()">;
 
+def HasNOPL      : Predicate<"Subtarget->hasNOPL()">;
 def HasMMX       : Predicate<"Subtarget->hasMMX()">;
 def Has3DNow     : Predicate<"Subtarget->hasThreeDNow()">;
 def Has3DNowA    : Predicate<"Subtarget->hasThreeDNowA()">;
@@ -908,11 +912,12 @@ def HasVLX       : Predicate<"Subtarget->hasVLX()">;
 def NoVLX        : Predicate<"!Subtarget->hasVLX()">;
 def NoVLX_Or_NoBWI : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasBWI()">;
 def NoVLX_Or_NoDQI : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasDQI()">;
-def PKU        : Predicate<"Subtarget->hasPKU()">;
-def HasVNNI    : Predicate<"Subtarget->hasVNNI()">;
+def HasPKU       : Predicate<"Subtarget->hasPKU()">;
+def HasVNNI      : Predicate<"Subtarget->hasVNNI()">;
 def HasVP2INTERSECT : Predicate<"Subtarget->hasVP2INTERSECT()">;
 def HasBF16      : Predicate<"Subtarget->hasBF16()">;
 def HasFP16      : Predicate<"Subtarget->hasFP16()">;
+def HasAVXVNNIINT8 : Predicate<"Subtarget->hasAVXVNNIINT8()">;
 def HasAVXVNNI : Predicate <"Subtarget->hasAVXVNNI()">;
 def NoVLX_Or_NoVNNI : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasVNNI()">;
 
@@ -922,6 +927,7 @@ def HasAES       : Predicate<"Subtarget->hasAES()">;
 def HasVAES      : Predicate<"Subtarget->hasVAES()">;
 def NoVLX_Or_NoVAES : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasVAES()">;
 def HasFXSR      : Predicate<"Subtarget->hasFXSR()">;
+def HasX87       : Predicate<"Subtarget->hasX87()">;
 def HasXSAVE     : Predicate<"Subtarget->hasXSAVE()">;
 def HasXSAVEOPT  : Predicate<"Subtarget->hasXSAVEOPT()">;
 def HasXSAVEC    : Predicate<"Subtarget->hasXSAVEC()">;
@@ -949,6 +955,8 @@ def NoBMI2       : Predicate<"!Subtarget->hasBMI2()">;
 def HasVBMI      : Predicate<"Subtarget->hasVBMI()">;
 def HasVBMI2     : Predicate<"Subtarget->hasVBMI2()">;
 def HasIFMA      : Predicate<"Subtarget->hasIFMA()">;
+def HasAVXIFMA   : Predicate<"Subtarget->hasAVXIFMA()">;
+def NoVLX_Or_NoIFMA : Predicate<"!Subtarget->hasVLX() || !Subtarget->hasIFMA()">;
 def HasRTM       : Predicate<"Subtarget->hasRTM()">;
 def HasADX       : Predicate<"Subtarget->hasADX()">;
 def HasSHA       : Predicate<"Subtarget->hasSHA()">;
@@ -956,9 +964,12 @@ def HasSGX       : Predicate<"Subtarget->hasSGX()">;
 def HasRDSEED    : Predicate<"Subtarget->hasRDSEED()">;
 def HasSSEPrefetch : Predicate<"Subtarget->hasSSEPrefetch()">;
 def NoSSEPrefetch : Predicate<"!Subtarget->hasSSEPrefetch()">;
+def HasPRFCHW    : Predicate<"Subtarget->hasPRFCHW()">;
+def HasPREFETCHI : Predicate<"Subtarget->hasPREFETCHI()">;
 def HasPrefetchW : Predicate<"Subtarget->hasPrefetchW()">;
 def HasPREFETCHWT1 : Predicate<"Subtarget->hasPREFETCHWT1()">;
 def HasLAHFSAHF  : Predicate<"Subtarget->hasLAHFSAHF()">;
+def HasLAHFSAHF64 : Predicate<"Subtarget->hasLAHFSAHF64()">;
 def HasMWAITX    : Predicate<"Subtarget->hasMWAITX()">;
 def HasCLZERO    : Predicate<"Subtarget->hasCLZERO()">;
 def HasCLDEMOTE  : Predicate<"Subtarget->hasCLDEMOTE()">;
@@ -968,6 +979,7 @@ def HasPTWRITE   : Predicate<"Subtarget->hasPTWRITE()">;
 def FPStackf32   : Predicate<"!Subtarget->hasSSE1()">;
 def FPStackf64   : Predicate<"!Subtarget->hasSSE2()">;
 def HasSHSTK     : Predicate<"Subtarget->hasSHSTK()">;
+def HasCLFLUSH   : Predicate<"Subtarget->hasCLFLUSH()">;
 def HasCLFLUSHOPT : Predicate<"Subtarget->hasCLFLUSHOPT()">;
 def HasCLWB      : Predicate<"Subtarget->hasCLWB()">;
 def HasWBNOINVD  : Predicate<"Subtarget->hasWBNOINVD()">;
@@ -979,7 +991,11 @@ def HasCX8       : Predicate<"Subtarget->hasCX8()">;
 def HasCX16      : Predicate<"Subtarget->hasCX16()">;
 def HasPCONFIG   : Predicate<"Subtarget->hasPCONFIG()">;
 def HasENQCMD    : Predicate<"Subtarget->hasENQCMD()">;
+def HasAMXFP16   : Predicate<"Subtarget->hasAMXFP16()">;
+def HasCMPCCXADD : Predicate<"Subtarget->hasCMPCCXADD()">;
+def HasAVXNECONVERT : Predicate<"Subtarget->hasAVXNECONVERT()">;
 def HasKL        : Predicate<"Subtarget->hasKL()">;
+def HasRAOINT    : Predicate<"Subtarget->hasRAOINT()">;
 def HasWIDEKL    : Predicate<"Subtarget->hasWIDEKL()">;
 def HasHRESET    : Predicate<"Subtarget->hasHRESET()">;
 def HasSERIALIZE : Predicate<"Subtarget->hasSERIALIZE()">;
@@ -989,6 +1005,8 @@ def HasAMXBF16   : Predicate<"Subtarget->hasAMXBF16()">;
 def HasAMXINT8   : Predicate<"Subtarget->hasAMXINT8()">;
 def HasUINTR     : Predicate<"Subtarget->hasUINTR()">;
 def HasCRC32     : Predicate<"Subtarget->hasCRC32()">;
+
+def HasX86_64    : Predicate<"Subtarget->hasX86_64()">;
 def Not64BitMode : Predicate<"!Subtarget->is64Bit()">,
                              AssemblerPredicate<(all_of (not Is64Bit)), "Not 64-bit mode">;
 def In64BitMode  : Predicate<"Subtarget->is64Bit()">,
@@ -1174,7 +1192,7 @@ def loadi16 : PatFrag<(ops node:$ptr), (i16 (unindexedload node:$ptr)), [{
   if (ExtType == ISD::NON_EXTLOAD)
     return true;
   if (ExtType == ISD::EXTLOAD && EnablePromoteAnyextLoad)
-    return LD->getAlignment() >= 2 && LD->isSimple();
+    return LD->getAlign() >= 2 && LD->isSimple();
   return false;
 }]>;
 
@@ -1184,7 +1202,7 @@ def loadi32 : PatFrag<(ops node:$ptr), (i32 (unindexedload node:$ptr)), [{
   if (ExtType == ISD::NON_EXTLOAD)
     return true;
   if (ExtType == ISD::EXTLOAD && EnablePromoteAnyextLoad)
-    return LD->getAlignment() >= 4 && LD->isSimple();
+    return LD->getAlign() >= 4 && LD->isSimple();
   return false;
 }]>;
 
@@ -1196,12 +1214,12 @@ def loadf80  : PatFrag<(ops node:$ptr), (f80 (load node:$ptr))>;
 def loadf128 : PatFrag<(ops node:$ptr), (f128 (load node:$ptr))>;
 def alignedloadf128 : PatFrag<(ops node:$ptr), (f128 (load node:$ptr)), [{
   LoadSDNode *Ld = cast<LoadSDNode>(N);
-  return Ld->getAlignment() >= Ld->getMemoryVT().getStoreSize();
+  return Ld->getAlign() >= Ld->getMemoryVT().getStoreSize();
 }]>;
 def memopf128 : PatFrag<(ops node:$ptr), (f128 (load node:$ptr)), [{
   LoadSDNode *Ld = cast<LoadSDNode>(N);
   return Subtarget->hasSSEUnalignedMem() ||
-         Ld->getAlignment() >= Ld->getMemoryVT().getStoreSize();
+         Ld->getAlign() >= Ld->getMemoryVT().getStoreSize();
 }]>;
 
 def sextloadi16i8  : PatFrag<(ops node:$ptr), (i16 (sextloadi8 node:$ptr))>;
@@ -1242,22 +1260,30 @@ def extloadi64i32  : PatFrag<(ops node:$ptr), (i64 (unindexedload node:$ptr)), [
   if (LD->getMemoryVT() == MVT::i32)
     return true;
 
-  return LD->getAlignment() >= 4 && LD->isSimple();
+  return LD->getAlign() >= 4 && LD->isSimple();
+}]>;
+
+// binary op with only one user
+class binop_oneuse<SDPatternOperator operator>
+    : PatFrag<(ops node:$A, node:$B),
+              (operator node:$A, node:$B), [{
+  return N->hasOneUse();
+}]>;
+
+def add_su : binop_oneuse<add>;
+def and_su : binop_oneuse<and>;
+def srl_su : binop_oneuse<srl>;
+
+// unary op with only one user
+class unop_oneuse<SDPatternOperator operator>
+    : PatFrag<(ops node:$A),
+              (operator node:$A), [{
+  return N->hasOneUse();
 }]>;
 
 
-// An 'and' node with a single use.
-def and_su : PatFrag<(ops node:$lhs, node:$rhs), (and node:$lhs, node:$rhs), [{
-  return N->hasOneUse();
-}]>;
-// An 'srl' node with a single use.
-def srl_su : PatFrag<(ops node:$lhs, node:$rhs), (srl node:$lhs, node:$rhs), [{
-  return N->hasOneUse();
-}]>;
-// An 'trunc' node with a single use.
-def trunc_su : PatFrag<(ops node:$src), (trunc node:$src), [{
-  return N->hasOneUse();
-}]>;
+def ineg_su : unop_oneuse<ineg>;
+def trunc_su : unop_oneuse<trunc>;
 
 //===----------------------------------------------------------------------===//
 // Instruction list.
@@ -1363,7 +1389,7 @@ def PUSH32rmm: I<0xFF, MRM6m, (outs), (ins i32mem:$src), "push{l}\t$src", []>,
 
 }
 
-let mayLoad = 1, mayStore = 1, usesCustomInserter = 1,
+let isPseudo = 1, mayLoad = 1, mayStore = 1,
     SchedRW = [WriteRMW], Defs = [ESP] in {
   let Uses = [ESP] in
   def RDFLAGS32 : PseudoI<(outs GR32:$dst), (ins),
@@ -1376,7 +1402,7 @@ let mayLoad = 1, mayStore = 1, usesCustomInserter = 1,
                 Requires<[In64BitMode]>;
 }
 
-let mayLoad = 1, mayStore = 1, usesCustomInserter = 1,
+let isPseudo = 1, mayLoad = 1, mayStore = 1,
     SchedRW = [WriteRMW] in {
   let Defs = [ESP, EFLAGS, DF], Uses = [ESP] in
   def WRFLAGS32 : PseudoI<(outs), (ins GR32:$src),
@@ -2528,37 +2554,41 @@ def and_flag_nocf : PatFrag<(ops node:$lhs, node:$rhs),
   return hasNoCarryFlagUses(SDValue(N, 1));
 }]>;
 
+
 let Predicates = [HasBMI] in {
-  // FIXME: patterns for the load versions are not implemented
-  def : Pat<(and GR32:$src, (add GR32:$src, -1)),
+  // FIXME(1): patterns for the load versions are not implemented
+  // FIXME(2): By only matching `add_su` and `ineg_su` we may emit
+  // extra `mov` instructions if `src` has future uses. It may be better
+  // to always match if `src` has more users.
+  def : Pat<(and GR32:$src, (add_su GR32:$src, -1)),
             (BLSR32rr GR32:$src)>;
-  def : Pat<(and GR64:$src, (add GR64:$src, -1)),
+  def : Pat<(and GR64:$src, (add_su GR64:$src, -1)),
             (BLSR64rr GR64:$src)>;
 
-  def : Pat<(xor GR32:$src, (add GR32:$src, -1)),
+  def : Pat<(xor GR32:$src, (add_su GR32:$src, -1)),
             (BLSMSK32rr GR32:$src)>;
-  def : Pat<(xor GR64:$src, (add GR64:$src, -1)),
+  def : Pat<(xor GR64:$src, (add_su GR64:$src, -1)),
             (BLSMSK64rr GR64:$src)>;
 
-  def : Pat<(and GR32:$src, (ineg GR32:$src)),
+  def : Pat<(and GR32:$src, (ineg_su GR32:$src)),
             (BLSI32rr GR32:$src)>;
-  def : Pat<(and GR64:$src, (ineg GR64:$src)),
+  def : Pat<(and GR64:$src, (ineg_su GR64:$src)),
             (BLSI64rr GR64:$src)>;
 
   // Versions to match flag producing ops.
-  def : Pat<(and_flag_nocf GR32:$src, (add GR32:$src, -1)),
+  def : Pat<(and_flag_nocf GR32:$src, (add_su GR32:$src, -1)),
             (BLSR32rr GR32:$src)>;
-  def : Pat<(and_flag_nocf GR64:$src, (add GR64:$src, -1)),
+  def : Pat<(and_flag_nocf GR64:$src, (add_su GR64:$src, -1)),
             (BLSR64rr GR64:$src)>;
 
-  def : Pat<(xor_flag_nocf GR32:$src, (add GR32:$src, -1)),
+  def : Pat<(xor_flag_nocf GR32:$src, (add_su GR32:$src, -1)),
             (BLSMSK32rr GR32:$src)>;
-  def : Pat<(xor_flag_nocf GR64:$src, (add GR64:$src, -1)),
+  def : Pat<(xor_flag_nocf GR64:$src, (add_su GR64:$src, -1)),
             (BLSMSK64rr GR64:$src)>;
 
-  def : Pat<(and_flag_nocf GR32:$src, (ineg GR32:$src)),
+  def : Pat<(and_flag_nocf GR32:$src, (ineg_su GR32:$src)),
             (BLSI32rr GR32:$src)>;
-  def : Pat<(and_flag_nocf GR64:$src, (ineg GR64:$src)),
+  def : Pat<(and_flag_nocf GR64:$src, (ineg_su GR64:$src)),
             (BLSI64rr GR64:$src)>;
 }
 
@@ -2616,11 +2646,11 @@ let Predicates = [HasBMI2], Defs = [EFLAGS] in {
 
 def CountTrailingOnes : SDNodeXForm<imm, [{
   // Count the trailing ones in the immediate.
-  return getI8Imm(countTrailingOnes(N->getZExtValue()), SDLoc(N));
+  return getI8Imm(llvm::countr_one(N->getZExtValue()), SDLoc(N));
 }]>;
 
 def BEXTRMaskXForm : SDNodeXForm<imm, [{
-  unsigned Length = countTrailingOnes(N->getZExtValue());
+  unsigned Length = llvm::countr_one(N->getZExtValue());
   return getI32Imm(Length << 8, SDLoc(N));
 }]>;
 
@@ -2999,6 +3029,67 @@ let Predicates = [HasUINTR, In64BitMode], SchedRW = [WriteSystem] in {
 }
 
 //===----------------------------------------------------------------------===//
+// PREFETCHIT0 and PREFETCHIT1 Instructions
+// prefetch ADDR, RW, Locality, Data
+let Predicates = [HasPREFETCHI, In64BitMode], SchedRW = [WriteLoad] in {
+  def PREFETCHIT0 : I<0x18, MRM7m, (outs), (ins i8mem:$src),
+    "prefetchit0\t$src", [(prefetch addr:$src, (i32 0), (i32 3), (i32 0))]>, TB;
+  def PREFETCHIT1 : I<0x18, MRM6m, (outs), (ins i8mem:$src),
+    "prefetchit1\t$src", [(prefetch addr:$src, (i32 0), (i32 2), (i32 0))]>, TB;
+}
+
+//===----------------------------------------------------------------------===//
+// CMPCCXADD Instructions
+//
+let isCodeGenOnly = 1, ForceDisassemble = 1, mayLoad = 1, mayStore = 1,
+    Predicates = [HasCMPCCXADD, In64BitMode], Defs = [EFLAGS],
+    Constraints = "$dstsrc1 = $dst" in {
+def CMPCCXADDmr32 : I<0xe0, MRMDestMem4VOp3CC, (outs GR32:$dst),
+          (ins GR32:$dstsrc1, i32mem:$dstsrc2, GR32:$src3, ccode:$cond),
+          "cmp${cond}xadd\t{$src3, $dst, $dstsrc2|$dstsrc2, $dst, $src3}",
+          [(set GR32:$dst, (X86cmpccxadd addr:$dstsrc2,
+            GR32:$dstsrc1, GR32:$src3, timm:$cond))]>,
+          VEX_4V, T8PD, Sched<[WriteXCHG]>;
+
+def CMPCCXADDmr64 : I<0xe0, MRMDestMem4VOp3CC, (outs GR64:$dst),
+          (ins GR64:$dstsrc1, i64mem:$dstsrc2, GR64:$src3, ccode:$cond),
+          "cmp${cond}xadd\t{$src3, $dst, $dstsrc2|$dstsrc2, $dst, $src3}",
+          [(set GR64:$dst, (X86cmpccxadd addr:$dstsrc2,
+            GR64:$dstsrc1, GR64:$src3, timm:$cond))]>,
+          VEX_4V, VEX_W, T8PD, Sched<[WriteXCHG]>;
+}
+
+multiclass CMPCCXADD_Aliases<string Cond, int CC> {
+  def : InstAlias<"cmp"#Cond#"xadd"#"\t{$src3, $dst, $dstsrc2|$dstsrc2, $dst, $src3}",
+                  (CMPCCXADDmr32 GR32:$dst, i32mem:$dstsrc2, GR32:$src3, CC), 0>;
+  def : InstAlias<"cmp"#Cond#"xadd"#"\t{$src3, $dst, $dstsrc2|$dstsrc2, $dst, $src3}",
+                  (CMPCCXADDmr64 GR64:$dst, i64mem:$dstsrc2, GR64:$src3, CC), 0>;
+}
+
+defm : CMPCCXADD_Aliases<"o" ,  0>;
+defm : CMPCCXADD_Aliases<"no",  1>;
+defm : CMPCCXADD_Aliases<"b" ,  2>;
+defm : CMPCCXADD_Aliases<"ae",  3>;
+defm : CMPCCXADD_Aliases<"nb",  3>;
+defm : CMPCCXADD_Aliases<"e" ,  4>;
+defm : CMPCCXADD_Aliases<"z" ,  4>;
+defm : CMPCCXADD_Aliases<"ne",  5>;
+defm : CMPCCXADD_Aliases<"nz",  5>;
+defm : CMPCCXADD_Aliases<"be",  6>;
+defm : CMPCCXADD_Aliases<"nbe", 7>;
+defm : CMPCCXADD_Aliases<"a",   7>;
+defm : CMPCCXADD_Aliases<"s" ,  8>;
+defm : CMPCCXADD_Aliases<"ns",  9>;
+defm : CMPCCXADD_Aliases<"p" , 10>;
+defm : CMPCCXADD_Aliases<"np", 11>;
+defm : CMPCCXADD_Aliases<"l" , 12>;
+defm : CMPCCXADD_Aliases<"ge", 13>;
+defm : CMPCCXADD_Aliases<"nl", 13>;
+defm : CMPCCXADD_Aliases<"le", 14>;
+defm : CMPCCXADD_Aliases<"g",  15>;
+defm : CMPCCXADD_Aliases<"nle",15>;
+
+//===----------------------------------------------------------------------===//
 // Pattern fragments to auto generate TBM instructions.
 //===----------------------------------------------------------------------===//
 
@@ -3166,6 +3257,9 @@ include "X86InstrKL.td"
 
 // AMX instructions
 include "X86InstrAMX.td"
+
+// RAO-INT instructions
+include "X86InstrRAOINT.td"
 
 // System instructions.
 include "X86InstrSystem.td"

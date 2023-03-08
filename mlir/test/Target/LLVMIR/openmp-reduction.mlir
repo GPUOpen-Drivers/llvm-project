@@ -17,7 +17,7 @@ combiner {
 atomic {
 ^bb2(%arg2: !llvm.ptr<f32>, %arg3: !llvm.ptr<f32>):
   %2 = llvm.load %arg3 : !llvm.ptr<f32>
-  llvm.atomicrmw fadd %arg2, %2 monotonic : f32
+  llvm.atomicrmw fadd %arg2, %2 monotonic : !llvm.ptr<f32>, f32
   omp.yield
 }
 
@@ -26,7 +26,7 @@ llvm.func @simple_reduction(%lb : i64, %ub : i64, %step : i64) {
   %c1 = llvm.mlir.constant(1 : i32) : i32
   %0 = llvm.alloca %c1 x i32 : (i32) -> !llvm.ptr<f32>
   omp.parallel {
-    omp.wsloop reduction(@add_f32 -> %0 : !llvm.ptr<f32>) 
+    omp.wsloop reduction(@add_f32 -> %0 : !llvm.ptr<f32>)
     for (%iv) : i64 = (%lb) to (%ub) step (%step) {
       %1 = llvm.mlir.constant(2.0 : f32) : f32
       omp.reduction %1, %0 : !llvm.ptr<f32>
@@ -90,7 +90,7 @@ combiner {
 atomic {
 ^bb2(%arg2: !llvm.ptr<f32>, %arg3: !llvm.ptr<f32>):
   %2 = llvm.load %arg3 : !llvm.ptr<f32>
-  llvm.atomicrmw fadd %arg2, %2 monotonic : f32
+  llvm.atomicrmw fadd %arg2, %2 monotonic : !llvm.ptr<f32>, f32
   omp.yield
 }
 
@@ -178,7 +178,7 @@ combiner {
 atomic {
 ^bb2(%arg2: !llvm.ptr<f32>, %arg3: !llvm.ptr<f32>):
   %2 = llvm.load %arg3 : !llvm.ptr<f32>
-  llvm.atomicrmw fadd %arg2, %2 monotonic : f32
+  llvm.atomicrmw fadd %arg2, %2 monotonic : !llvm.ptr<f32>, f32
   omp.yield
 }
 
@@ -261,7 +261,7 @@ combiner {
 atomic {
 ^bb2(%arg2: !llvm.ptr<f32>, %arg3: !llvm.ptr<f32>):
   %2 = llvm.load %arg3 : !llvm.ptr<f32>
-  llvm.atomicrmw fadd %arg2, %2 monotonic : f32
+  llvm.atomicrmw fadd %arg2, %2 monotonic : !llvm.ptr<f32>, f32
   omp.yield
 }
 
@@ -340,7 +340,7 @@ combiner {
 atomic {
 ^bb2(%arg2: !llvm.ptr<f32>, %arg3: !llvm.ptr<f32>):
   %2 = llvm.load %arg3 : !llvm.ptr<f32>
-  llvm.atomicrmw fadd %arg2, %2 monotonic : f32
+  llvm.atomicrmw fadd %arg2, %2 monotonic : !llvm.ptr<f32>, f32
   omp.yield
 }
 

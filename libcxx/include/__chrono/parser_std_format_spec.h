@@ -29,6 +29,8 @@ _LIBCPP_BEGIN_NAMESPACE_STD
 namespace __format_spec {
 
 // By not placing this constant in the formatter class it's not duplicated for char and wchar_t
+inline constexpr __fields __fields_chrono_fractional{
+    .__precision_ = true, .__locale_specific_form_ = true, .__type_ = false};
 inline constexpr __fields __fields_chrono{.__locale_specific_form_ = true, .__type_ = false};
 
 /// Flags available or required in a chrono type.
@@ -135,17 +137,19 @@ _LIBCPP_HIDE_FROM_ABI constexpr void __validate_time_zone(__flags __flags) {
 
 template <class _CharT>
 class _LIBCPP_TEMPLATE_VIS __parser_chrono {
+  using _ConstIterator = typename basic_format_parse_context<_CharT>::const_iterator;
+
 public:
   _LIBCPP_HIDE_FROM_ABI constexpr auto
   __parse(basic_format_parse_context<_CharT>& __parse_ctx, __fields __fields, __flags __flags)
       -> decltype(__parse_ctx.begin()) {
-    const _CharT* __begin = __parser_.__parse(__parse_ctx, __fields);
-    const _CharT* __end   = __parse_ctx.end();
+    _ConstIterator __begin = __parser_.__parse(__parse_ctx, __fields);
+    _ConstIterator __end   = __parse_ctx.end();
     if (__begin == __end)
       return __begin;
 
-    const _CharT* __last = __parse_chrono_specs(__begin, __end, __flags);
-    __chrono_specs_      = basic_string_view<_CharT>{__begin, __last};
+    _ConstIterator __last = __parse_chrono_specs(__begin, __end, __flags);
+    __chrono_specs_       = basic_string_view<_CharT>{__begin, __last};
 
     return __last;
   }
@@ -154,8 +158,8 @@ public:
   basic_string_view<_CharT> __chrono_specs_;
 
 private:
-  _LIBCPP_HIDE_FROM_ABI constexpr const _CharT*
-  __parse_chrono_specs(const _CharT* __begin, const _CharT* __end, __flags __flags) {
+  _LIBCPP_HIDE_FROM_ABI constexpr _ConstIterator
+  __parse_chrono_specs(_ConstIterator __begin, _ConstIterator __end, __flags __flags) {
     _LIBCPP_ASSERT(__begin != __end,
                    "When called with an empty input the function will cause "
                    "undefined behavior by evaluating data not in the input");
@@ -188,7 +192,7 @@ private:
   /// \pre *__begin == '%'
   /// \post __begin points at the end parsed conversion-spec
   _LIBCPP_HIDE_FROM_ABI constexpr void
-  __parse_conversion_spec(const _CharT*& __begin, const _CharT* __end, __flags __flags) {
+  __parse_conversion_spec(_ConstIterator& __begin, _ConstIterator __end, __flags __flags) {
     ++__begin;
     if (__begin == __end)
       std::__throw_format_error("End of input while parsing the modifier chrono conversion-spec");
@@ -241,17 +245,20 @@ private:
       break;
 
     case _CharT('j'):
+      __parser_.__day_of_year_ = true;
       __format_spec::__validate_date_or_duration(__flags);
       break;
 
     case _CharT('g'):
-    case _CharT('x'):
-    case _CharT('D'):
-    case _CharT('F'):
     case _CharT('G'):
     case _CharT('U'):
     case _CharT('V'):
     case _CharT('W'):
+      __parser_.__week_of_year_ = true;
+      [[fallthrough]];
+    case _CharT('x'):
+    case _CharT('D'):
+    case _CharT('F'):
       __format_spec::__validate_date(__flags);
       break;
 
@@ -265,6 +272,8 @@ private:
       [[fallthrough]];
     case _CharT('u'):
     case _CharT('w'):
+      __parser_.__weekday_ = true;
+      __validate_weekday(__flags);
       __format_spec::__validate_weekday(__flags);
       break;
 
@@ -297,7 +306,7 @@ private:
   /// \pre *__begin == 'E'
   /// \post __begin is incremented by one.
   _LIBCPP_HIDE_FROM_ABI constexpr void
-  __parse_modifier_E(const _CharT*& __begin, const _CharT* __end, __flags __flags) {
+  __parse_modifier_E(_ConstIterator& __begin, _ConstIterator __end, __flags __flags) {
     ++__begin;
     if (__begin == __end)
       std::__throw_format_error("End of input while parsing the modifier E");
@@ -336,7 +345,7 @@ private:
   /// \pre *__begin == 'O'
   /// \post __begin is incremented by one.
   _LIBCPP_HIDE_FROM_ABI constexpr void
-  __parse_modifier_O(const _CharT*& __begin, const _CharT* __end, __flags __flags) {
+  __parse_modifier_O(_ConstIterator& __begin, _ConstIterator __end, __flags __flags) {
     ++__begin;
     if (__begin == __end)
       std::__throw_format_error("End of input while parsing the modifier O");
@@ -371,11 +380,13 @@ private:
     case _CharT('U'):
     case _CharT('V'):
     case _CharT('W'):
+      __parser_.__week_of_year_ = true;
       __format_spec::__validate_date(__flags);
       break;
 
     case _CharT('u'):
     case _CharT('w'):
+      __parser_.__weekday_ = true;
       __format_spec::__validate_weekday(__flags);
       break;
 

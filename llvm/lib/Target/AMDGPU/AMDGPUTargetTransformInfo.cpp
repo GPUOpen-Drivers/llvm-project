@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -25,6 +23,7 @@
 #include "llvm/IR/IntrinsicsAMDGPU.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/KnownBits.h"
+#include <optional>
 
 using namespace llvm;
 
@@ -107,7 +106,8 @@ void AMDGPUTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
                                             TTI::UnrollingPreferences &UP,
                                             OptimizationRemarkEmitter *ORE) {
   const Function &F = *L->getHeader()->getParent();
-  UP.Threshold = AMDGPU::getIntegerAttribute(F, "amdgpu-unroll-threshold", 300);
+  UP.Threshold =
+      F.getFnAttributeAsParsedInteger("amdgpu-unroll-threshold", 300);
   UP.MaxCount = std::numeric_limits<unsigned>::max();
   UP.Partial = true;
 
@@ -403,7 +403,7 @@ bool GCNTTIImpl::isLegalToVectorizeStoreChain(unsigned ChainSizeInBytes,
 Type *GCNTTIImpl::getMemcpyLoopLoweringType(
     LLVMContext &Context, Value *Length, unsigned SrcAddrSpace,
     unsigned DestAddrSpace, unsigned SrcAlign, unsigned DestAlign,
-    Optional<uint32_t> AtomicElementSize) const {
+    std::optional<uint32_t> AtomicElementSize) const {
 
   if (AtomicElementSize)
     return Type::getIntNTy(Context, *AtomicElementSize * 8);
@@ -435,7 +435,7 @@ void GCNTTIImpl::getMemcpyLoopResidualLoweringType(
     SmallVectorImpl<Type *> &OpsOut, LLVMContext &Context,
     unsigned RemainingBytes, unsigned SrcAddrSpace, unsigned DestAddrSpace,
     unsigned SrcAlign, unsigned DestAlign,
-    Optional<uint32_t> AtomicCpySize) const {
+    std::optional<uint32_t> AtomicCpySize) const {
   assert(RemainingBytes < 16);
 
   if (AtomicCpySize)
@@ -758,7 +758,7 @@ InstructionCost GCNTTIImpl::getCFInstrCost(unsigned Opcode,
 
 InstructionCost
 GCNTTIImpl::getArithmeticReductionCost(unsigned Opcode, VectorType *Ty,
-                                       Optional<FastMathFlags> FMF,
+                                       std::optional<FastMathFlags> FMF,
                                        TTI::TargetCostKind CostKind) {
   if (TTI::requiresOrderedReduction(FMF))
     return BaseT::getArithmeticReductionCost(Opcode, Ty, FMF, CostKind);
@@ -790,7 +790,9 @@ GCNTTIImpl::getMinMaxReductionCost(VectorType *Ty, VectorType *CondTy,
 }
 
 InstructionCost GCNTTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
-                                               unsigned Index) {
+                                               TTI::TargetCostKind CostKind,
+                                               unsigned Index, Value *Op0,
+                                               Value *Op1) {
   switch (Opcode) {
   case Instruction::ExtractElement:
   case Instruction::InsertElement: {
@@ -799,7 +801,8 @@ InstructionCost GCNTTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
     if (EltSize < 32) {
       if (EltSize == 16 && Index == 0 && ST->has16BitInsts())
         return 0;
-      return BaseT::getVectorInstrCost(Opcode, ValTy, Index);
+      return BaseT::getVectorInstrCost(Opcode, ValTy, CostKind, Index, Op0,
+                                       Op1);
     }
 
     // Extracts are just reads of a subregister, so are free. Inserts are
@@ -810,7 +813,7 @@ InstructionCost GCNTTIImpl::getVectorInstrCost(unsigned Opcode, Type *ValTy,
     return Index == ~0u ? 2 : 0;
   }
   default:
-    return BaseT::getVectorInstrCost(Opcode, ValTy, Index);
+    return BaseT::getVectorInstrCost(Opcode, ValTy, CostKind, Index, Op0, Op1);
   }
 }
 
@@ -859,6 +862,27 @@ bool GCNTTIImpl::useGPUDivergenceAnalysis() const {
   return !UseLegacyDA;
 }
 
+bool GCNTTIImpl::isReadRegisterSourceOfDivergence(
+    const IntrinsicInst *ReadReg) const {
+  Metadata *MD =
+      cast<MetadataAsValue>(ReadReg->getArgOperand(0))->getMetadata();
+  StringRef RegName =
+      cast<MDString>(cast<MDNode>(MD)->getOperand(0))->getString();
+
+  // Special case registers that look like VCC.
+  MVT VT = MVT::getVT(ReadReg->getType());
+  if (VT == MVT::i1)
+    return true;
+
+  // Special case scalar registers that start with 'v'.
+  if (RegName.startswith("vcc") || RegName.empty())
+    return false;
+
+  // VGPR or AGPR is divergent. There aren't any specially named vector
+  // registers.
+  return RegName[0] == 'v' || RegName[0] == 'a';
+}
+
 /// \returns true if the result of the value could potentially be
 /// different across workitems in a wavefront.
 bool GCNTTIImpl::isSourceOfDivergence(const Value *V) const {
@@ -882,8 +906,12 @@ bool GCNTTIImpl::isSourceOfDivergence(const Value *V) const {
   if (isa<AtomicRMWInst>(V) || isa<AtomicCmpXchgInst>(V))
     return true;
 
-  if (const IntrinsicInst *Intrinsic = dyn_cast<IntrinsicInst>(V))
+  if (const IntrinsicInst *Intrinsic = dyn_cast<IntrinsicInst>(V)) {
+    if (Intrinsic->getIntrinsicID() == Intrinsic::read_register)
+      return isReadRegisterSourceOfDivergence(Intrinsic);
+
     return AMDGPU::isIntrinsicSourceOfDivergence(Intrinsic->getIntrinsicID());
+  }
 
   // Assume all function calls are a source of divergence.
   if (const CallInst *CI = dyn_cast<CallInst>(V)) {
@@ -900,22 +928,8 @@ bool GCNTTIImpl::isSourceOfDivergence(const Value *V) const {
 }
 
 bool GCNTTIImpl::isAlwaysUniform(const Value *V) const {
-  if (const IntrinsicInst *Intrinsic = dyn_cast<IntrinsicInst>(V)) {
-    switch (Intrinsic->getIntrinsicID()) {
-    default:
-      return false;
-    case Intrinsic::amdgcn_readfirstlane:
-    case Intrinsic::amdgcn_readlane:
-    case Intrinsic::amdgcn_icmp:
-    case Intrinsic::amdgcn_fcmp:
-    case Intrinsic::amdgcn_waterfall_readfirstlane:
-    case Intrinsic::amdgcn_waterfall_begin:
-    case Intrinsic::amdgcn_waterfall_last_use:
-    case Intrinsic::amdgcn_ballot:
-    case Intrinsic::amdgcn_if_break:
-      return true;
-    }
-  }
+  if (const IntrinsicInst *Intrinsic = dyn_cast<IntrinsicInst>(V))
+    return AMDGPU::isIntrinsicAlwaysUniform(Intrinsic->getIntrinsicID());
 
   if (const CallInst *CI = dyn_cast<CallInst>(V)) {
     if (CI->isInlineAsm())

@@ -31,6 +31,11 @@ class Pass;
 class TargetMachine;
 class raw_ostream;
 
+template <typename T> class IntrusiveRefCntPtr;
+namespace vfs {
+class FileSystem;
+} // namespace vfs
+
 } // End llvm namespace
 
 // List of target independent CodeGen pass IDs.
@@ -63,6 +68,10 @@ namespace llvm {
   createMachineFunctionPrinterPass(raw_ostream &OS,
                                    const std::string &Banner ="");
 
+  /// StackFramePrinter pass - This pass prints out the machine function's
+  /// stack frame to the given stream as a debugging tool.
+  MachineFunctionPass *createStackFrameLayoutAnalysisPass();
+
   /// MIRPrinting pass - this pass prints out the LLVM IR into the given stream
   /// using the MIR serialization format.
   MachineFunctionPass *createPrintMIRPass(raw_ostream &OS);
@@ -78,6 +87,10 @@ namespace llvm {
   /// createCodeGenPreparePass - Transform the code to expose more pattern
   /// matching during instruction selection.
   FunctionPass *createCodeGenPreparePass();
+
+  /// This pass implements generation of target-specific intrinsics to support
+  /// handling of complex number arithmetic
+  FunctionPass *createComplexDeinterleavingPass(const TargetMachine *TM);
 
   /// AtomicExpandID -- Lowers atomic operations in terms of either cmpxchg
   /// load-linked/store-conditional loops.
@@ -260,6 +273,10 @@ namespace llvm {
   /// It merges disjoint allocas to reduce the stack size.
   extern char &StackColoringID;
 
+  /// StackFramePrinter - This pass prints the stack frame layout and variable
+  /// mappings.
+  extern char &StackFrameLayoutAnalysisPassID;
+
   /// IfConverter - This pass performs machine code if conversion.
   extern char &IfConverterID;
 
@@ -329,6 +346,10 @@ namespace llvm {
   extern char &MachineCopyPropagationID;
 
   MachineFunctionPass *createMachineCopyPropagationPass(bool UseCopyInstr);
+
+  /// MachineLateInstrsCleanup - This pass removes redundant identical
+  /// instructions after register allocation and rematerialization.
+  extern char &MachineLateInstrsCleanupID;
 
   /// PeepholeOptimizer - This pass performs peephole optimizations -
   /// like extension and comparison eliminations.
@@ -405,8 +426,15 @@ namespace llvm {
   /// the intrinsic for later emission to the StackMap.
   extern char &StackMapLivenessID;
 
+  // MachineSanitizerBinaryMetadata - appends/finalizes sanitizer binary
+  // metadata after llvm SanitizerBinaryMetadata pass.
+  extern char &MachineSanitizerBinaryMetadataID;
+
   /// RemoveRedundantDebugValues pass.
   extern char &RemoveRedundantDebugValuesID;
+
+  /// MachineCFGPrinter pass.
+  extern char &MachineCFGPrinterID;
 
   /// LiveDebugValues pass
   extern char &LiveDebugValuesID;
@@ -487,6 +515,9 @@ namespace llvm {
   // Expands large div/rem instructions.
   FunctionPass *createExpandLargeDivRemPass();
 
+  // Expands large div/rem instructions.
+  FunctionPass *createExpandLargeFpConvertPass();
+
   // This pass expands memcmp() to load/stores.
   FunctionPass *createExpandMemCmpPass();
 
@@ -517,7 +548,7 @@ namespace llvm {
   FunctionPass *createPseudoProbeInserter();
 
   /// Create IR Type Promotion pass. \see TypePromotion.cpp
-  FunctionPass *createTypePromotionPass();
+  FunctionPass *createTypePromotionLegacyPass();
 
   /// Add Flow Sensitive Discriminators. PassNum specifies the
   /// sequence number of this pass (starting from 1).
@@ -525,9 +556,10 @@ namespace llvm {
   createMIRAddFSDiscriminatorsPass(sampleprof::FSDiscriminatorPass P);
 
   /// Read Flow Sensitive Profile.
-  FunctionPass *createMIRProfileLoaderPass(std::string File,
-                                           std::string RemappingFile,
-                                           sampleprof::FSDiscriminatorPass P);
+  FunctionPass *
+  createMIRProfileLoaderPass(std::string File, std::string RemappingFile,
+                             sampleprof::FSDiscriminatorPass P,
+                             IntrusiveRefCntPtr<vfs::FileSystem> FS);
 
   /// Creates MIR Debugify pass. \see MachineDebugify.cpp
   ModulePass *createDebugifyMachineModulePass();

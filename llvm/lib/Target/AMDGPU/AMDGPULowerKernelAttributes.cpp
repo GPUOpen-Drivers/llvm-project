@@ -74,6 +74,13 @@ public:
  }
 };
 
+Function *getBasePtrIntrinsic(Module &M, bool IsV5OrAbove) {
+  auto IntrinsicId = IsV5OrAbove ? Intrinsic::amdgcn_implicitarg_ptr
+                                 : Intrinsic::amdgcn_dispatch_ptr;
+  StringRef Name = Intrinsic::getName(IntrinsicId);
+  return M.getFunction(Name);
+}
+
 } // end anonymous namespace
 
 static bool processUse(CallInst *CI, bool IsV5OrAbove) {
@@ -102,17 +109,21 @@ static bool processUse(CallInst *CI, bool IsV5OrAbove) {
       continue;
 
     int64_t Offset = 0;
-    BitCastInst *BCI = dyn_cast<BitCastInst>(U);
-    if (!BCI) {
+    auto *Load = dyn_cast<LoadInst>(U); // Load from ImplicitArgPtr/DispatchPtr?
+    auto *BCI = dyn_cast<BitCastInst>(U);
+    if (!Load && !BCI) {
       if (GetPointerBaseWithConstantOffset(U, Offset, DL) != CI)
         continue;
+      Load = dyn_cast<LoadInst>(*U->user_begin()); // Load from GEP?
       BCI = dyn_cast<BitCastInst>(*U->user_begin());
     }
 
-    if (!BCI || !BCI->hasOneUse())
-      continue;
+    if (BCI) {
+      if (!BCI->hasOneUse())
+        continue;
+      Load = dyn_cast<LoadInst>(*BCI->user_begin()); // Load from BCI?
+    }
 
-    auto *Load = dyn_cast<LoadInst>(*BCI->user_begin());
     if (!Load || !Load->isSimple())
       continue;
 
@@ -311,17 +322,8 @@ static bool processUse(CallInst *CI, bool IsV5OrAbove) {
 // TargetPassConfig for subtarget.
 bool AMDGPULowerKernelAttributes::runOnModule(Module &M) {
   bool MadeChange = false;
-  Function *BasePtr = nullptr;
-  bool IsV5OrAbove = AMDGPU::getAmdhsaCodeObjectVersion() >= 5;
-  if (IsV5OrAbove) {
-    StringRef ImplicitArgPtrName =
-        Intrinsic::getName(Intrinsic::amdgcn_implicitarg_ptr);
-    BasePtr = M.getFunction(ImplicitArgPtrName);
-  } else { // Pre-V5.
-    StringRef DispatchPtrName =
-        Intrinsic::getName(Intrinsic::amdgcn_dispatch_ptr);
-    BasePtr = M.getFunction(DispatchPtrName);
-  }
+  bool IsV5OrAbove = AMDGPU::getCodeObjectVersion(M) >= 5;
+  Function *BasePtr = getBasePtrIntrinsic(M, IsV5OrAbove);
 
   if (!BasePtr) // ImplicitArgPtr/DispatchPtr not used.
     return false;
@@ -352,17 +354,8 @@ ModulePass *llvm::createAMDGPULowerKernelAttributesPass() {
 
 PreservedAnalyses
 AMDGPULowerKernelAttributesPass::run(Function &F, FunctionAnalysisManager &AM) {
-  Function *BasePtr = nullptr;
-  bool IsV5OrAbove = AMDGPU::getAmdhsaCodeObjectVersion() >= 5;
-  if (IsV5OrAbove) {
-    StringRef ImplicitArgPtrName =
-        Intrinsic::getName(Intrinsic::amdgcn_implicitarg_ptr);
-    BasePtr = F.getParent()->getFunction(ImplicitArgPtrName);
-  } else { // Pre_V5.
-    StringRef DispatchPtrName =
-        Intrinsic::getName(Intrinsic::amdgcn_dispatch_ptr);
-    BasePtr = F.getParent()->getFunction(DispatchPtrName);
-  }
+  bool IsV5OrAbove = AMDGPU::getCodeObjectVersion(*F.getParent()) >= 5;
+  Function *BasePtr = getBasePtrIntrinsic(*F.getParent(), IsV5OrAbove);
 
   if (!BasePtr) // ImplicitArgPtr/DispatchPtr not used.
     return PreservedAnalyses::all();

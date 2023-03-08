@@ -10,8 +10,8 @@ from lldbsuite.test import lldbutil
 class TestDbgInfoContentDeque(TestBase):
 
     @add_test_categories(["libc++"])
-    @expectedFailureDarwin # FIXME: May need to force system libcxx here.
     @skipIf(compiler=no_match("clang"))
+    @skipIf(compiler="clang", compiler_version=['<', '12.0'])
     def test(self):
         self.build()
 
@@ -21,7 +21,11 @@ class TestDbgInfoContentDeque(TestBase):
 
         self.runCmd("settings set target.import-std-module true")
 
-        deque_type = "std::deque<Foo>"
+        if self.expectedCompilerVersion(['>', '16.0']):
+            deque_type = "std::deque<Foo>"
+        else:
+            deque_type = "std::deque<Foo, std::allocator<Foo> >"
+
         size_type = "size_type"
         value_type = "value_type"
 
@@ -33,7 +37,7 @@ class TestDbgInfoContentDeque(TestBase):
 
         riterator_type = "reverse_iterator"
         riterator_children = [
-            ValueCheck(name="__t"),
+            ValueCheck(), # Deprecated __t_ member; no need to check
             ValueCheck(name="current")
         ]
 

@@ -12,7 +12,7 @@ define void @buildvec_no_vid_v4f32(<4 x float>* %x) {
 ; CHECK:       # %bb.0:
 ; CHECK-NEXT:    lui a1, %hi(.LCPI0_0)
 ; CHECK-NEXT:    addi a1, a1, %lo(.LCPI0_0)
-; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
 ; CHECK-NEXT:    vle32.v v8, (a1)
 ; CHECK-NEXT:    vse32.v v8, (a0)
 ; CHECK-NEXT:    ret
@@ -36,7 +36,7 @@ define <4 x float> @hang_when_merging_stores_after_legalization(<8 x float> %x, 
 ; LMULMAX1-LABEL: hang_when_merging_stores_after_legalization:
 ; LMULMAX1:       # %bb.0:
 ; LMULMAX1-NEXT:    li a0, 2
-; LMULMAX1-NEXT:    vsetivli zero, 1, e8, mf8, ta, mu
+; LMULMAX1-NEXT:    vsetivli zero, 1, e8, mf8, ta, ma
 ; LMULMAX1-NEXT:    vmv.s.x v0, a0
 ; LMULMAX1-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
 ; LMULMAX1-NEXT:    vrgather.vi v12, v8, 0
@@ -71,7 +71,7 @@ define <4 x float> @hang_when_merging_stores_after_legalization(<8 x float> %x, 
 define void @buildvec_dominant0_v2f32(<2 x float>* %x) {
 ; CHECK-LABEL: buildvec_dominant0_v2f32:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    vsetivli zero, 2, e32, mf2, ta, mu
+; CHECK-NEXT:    vsetivli zero, 2, e32, mf2, ta, ma
 ; CHECK-NEXT:    vid.v v8
 ; CHECK-NEXT:    vfcvt.f.x.v v8, v8
 ; CHECK-NEXT:    vse32.v v8, (a0)
@@ -86,7 +86,7 @@ define void @buildvec_dominant0_v2f32(<2 x float>* %x) {
 define void @buildvec_dominant1_v2f32(<2 x float>* %x) {
 ; CHECK-LABEL: buildvec_dominant1_v2f32:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    vsetivli zero, 2, e32, mf2, ta, mu
+; CHECK-NEXT:    vsetivli zero, 2, e32, mf2, ta, ma
 ; CHECK-NEXT:    vid.v v8
 ; CHECK-NEXT:    vadd.vi v8, v8, 1
 ; CHECK-NEXT:    vfcvt.f.x.v v8, v8
@@ -99,15 +99,14 @@ define void @buildvec_dominant1_v2f32(<2 x float>* %x) {
 define void @buildvec_dominant0_v4f32(<4 x float>* %x) {
 ; CHECK-LABEL: buildvec_dominant0_v4f32:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; CHECK-NEXT:    lui a1, %hi(.LCPI4_0)
-; CHECK-NEXT:    addi a1, a1, %lo(.LCPI4_0)
-; CHECK-NEXT:    vlse32.v v8, (a1), zero
-; CHECK-NEXT:    vmv.s.x v9, zero
-; CHECK-NEXT:    vsetivli zero, 3, e32, m1, tu, mu
-; CHECK-NEXT:    vslideup.vi v8, v9, 2
-; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; CHECK-NEXT:    vse32.v v8, (a0)
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
+; CHECK-NEXT:    vmv.s.x v8, zero
+; CHECK-NEXT:    lui a1, 262144
+; CHECK-NEXT:    vmv.v.x v9, a1
+; CHECK-NEXT:    vsetivli zero, 3, e32, m1, tu, ma
+; CHECK-NEXT:    vslideup.vi v9, v8, 2
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
+; CHECK-NEXT:    vse32.v v9, (a0)
 ; CHECK-NEXT:    ret
   store <4 x float> <float 2.0, float 2.0, float 0.0, float 2.0>, <4 x float>* %x
   ret void
@@ -116,12 +115,12 @@ define void @buildvec_dominant0_v4f32(<4 x float>* %x) {
 define void @buildvec_dominant1_v4f32(<4 x float>* %x, float %f) {
 ; CHECK-LABEL: buildvec_dominant1_v4f32:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
 ; CHECK-NEXT:    vmv.s.x v8, zero
 ; CHECK-NEXT:    vfmv.v.f v9, fa0
-; CHECK-NEXT:    vsetivli zero, 2, e32, m1, tu, mu
+; CHECK-NEXT:    vsetivli zero, 2, e32, m1, tu, ma
 ; CHECK-NEXT:    vslideup.vi v9, v8, 1
-; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
 ; CHECK-NEXT:    vse32.v v9, (a0)
 ; CHECK-NEXT:    ret
   %v0 = insertelement <4 x float> poison, float %f, i32 0
@@ -135,14 +134,13 @@ define void @buildvec_dominant1_v4f32(<4 x float>* %x, float %f) {
 define void @buildvec_dominant2_v4f32(<4 x float>* %x, float %f) {
 ; CHECK-LABEL: buildvec_dominant2_v4f32:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    lui a1, %hi(.LCPI6_0)
-; CHECK-NEXT:    flw ft0, %lo(.LCPI6_0)(a1)
-; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; CHECK-NEXT:    vfmv.s.f v8, ft0
+; CHECK-NEXT:    lui a1, 262144
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
+; CHECK-NEXT:    vmv.s.x v8, a1
 ; CHECK-NEXT:    vfmv.v.f v9, fa0
-; CHECK-NEXT:    vsetivli zero, 2, e32, m1, tu, mu
+; CHECK-NEXT:    vsetivli zero, 2, e32, m1, tu, ma
 ; CHECK-NEXT:    vslideup.vi v9, v8, 1
-; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
 ; CHECK-NEXT:    vse32.v v9, (a0)
 ; CHECK-NEXT:    ret
   %v0 = insertelement <4 x float> poison, float %f, i32 0
@@ -154,31 +152,17 @@ define void @buildvec_dominant2_v4f32(<4 x float>* %x, float %f) {
 }
 
 define void @buildvec_merge0_v4f32(<4 x float>* %x, float %f) {
-; RV32-LABEL: buildvec_merge0_v4f32:
-; RV32:       # %bb.0:
-; RV32-NEXT:    li a1, 6
-; RV32-NEXT:    vsetivli zero, 1, e8, mf8, ta, mu
-; RV32-NEXT:    lui a2, %hi(.LCPI7_0)
-; RV32-NEXT:    flw ft0, %lo(.LCPI7_0)(a2)
-; RV32-NEXT:    vmv.s.x v0, a1
-; RV32-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; RV32-NEXT:    vfmv.v.f v8, fa0
-; RV32-NEXT:    vfmerge.vfm v8, v8, ft0, v0
-; RV32-NEXT:    vse32.v v8, (a0)
-; RV32-NEXT:    ret
-;
-; RV64-LABEL: buildvec_merge0_v4f32:
-; RV64:       # %bb.0:
-; RV64-NEXT:    lui a1, %hi(.LCPI7_0)
-; RV64-NEXT:    flw ft0, %lo(.LCPI7_0)(a1)
-; RV64-NEXT:    li a1, 6
-; RV64-NEXT:    vsetivli zero, 1, e8, mf8, ta, mu
-; RV64-NEXT:    vmv.s.x v0, a1
-; RV64-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; RV64-NEXT:    vfmv.v.f v8, fa0
-; RV64-NEXT:    vfmerge.vfm v8, v8, ft0, v0
-; RV64-NEXT:    vse32.v v8, (a0)
-; RV64-NEXT:    ret
+; CHECK-LABEL: buildvec_merge0_v4f32:
+; CHECK:       # %bb.0:
+; CHECK-NEXT:    li a1, 6
+; CHECK-NEXT:    vsetivli zero, 1, e8, mf8, ta, ma
+; CHECK-NEXT:    vmv.s.x v0, a1
+; CHECK-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
+; CHECK-NEXT:    vfmv.v.f v8, fa0
+; CHECK-NEXT:    lui a1, 262144
+; CHECK-NEXT:    vmerge.vxm v8, v8, a1, v0
+; CHECK-NEXT:    vse32.v v8, (a0)
+; CHECK-NEXT:    ret
   %v0 = insertelement <4 x float> poison, float %f, i32 0
   %v1 = insertelement <4 x float> %v0, float 2.0, i32 1
   %v2 = insertelement <4 x float> %v1, float 2.0, i32 2
@@ -190,7 +174,7 @@ define void @buildvec_merge0_v4f32(<4 x float>* %x, float %f) {
 define <4 x half> @splat_c3_v4f16(<4 x half> %v) {
 ; CHECK-LABEL: splat_c3_v4f16:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    vsetivli zero, 4, e16, mf2, ta, mu
+; CHECK-NEXT:    vsetivli zero, 4, e16, mf2, ta, ma
 ; CHECK-NEXT:    vrgather.vi v9, v8, 3
 ; CHECK-NEXT:    vmv1r.v v8, v9
 ; CHECK-NEXT:    ret
@@ -203,7 +187,7 @@ define <4 x half> @splat_c3_v4f16(<4 x half> %v) {
 define <4 x half> @splat_idx_v4f16(<4 x half> %v, i64 %idx) {
 ; CHECK-LABEL: splat_idx_v4f16:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    vsetivli zero, 4, e16, mf2, ta, mu
+; CHECK-NEXT:    vsetivli zero, 4, e16, mf2, ta, ma
 ; CHECK-NEXT:    vrgather.vx v9, v8, a0
 ; CHECK-NEXT:    vmv1r.v v8, v9
 ; CHECK-NEXT:    ret
@@ -216,14 +200,14 @@ define <4 x half> @splat_idx_v4f16(<4 x half> %v, i64 %idx) {
 define <8 x float> @splat_c5_v8f32(<8 x float> %v) {
 ; LMULMAX1-LABEL: splat_c5_v8f32:
 ; LMULMAX1:       # %bb.0:
-; LMULMAX1-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
+; LMULMAX1-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
 ; LMULMAX1-NEXT:    vrgather.vi v8, v9, 1
 ; LMULMAX1-NEXT:    vmv.v.v v9, v8
 ; LMULMAX1-NEXT:    ret
 ;
 ; LMULMAX2-LABEL: splat_c5_v8f32:
 ; LMULMAX2:       # %bb.0:
-; LMULMAX2-NEXT:    vsetivli zero, 8, e32, m2, ta, mu
+; LMULMAX2-NEXT:    vsetivli zero, 8, e32, m2, ta, ma
 ; LMULMAX2-NEXT:    vrgather.vi v10, v8, 5
 ; LMULMAX2-NEXT:    vmv.v.v v8, v10
 ; LMULMAX2-NEXT:    ret
@@ -243,7 +227,7 @@ define <8 x float> @splat_idx_v8f32(<8 x float> %v, i64 %idx) {
 ; LMULMAX1-NEXT:    mv a1, sp
 ; LMULMAX1-NEXT:    add a0, a1, a0
 ; LMULMAX1-NEXT:    addi a2, sp, 16
-; LMULMAX1-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
+; LMULMAX1-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
 ; LMULMAX1-NEXT:    vse32.v v9, (a2)
 ; LMULMAX1-NEXT:    vse32.v v8, (a1)
 ; LMULMAX1-NEXT:    vlse32.v v8, (a0), zero
@@ -253,7 +237,7 @@ define <8 x float> @splat_idx_v8f32(<8 x float> %v, i64 %idx) {
 ;
 ; LMULMAX2-LABEL: splat_idx_v8f32:
 ; LMULMAX2:       # %bb.0:
-; LMULMAX2-NEXT:    vsetivli zero, 8, e32, m2, ta, mu
+; LMULMAX2-NEXT:    vsetivli zero, 8, e32, m2, ta, ma
 ; LMULMAX2-NEXT:    vrgather.vx v10, v8, a0
 ; LMULMAX2-NEXT:    vmv.v.v v8, v10
 ; LMULMAX2-NEXT:    ret
@@ -267,11 +251,10 @@ define <8 x float> @splat_idx_v8f32(<8 x float> %v, i64 %idx) {
 define dso_local void @splat_load_licm(float* %0) {
 ; RV32-LABEL: splat_load_licm:
 ; RV32:       # %bb.0:
-; RV32-NEXT:    lui a1, %hi(.LCPI12_0)
-; RV32-NEXT:    addi a1, a1, %lo(.LCPI12_0)
-; RV32-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; RV32-NEXT:    vlse32.v v8, (a1), zero
 ; RV32-NEXT:    li a1, 1024
+; RV32-NEXT:    lui a2, 263168
+; RV32-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
+; RV32-NEXT:    vmv.v.x v8, a2
 ; RV32-NEXT:  .LBB12_1: # =>This Inner Loop Header: Depth=1
 ; RV32-NEXT:    vse32.v v8, (a0)
 ; RV32-NEXT:    addi a1, a1, -4
@@ -282,18 +265,15 @@ define dso_local void @splat_load_licm(float* %0) {
 ;
 ; RV64-LABEL: splat_load_licm:
 ; RV64:       # %bb.0:
-; RV64-NEXT:    lui a1, %hi(.LCPI12_0)
-; RV64-NEXT:    addi a1, a1, %lo(.LCPI12_0)
-; RV64-NEXT:    vsetivli zero, 4, e32, m1, ta, mu
-; RV64-NEXT:    vlse32.v v8, (a1), zero
-; RV64-NEXT:    li a1, 0
-; RV64-NEXT:    li a2, 1024
+; RV64-NEXT:    li a1, 1024
+; RV64-NEXT:    lui a2, 263168
+; RV64-NEXT:    vsetivli zero, 4, e32, m1, ta, ma
+; RV64-NEXT:    vmv.v.x v8, a2
 ; RV64-NEXT:  .LBB12_1: # =>This Inner Loop Header: Depth=1
-; RV64-NEXT:    slli a3, a1, 2
-; RV64-NEXT:    add a3, a0, a3
-; RV64-NEXT:    addiw a1, a1, 4
-; RV64-NEXT:    vse32.v v8, (a3)
-; RV64-NEXT:    bne a1, a2, .LBB12_1
+; RV64-NEXT:    vse32.v v8, (a0)
+; RV64-NEXT:    addiw a1, a1, -4
+; RV64-NEXT:    addi a0, a0, 16
+; RV64-NEXT:    bnez a1, .LBB12_1
 ; RV64-NEXT:  # %bb.2:
 ; RV64-NEXT:    ret
   br label %2

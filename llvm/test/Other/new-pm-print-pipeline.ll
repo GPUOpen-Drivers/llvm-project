@@ -1,9 +1,7 @@
-; Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-; Notified per clause 4(b) of the license.
 ;; Test that the -print-pipeline-passes option correctly prints some explicitly specified pipelines.
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(adce),function(simplifycfg<bonus-inst-threshold=123;no-forward-switch-cond;switch-to-lookup;keep-loops;no-hoist-common-insts;sink-common-insts>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-0
-; CHECK-0: function(adce),function(simplifycfg<bonus-inst-threshold=123;no-forward-switch-cond;switch-to-lookup;keep-loops;no-hoist-common-insts;sink-common-insts>)
+; CHECK-0: function(adce),function(simplifycfg<bonus-inst-threshold=123;no-forward-switch-cond;no-switch-range-to-icmp;switch-to-lookup;keep-loops;no-hoist-common-insts;sink-common-insts>)
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='module(rpo-function-attrs,require<globals-aa>,function(float2int,lower-constant-intrinsics,loop(loop-rotate)),invalidate<globals-aa>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-1
 ; CHECK-1: rpo-function-attrs,require<globals-aa>,function(float2int,lower-constant-intrinsics,loop(loop-rotate)),invalidate<globals-aa>
@@ -12,7 +10,7 @@
 ; CHECK-2: repeat<5>(function(mem2reg)),invalidate<all>
 
 ;; Test that we get ClassName printed when there is no ClassName to pass-name mapping (as is the case for the BitcodeWriterPass).
-; RUN: opt -o /dev/null -disable-verify -print-pipeline-passes -passes='function(mem2reg)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-3
+; RUN: opt -o /dev/null -disable-verify -print-pipeline-passes -passes='function(mem2reg)' < %s -disable-pipeline-verification | FileCheck %s --match-full-lines --check-prefixes=CHECK-3
 ; CHECK-3: function(mem2reg),BitcodeWriterPass
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(loop-mssa(indvars))' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-4
@@ -55,7 +53,7 @@
 ; CHECK-17: function(print<stack-lifetime><may>,print<stack-lifetime><must>)
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(simplifycfg<bonus-inst-threshold=5;forward-switch-cond;switch-to-lookup;keep-loops;hoist-common-insts;sink-common-insts>,simplifycfg<bonus-inst-threshold=7;no-forward-switch-cond;no-switch-to-lookup;no-keep-loops;no-hoist-common-insts;no-sink-common-insts>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-18
-; CHECK-18: function(simplifycfg<bonus-inst-threshold=5;forward-switch-cond;switch-to-lookup;keep-loops;hoist-common-insts;sink-common-insts>,simplifycfg<bonus-inst-threshold=7;no-forward-switch-cond;no-switch-to-lookup;no-keep-loops;no-hoist-common-insts;no-sink-common-insts>)
+; CHECK-18: function(simplifycfg<bonus-inst-threshold=5;forward-switch-cond;no-switch-range-to-icmp;switch-to-lookup;keep-loops;hoist-common-insts;sink-common-insts>,simplifycfg<bonus-inst-threshold=7;no-forward-switch-cond;no-switch-range-to-icmp;no-switch-to-lookup;no-keep-loops;no-hoist-common-insts;no-sink-common-insts>)
 
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only>,loop-vectorize<interleave-forced-only;vectorize-forced-only>)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-19
 ; CHECK-19: function(loop-vectorize<no-interleave-forced-only;no-vectorize-forced-only;>,loop-vectorize<interleave-forced-only;vectorize-forced-only;>)
@@ -81,3 +79,13 @@
 ;; Test that LICM & LNICM with options.
 ; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='function(loop-mssa(licm<allowspeculation>,licm<no-allowspeculation>,lnicm<allowspeculation>,lnicm<no-allowspeculation>))' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-25
 ; CHECK-25: function(loop-mssa(licm<allowspeculation>,licm<no-allowspeculation>,lnicm<allowspeculation>,lnicm<no-allowspeculation>))
+
+;; Test coro-cond.
+; RUN: opt -disable-output -disable-verify -print-pipeline-passes -passes='coro-cond(no-op-module)' < %s | FileCheck %s --match-full-lines --check-prefixes=CHECK-26
+; CHECK-26: coro-cond(no-op-module)
+
+;; Test that -print-pipeline-passes is parsable (implicitly done with -print-pipeline-passes) for various default pipelines.
+; RUN: opt -disable-output -passes='default<O0>' < %s
+; RUN: opt -disable-output -passes='default<O1>' < %s
+; RUN: opt -disable-output -passes='default<O2>' < %s
+; RUN: opt -disable-output -passes='default<O3>' < %s

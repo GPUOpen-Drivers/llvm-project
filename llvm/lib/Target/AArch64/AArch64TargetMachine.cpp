@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -52,6 +50,7 @@
 #include "llvm/Transforms/CFGuard.h"
 #include "llvm/Transforms/Scalar.h"
 #include <memory>
+#include <optional>
 #include <string>
 
 using namespace llvm;
@@ -130,7 +129,12 @@ static cl::opt<bool>
 static cl::opt<bool>
     EnableGEPOpt("aarch64-enable-gep-opt", cl::Hidden,
                  cl::desc("Enable optimizations on complex GEPs"),
-                 cl::init(true));
+                 cl::init(false));
+
+static cl::opt<bool>
+    EnableSelectOpt("aarch64-select-opt", cl::Hidden,
+                    cl::desc("Enable select to branch optimizations"),
+                    cl::init(true));
 
 static cl::opt<bool>
     BranchRelaxation("aarch64-enable-branch-relax", cl::Hidden, cl::init(true),
@@ -226,12 +230,15 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAArch64Target() {
   initializeFalkorHWPFFixPass(*PR);
   initializeFalkorMarkStridedAccessesLegacyPass(*PR);
   initializeLDTLSCleanupPass(*PR);
+  initializeSMEABIPass(*PR);
   initializeSVEIntrinsicOptsPass(*PR);
   initializeAArch64SpeculationHardeningPass(*PR);
   initializeAArch64SLSHardeningPass(*PR);
   initializeAArch64StackTaggingPass(*PR);
   initializeAArch64StackTaggingPreRAPass(*PR);
   initializeAArch64LowerHomogeneousPrologEpilogPass(*PR);
+  initializeAArch64DAGToDAGISelPass(*PR);
+  initializeAArch64GlobalsTaggingPass(*PR);
 }
 
 //===----------------------------------------------------------------------===//
@@ -270,7 +277,7 @@ static StringRef computeDefaultCPU(const Triple &TT, StringRef CPU) {
 }
 
 static Reloc::Model getEffectiveRelocModel(const Triple &TT,
-                                           Optional<Reloc::Model> RM) {
+                                           std::optional<Reloc::Model> RM) {
   // AArch64 Darwin and Windows are always PIC.
   if (TT.isOSDarwin() || TT.isOSWindows())
     return Reloc::PIC_;
@@ -283,8 +290,8 @@ static Reloc::Model getEffectiveRelocModel(const Triple &TT,
 }
 
 static CodeModel::Model
-getEffectiveAArch64CodeModel(const Triple &TT, Optional<CodeModel::Model> CM,
-                             bool JIT) {
+getEffectiveAArch64CodeModel(const Triple &TT,
+                             std::optional<CodeModel::Model> CM, bool JIT) {
   if (CM) {
     if (*CM != CodeModel::Small && *CM != CodeModel::Tiny &&
         *CM != CodeModel::Large) {
@@ -310,8 +317,8 @@ getEffectiveAArch64CodeModel(const Triple &TT, Optional<CodeModel::Model> CM,
 AArch64TargetMachine::AArch64TargetMachine(const Target &T, const Triple &TT,
                                            StringRef CPU, StringRef FS,
                                            const TargetOptions &Options,
-                                           Optional<Reloc::Model> RM,
-                                           Optional<CodeModel::Model> CM,
+                                           std::optional<Reloc::Model> RM,
+                                           std::optional<CodeModel::Model> CM,
                                            CodeGenOpt::Level OL, bool JIT,
                                            bool LittleEndian)
     : LLVMTargetMachine(T,
@@ -380,20 +387,20 @@ AArch64TargetMachine::getSubtargetImpl(const Function &F) const {
   Attribute TuneAttr = F.getFnAttribute("tune-cpu");
   Attribute FSAttr = F.getFnAttribute("target-features");
 
-  std::string CPU =
-      CPUAttr.isValid() ? CPUAttr.getValueAsString().str() : TargetCPU;
-  std::string TuneCPU =
-      TuneAttr.isValid() ? TuneAttr.getValueAsString().str() : CPU;
-  std::string FS =
-      FSAttr.isValid() ? FSAttr.getValueAsString().str() : TargetFS;
+  StringRef CPU = CPUAttr.isValid() ? CPUAttr.getValueAsString() : TargetCPU;
+  StringRef TuneCPU = TuneAttr.isValid() ? TuneAttr.getValueAsString() : CPU;
+  StringRef FS = FSAttr.isValid() ? FSAttr.getValueAsString() : TargetFS;
 
-  SmallString<512> Key;
+  bool StreamingSVEModeDisabled =
+      !F.hasFnAttribute("aarch64_pstate_sm_enabled") &&
+      !F.hasFnAttribute("aarch64_pstate_sm_compatible") &&
+      !F.hasFnAttribute("aarch64_pstate_sm_body");
 
   unsigned MinSVEVectorSize = 0;
   unsigned MaxSVEVectorSize = 0;
   Attribute VScaleRangeAttr = F.getFnAttribute(Attribute::VScaleRange);
   if (VScaleRangeAttr.isValid()) {
-    Optional<unsigned> VScaleMax = VScaleRangeAttr.getVScaleRangeMax();
+    std::optional<unsigned> VScaleMax = VScaleRangeAttr.getVScaleRangeMax();
     MinSVEVectorSize = VScaleRangeAttr.getVScaleRangeMin() * 128;
     MaxSVEVectorSize = VScaleMax ? *VScaleMax * 128 : 0;
   } else {
@@ -418,13 +425,10 @@ AArch64TargetMachine::getSubtargetImpl(const Function &F) const {
         (std::max(MinSVEVectorSize, MaxSVEVectorSize) / 128) * 128;
   }
 
-  Key += "SVEMin";
-  Key += std::to_string(MinSVEVectorSize);
-  Key += "SVEMax";
-  Key += std::to_string(MaxSVEVectorSize);
-  Key += CPU;
-  Key += TuneCPU;
-  Key += FS;
+  SmallString<512> Key;
+  raw_svector_ostream(Key) << "SVEMin" << MinSVEVectorSize << "SVEMax"
+                           << MaxSVEVectorSize << "StreamingSVEModeDisabled="
+                           << StreamingSVEModeDisabled << CPU << TuneCPU << FS;
 
   auto &I = SubtargetMap[Key];
   if (!I) {
@@ -432,9 +436,9 @@ AArch64TargetMachine::getSubtargetImpl(const Function &F) const {
     // creation will depend on the TM and the code generation flags on the
     // function that reside in TargetOptions.
     resetTargetOptions(F);
-    I = std::make_unique<AArch64Subtarget>(TargetTriple, CPU, TuneCPU, FS,
-                                           *this, isLittle, MinSVEVectorSize,
-                                           MaxSVEVectorSize);
+    I = std::make_unique<AArch64Subtarget>(
+        TargetTriple, CPU, TuneCPU, FS, *this, isLittle, MinSVEVectorSize,
+        MaxSVEVectorSize, StreamingSVEModeDisabled);
   }
   return I.get();
 }
@@ -443,16 +447,16 @@ void AArch64leTargetMachine::anchor() { }
 
 AArch64leTargetMachine::AArch64leTargetMachine(
     const Target &T, const Triple &TT, StringRef CPU, StringRef FS,
-    const TargetOptions &Options, Optional<Reloc::Model> RM,
-    Optional<CodeModel::Model> CM, CodeGenOpt::Level OL, bool JIT)
+    const TargetOptions &Options, std::optional<Reloc::Model> RM,
+    std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL, bool JIT)
     : AArch64TargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, JIT, true) {}
 
 void AArch64beTargetMachine::anchor() { }
 
 AArch64beTargetMachine::AArch64beTargetMachine(
     const Target &T, const Triple &TT, StringRef CPU, StringRef FS,
-    const TargetOptions &Options, Optional<Reloc::Model> RM,
-    Optional<CodeModel::Model> CM, CodeGenOpt::Level OL, bool JIT)
+    const TargetOptions &Options, std::optional<Reloc::Model> RM,
+    std::optional<CodeModel::Model> CM, CodeGenOpt::Level OL, bool JIT)
     : AArch64TargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, JIT, false) {}
 
 namespace {
@@ -549,6 +553,7 @@ void AArch64PassConfig::addIRPasses() {
   if (TM->getOptLevel() != CodeGenOpt::None && EnableAtomicTidy)
     addPass(createCFGSimplificationPass(SimplifyCFGOptions()
                                             .forwardSwitchCondToPhi(true)
+                                            .convertSwitchRangeToICmp(true)
                                             .convertSwitchToLookupTable(true)
                                             .needCanonicalLoops(false)
                                             .hoistCommonInsts(true)
@@ -580,14 +585,27 @@ void AArch64PassConfig::addIRPasses() {
 
   TargetPassConfig::addIRPasses();
 
+  if (getOptLevel() == CodeGenOpt::Aggressive && EnableSelectOpt)
+    addPass(createSelectOptimizePass());
+
+  addPass(createAArch64GlobalsTaggingPass());
   addPass(createAArch64StackTaggingPass(
       /*IsOptNone=*/TM->getOptLevel() == CodeGenOpt::None));
+
+  // Match complex arithmetic patterns
+  if (TM->getOptLevel() >= CodeGenOpt::Default)
+    addPass(createComplexDeinterleavingPass(TM));
 
   // Match interleaved memory accesses to ldN/stN intrinsics.
   if (TM->getOptLevel() != CodeGenOpt::None) {
     addPass(createInterleavedLoadCombinePass());
     addPass(createInterleavedAccessPass());
   }
+
+  // Expand any functions marked with SME attributes which require special
+  // changes for the calling convention or that require the lazy-saving
+  // mechanism specified in the SME ABI.
+  addPass(createSMEABIPass());
 
   // Add Control Flow Guard checks.
   if (TM->getTargetTriple().isOSWindows())
@@ -632,7 +650,7 @@ bool AArch64PassConfig::addPreISel() {
 
 void AArch64PassConfig::addCodeGenPrepare() {
   if (getOptLevel() != CodeGenOpt::None)
-    addPass(createTypePromotionPass());
+    addPass(createTypePromotionLegacyPass());
   TargetPassConfig::addCodeGenPrepare();
 }
 
@@ -815,6 +833,13 @@ void AArch64PassConfig::addPreEmitPass2() {
   // SVE bundles move prefixes with destructive operations. BLR_RVMARKER pseudo
   // instructions are lowered to bundles as well.
   addPass(createUnpackMachineBundles(nullptr));
+}
+
+MachineFunctionInfo *AArch64TargetMachine::createMachineFunctionInfo(
+    BumpPtrAllocator &Allocator, const Function &F,
+    const TargetSubtargetInfo *STI) const {
+  return AArch64FunctionInfo::create<AArch64FunctionInfo>(
+      Allocator, F, static_cast<const AArch64Subtarget *>(STI));
 }
 
 yaml::MachineFunctionInfo *

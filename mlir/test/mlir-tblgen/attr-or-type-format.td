@@ -2,6 +2,7 @@
 // RUN: mlir-tblgen -gen-typedef-defs -I %S/../../include %s | FileCheck %s --check-prefix=TYPE
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/EnumAttr.td"
 include "mlir/IR/OpBase.td"
 
 /// Test that attribute and type printers and parsers are correctly generated.
@@ -175,6 +176,40 @@ def AttrD : TestAttr<"TestG"> {
   let parameters = (ins "int":$a, AttributeSelfTypeParameter<"">:$type);
   let mnemonic = "attr_d";
   let assemblyFormat = "$a";
+}
+
+// Check that the self-type parameter can be referenced without being bound.
+
+// ATTR-LABEL: Attribute TestHAttr::parse
+// ATTR: _result_type = reqType
+// ATTR: parseUseType(odsParser,
+// ATTR-NEXT: *_result_type
+
+// ATTR-LABEL: void TestHAttr::print
+// ATTR: printUseType(odsPrinter,
+// ATTR-NEXT: getType()
+
+def AttrE : TestAttr<"TestH"> {
+  let parameters = (ins AttributeSelfTypeParameter<"">:$type);
+  let mnemonic = "attr_e";
+  let assemblyFormat = "custom<UseType>(ref($type))";
+}
+
+def TestEnum : I32EnumAttr<"TestEnum", "TestEnumType", [
+  I32EnumAttrCase<"first", 0>,
+  I32EnumAttrCase<"second", 1>
+]> {
+  let genSpecializedAttr = 0;
+}
+
+// ATTR-LABEL: TestEnumAttr::parse
+// ATTR: parseFoo(odsParser,
+// ATTR-NEXT: _result_value
+// ATTR-LABEL: TestEnumAttr::print
+// ATTR: printFoo(odsPrinter,
+// ATTR-NEXT: getValue()
+def EnumAttrA : EnumAttr<Test_Dialect, TestEnum, "EnumAttrA"> {
+  let assemblyFormat = "custom<Foo>($value)";
 }
 
 /// Test type parser and printer that mix variables and struct are generated
@@ -558,7 +593,7 @@ def TypeK : TestType<"TestM"> {
 
 // TYPE-LABEL: ::mlir::Type TestNType::parse
 // TYPE: parseFoo(
-// TYPE-NEXT: _result_a,
+// TYPE-NEXT: ::mlir::detail::unwrapForCustomParse(_result_a),
 // TYPE-NEXT: 1);
 
 // TYPE-LABEL: void TestNType::print

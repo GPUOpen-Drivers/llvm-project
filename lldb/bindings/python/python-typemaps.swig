@@ -54,6 +54,16 @@
   free((char *) $1);
 }
 
+%typemap(out) lldb::ScriptedObject {
+  $result = nullptr;
+  if (const void* impl = $1)
+    $result = (PyObject*) impl;
+  if (!$result) {
+    $result = Py_None;
+    Py_INCREF(Py_None);
+  }
+}
+
 %typemap(out) char** {
   int len;
   int i;
@@ -435,7 +445,7 @@ template <> bool SetNumberFromPyObject<double>(double &number, PyObject *obj) {
 
 %typemap(out) lldb::FileSP {
   $result = nullptr;
-  lldb::FileSP &sp = $1;
+  const lldb::FileSP &sp = $1;
   if (sp) {
     PythonFile pyfile = unwrapOrSetPythonException(PythonFile::FromFile(*sp));
     if (!pyfile.IsValid())

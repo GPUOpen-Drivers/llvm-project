@@ -19,9 +19,11 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/FormatVariadic.h"
 #include <numeric>
 
 using namespace mlir;
@@ -30,6 +32,13 @@ using namespace mlir;
 /// attribute.
 static uint64_t getFirstIntValue(ArrayAttr attr) {
   return (*attr.getAsValueRange<IntegerAttr>().begin()).getZExtValue();
+}
+
+/// Returns the number of bits for the given scalar/vector type.
+static int getNumBits(Type type) {
+  if (auto vectorType = type.dyn_cast<VectorType>())
+    return vectorType.cast<ShapedType>().getSizeInBits();
+  return type.getIntOrFloatBitWidth();
 }
 
 namespace {
@@ -45,12 +54,24 @@ struct VectorBitcastConvert final
     if (!dstType)
       return failure();
 
-    if (dstType == adaptor.getSource().getType())
+    if (dstType == adaptor.getSource().getType()) {
       rewriter.replaceOp(bitcastOp, adaptor.getSource());
-    else
-      rewriter.replaceOpWithNewOp<spirv::BitcastOp>(bitcastOp, dstType,
-                                                    adaptor.getSource());
+      return success();
+    }
 
+    // Check that the source and destination type have the same bitwidth.
+    // Depending on the target environment, we may need to emulate certain
+    // types, which can cause issue with bitcast.
+    Type srcType = adaptor.getSource().getType();
+    if (getNumBits(dstType) != getNumBits(srcType)) {
+      return rewriter.notifyMatchFailure(
+          bitcastOp,
+          llvm::formatv("different source ({0}) and target ({1}) bitwidth",
+                        srcType, dstType));
+    }
+
+    rewriter.replaceOpWithNewOp<spirv::BitcastOp>(bitcastOp, dstType,
+                                                  adaptor.getSource());
     return success();
   }
 };
@@ -144,7 +165,7 @@ struct VectorExtractStridedSliceOpConvert final
   }
 };
 
-template <class SPVFMAOp>
+template <class SPIRVFMAOp>
 struct VectorFmaOpConvert final : public OpConversionPattern<vector::FMAOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -154,8 +175,8 @@ struct VectorFmaOpConvert final : public OpConversionPattern<vector::FMAOp> {
     Type dstType = getTypeConverter()->convertType(fmaOp.getType());
     if (!dstType)
       return failure();
-    rewriter.replaceOpWithNewOp<SPVFMAOp>(fmaOp, dstType, adaptor.getLhs(),
-                                          adaptor.getRhs(), adaptor.getAcc());
+    rewriter.replaceOpWithNewOp<SPIRVFMAOp>(fmaOp, dstType, adaptor.getLhs(),
+                                            adaptor.getRhs(), adaptor.getAcc());
     return success();
   }
 };
@@ -191,19 +212,23 @@ struct VectorExtractElementOpConvert final
   LogicalResult
   matchAndRewrite(vector::ExtractElementOp extractOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Type vectorType =
-        getTypeConverter()->convertType(adaptor.getVector().getType());
-    if (!vectorType)
+    Type resultType = getTypeConverter()->convertType(extractOp.getType());
+    if (!resultType)
       return failure();
 
-    if (vectorType.isa<spirv::ScalarType>()) {
+    if (adaptor.getVector().getType().isa<spirv::ScalarType>()) {
       rewriter.replaceOp(extractOp, adaptor.getVector());
       return success();
     }
 
-    rewriter.replaceOpWithNewOp<spirv::VectorExtractDynamicOp>(
-        extractOp, extractOp.getType(), adaptor.getVector(),
-        extractOp.getPosition());
+    APInt cstPos;
+    if (matchPattern(adaptor.getPosition(), m_ConstantInt(&cstPos)))
+      rewriter.replaceOpWithNewOp<spirv::CompositeExtractOp>(
+          extractOp, resultType, adaptor.getVector(),
+          rewriter.getI32ArrayAttr({static_cast<int>(cstPos.getSExtValue())}));
+    else
+      rewriter.replaceOpWithNewOp<spirv::VectorExtractDynamicOp>(
+          extractOp, resultType, adaptor.getVector(), adaptor.getPosition());
     return success();
   }
 };
@@ -224,9 +249,15 @@ struct VectorInsertElementOpConvert final
       return success();
     }
 
-    rewriter.replaceOpWithNewOp<spirv::VectorInsertDynamicOp>(
-        insertOp, vectorType, insertOp.getDest(), adaptor.getSource(),
-        insertOp.getPosition());
+    APInt cstPos;
+    if (matchPattern(adaptor.getPosition(), m_ConstantInt(&cstPos)))
+      rewriter.replaceOpWithNewOp<spirv::CompositeInsertOp>(
+          insertOp, adaptor.getSource(), adaptor.getDest(),
+          cstPos.getSExtValue());
+    else
+      rewriter.replaceOpWithNewOp<spirv::VectorInsertDynamicOp>(
+          insertOp, vectorType, insertOp.getDest(), adaptor.getSource(),
+          adaptor.getPosition());
     return success();
   }
 };
@@ -272,8 +303,8 @@ struct VectorInsertStridedSliceOpConvert final
   }
 };
 
-template <class SPVFMaxOp, class SPVFMinOp, class SPVUMaxOp, class SPVUMinOp,
-          class SPVSMaxOp, class SPVSMinOp>
+template <class SPIRVFMaxOp, class SPIRVFMinOp, class SPIRVUMaxOp,
+          class SPIRVUMinOp, class SPIRVSMaxOp, class SPIRVSMinOp>
 struct VectorReductionPattern final
     : public OpConversionPattern<vector::ReductionOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -304,7 +335,7 @@ struct VectorReductionPattern final
 
     // Reduce them.
     Value result = values.front();
-    for (Value next : llvm::makeArrayRef(values).drop_front()) {
+    for (Value next : llvm::ArrayRef(values).drop_front()) {
       switch (reduceOp.getKind()) {
 
 #define INT_AND_FLOAT_CASE(kind, iop, fop)                                     \
@@ -325,12 +356,12 @@ struct VectorReductionPattern final
         INT_AND_FLOAT_CASE(ADD, IAddOp, FAddOp);
         INT_AND_FLOAT_CASE(MUL, IMulOp, FMulOp);
 
-        INT_OR_FLOAT_CASE(MAXF, SPVFMaxOp);
-        INT_OR_FLOAT_CASE(MINF, SPVFMinOp);
-        INT_OR_FLOAT_CASE(MINUI, SPVUMinOp);
-        INT_OR_FLOAT_CASE(MINSI, SPVSMinOp);
-        INT_OR_FLOAT_CASE(MAXUI, SPVUMaxOp);
-        INT_OR_FLOAT_CASE(MAXSI, SPVSMaxOp);
+        INT_OR_FLOAT_CASE(MAXF, SPIRVFMaxOp);
+        INT_OR_FLOAT_CASE(MINF, SPIRVFMinOp);
+        INT_OR_FLOAT_CASE(MINUI, SPIRVUMinOp);
+        INT_OR_FLOAT_CASE(MINSI, SPIRVSMinOp);
+        INT_OR_FLOAT_CASE(MAXUI, SPIRVUMaxOp);
+        INT_OR_FLOAT_CASE(MAXSI, SPIRVSMaxOp);
 
       case vector::CombiningKind::AND:
       case vector::CombiningKind::OR:

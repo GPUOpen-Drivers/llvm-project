@@ -29,7 +29,6 @@
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/FoldingSet.h"
-#include "llvm/ADT/None.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -41,6 +40,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 using namespace clang;
 
@@ -161,8 +161,9 @@ static bool needsAmpersandOnTemplateArg(QualType paramType, QualType argType) {
 //===----------------------------------------------------------------------===//
 
 TemplateArgument::TemplateArgument(ASTContext &Ctx, const llvm::APSInt &Value,
-                                   QualType Type) {
+                                   QualType Type, bool IsDefaulted) {
   Integer.Kind = Integral;
+  Integer.IsDefaulted = IsDefaulted;
   // Copy the APSInt value into our decomposed form.
   Integer.BitWidth = Value.getBitWidth();
   Integer.IsUnsigned = Value.isUnsigned();
@@ -271,12 +272,12 @@ bool TemplateArgument::containsUnexpandedParameterPack() const {
   return getDependence() & TemplateArgumentDependence::UnexpandedPack;
 }
 
-Optional<unsigned> TemplateArgument::getNumTemplateExpansions() const {
+std::optional<unsigned> TemplateArgument::getNumTemplateExpansions() const {
   assert(getKind() == TemplateExpansion);
   if (TemplateArg.NumExpansions)
     return TemplateArg.NumExpansions - 1;
 
-  return None;
+  return std::nullopt;
 }
 
 QualType TemplateArgument::getNonTypeTemplateArgumentType() const {
@@ -363,7 +364,8 @@ bool TemplateArgument::structurallyEquals(const TemplateArgument &Other) const {
            TemplateArg.NumExpansions == Other.TemplateArg.NumExpansions;
 
   case Declaration:
-    return getAsDecl() == Other.getAsDecl();
+    return getAsDecl() == Other.getAsDecl() &&
+           getParamTypeForDecl() == Other.getParamTypeForDecl();
 
   case Integral:
     return getIntegralType() == Other.getIntegralType() &&
@@ -421,10 +423,10 @@ void TemplateArgument::print(const PrintingPolicy &Policy, raw_ostream &Out,
   }
 
   case Declaration: {
-    // FIXME: Include the type if it's not obvious from the context.
     NamedDecl *ND = getAsDecl();
     if (getParamTypeForDecl()->isRecordType()) {
       if (auto *TPO = dyn_cast<TemplateParamObjectDecl>(ND)) {
+        TPO->getType().getUnqualifiedType().print(Out, Policy);
         TPO->printAsInit(Out, Policy);
         break;
       }

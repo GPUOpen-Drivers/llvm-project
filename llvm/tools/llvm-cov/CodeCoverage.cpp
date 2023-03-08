@@ -23,6 +23,10 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/Debuginfod/BuildIDFetcher.h"
+#include "llvm/Debuginfod/Debuginfod.h"
+#include "llvm/Debuginfod/HTTPClient.h"
+#include "llvm/Object/BuildID.h"
 #include "llvm/ProfileData/Coverage/CoverageMapping.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/Support/CommandLine.h"
@@ -41,6 +45,7 @@
 
 #include <functional>
 #include <map>
+#include <optional>
 #include <system_error>
 
 using namespace llvm;
@@ -84,7 +89,7 @@ private:
   bool isEquivalentFile(StringRef FilePath1, StringRef FilePath2);
 
   /// Retrieve a file status with a cache.
-  Optional<sys::fs::file_status> getFileStatus(StringRef FilePath);
+  std::optional<sys::fs::file_status> getFileStatus(StringRef FilePath);
 
   /// Return a memory buffer for the given source file.
   ErrorOr<const MemoryBuffer &> getSourceFile(StringRef SourceFile);
@@ -157,10 +162,10 @@ private:
 
   /// The coverage data path to be remapped from, and the source path to be
   /// remapped to, when using -path-equivalence.
-  Optional<std::pair<std::string, std::string>> PathRemapping;
+  std::optional<std::pair<std::string, std::string>> PathRemapping;
 
   /// File status cache used when finding the same file.
-  StringMap<Optional<sys::fs::file_status>> FileStatusCache;
+  StringMap<std::optional<sys::fs::file_status>> FileStatusCache;
 
   /// The architecture the coverage mapping data targets.
   std::vector<StringRef> CoverageArches;
@@ -178,6 +183,8 @@ private:
 
   /// Allowlist from -name-allowlist to be used for filtering.
   std::unique_ptr<SpecialCaseList> NameAllowlist;
+
+  std::unique_ptr<object::BuildIDFetcher> BIDFetcher;
 };
 }
 
@@ -248,7 +255,7 @@ void CodeCoverageTool::collectPaths(const std::string &Path) {
   }
 }
 
-Optional<sys::fs::file_status>
+std::optional<sys::fs::file_status>
 CodeCoverageTool::getFileStatus(StringRef FilePath) {
   auto It = FileStatusCache.try_emplace(FilePath);
   auto &CachedStatus = It.first->getValue();
@@ -432,9 +439,10 @@ std::unique_ptr<CoverageMapping> CodeCoverageTool::load() {
     if (modifiedTimeGT(ObjectFilename, PGOFilename))
       warning("profile data may be out of date - object is newer",
               ObjectFilename);
+  auto FS = vfs::getRealFileSystem();
   auto CoverageOrErr =
-      CoverageMapping::load(ObjectFilenames, PGOFilename, CoverageArches,
-                            ViewOpts.CompilationDirectory);
+      CoverageMapping::load(ObjectFilenames, PGOFilename, *FS, CoverageArches,
+                            ViewOpts.CompilationDirectory, BIDFetcher.get());
   if (Error E = CoverageOrErr.takeError()) {
     error("Failed to load coverage: " + toString(std::move(E)));
     return nullptr;
@@ -553,13 +561,16 @@ void CodeCoverageTool::demangleSymbols(const CoverageMapping &Coverage) {
 
   // Invoke the demangler.
   std::vector<StringRef> ArgsV;
+  ArgsV.reserve(ViewOpts.DemanglerOpts.size());
   for (StringRef Arg : ViewOpts.DemanglerOpts)
     ArgsV.push_back(Arg);
-  Optional<StringRef> Redirects[] = {InputPath.str(), OutputPath.str(), {""}};
+  std::optional<StringRef> Redirects[] = {
+      InputPath.str(), OutputPath.str(), {""}};
   std::string ErrMsg;
-  int RC = sys::ExecuteAndWait(ViewOpts.DemanglerOpts[0], ArgsV,
-                               /*env=*/None, Redirects, /*secondsToWait=*/0,
-                               /*memoryLimit=*/0, &ErrMsg);
+  int RC =
+      sys::ExecuteAndWait(ViewOpts.DemanglerOpts[0], ArgsV,
+                          /*env=*/std::nullopt, Redirects, /*secondsToWait=*/0,
+                          /*memoryLimit=*/0, &ErrMsg);
   if (RC) {
     error(ErrMsg, ViewOpts.DemanglerOpts[0]);
     return;
@@ -642,6 +653,14 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
 
   cl::opt<bool> DebugDump("dump", cl::Optional,
                           cl::desc("Show internal debug dump"));
+
+  cl::list<std::string> DebugFileDirectory(
+      "debug-file-directory",
+      cl::desc("Directories to search for object files by build ID"));
+  cl::opt<bool> Debuginfod(
+      "debuginfod", cl::ZeroOrMore,
+      cl::desc("Use debuginfod to look up object files from profile"),
+      cl::init(canUseDebuginfod()));
 
   cl::opt<CoverageViewOptions::OutputFormat> Format(
       "format", cl::desc("Output format for line-based coverage reports"),
@@ -745,12 +764,18 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
   auto commandLineParser = [&, this](int argc, const char **argv) -> int {
     cl::ParseCommandLineOptions(argc, argv, "LLVM code coverage tool\n");
     ViewOpts.Debug = DebugDump;
+    if (Debuginfod) {
+      HTTPClient::initialize();
+      BIDFetcher = std::make_unique<DebuginfodFetcher>(DebugFileDirectory);
+    } else {
+      BIDFetcher = std::make_unique<object::BuildIDFetcher>(DebugFileDirectory);
+    }
 
     if (!CovFilename.empty())
       ObjectFilenames.emplace_back(CovFilename);
     for (const std::string &Filename : CovFilenames)
       ObjectFilenames.emplace_back(Filename);
-    if (ObjectFilenames.empty()) {
+    if (ObjectFilenames.empty() && !Debuginfod && DebugFileDirectory.empty()) {
       errs() << "No filenames specified!\n";
       ::exit(1);
     }
@@ -863,10 +888,8 @@ int CodeCoverageTool::run(Command Cmd, int argc, const char **argv) {
         }
         CoverageArches.emplace_back(Arch);
       }
-      if (CoverageArches.size() == 1)
-        CoverageArches.insert(CoverageArches.end(), ObjectFilenames.size() - 1,
-                              CoverageArches[0]);
-      if (CoverageArches.size() != ObjectFilenames.size()) {
+      if (CoverageArches.size() != 1 &&
+          CoverageArches.size() != ObjectFilenames.size()) {
         error("Number of architectures doesn't match the number of objects");
         return 1;
       }
@@ -1072,7 +1095,7 @@ int CodeCoverageTool::doShow(int argc, const char **argv,
         FilenameFunctionMap;
     for (const auto &SourceFile : SourceFiles)
       for (const auto &Function : Coverage->getCoveredFunctions(SourceFile))
-        if (Filters.matches(*Coverage.get(), Function))
+        if (Filters.matches(*Coverage, Function))
           FilenameFunctionMap[SourceFile].push_back(&Function);
 
     // Only print filter matching functions for each file.
@@ -1161,7 +1184,7 @@ int CodeCoverageTool::doReport(int argc, const char **argv,
   if (!Coverage)
     return 1;
 
-  CoverageReport Report(ViewOpts, *Coverage.get());
+  CoverageReport Report(ViewOpts, *Coverage);
   if (!ShowFunctionSummaries) {
     if (SourceFiles.empty())
       Report.renderFileReports(llvm::outs(), IgnoreFilenameFilters);
@@ -1192,12 +1215,17 @@ int CodeCoverageTool::doExport(int argc, const char **argv,
                               cl::desc("Don't export per-function data"),
                               cl::cat(ExportCategory));
 
+  cl::opt<bool> SkipBranches("skip-branches", cl::Optional,
+                              cl::desc("Don't export branch data (LCOV)"),
+                              cl::cat(ExportCategory));
+
   auto Err = commandLineParser(argc, argv);
   if (Err)
     return Err;
 
   ViewOpts.SkipExpansions = SkipExpansions;
   ViewOpts.SkipFunctions = SkipFunctions;
+  ViewOpts.SkipBranches = SkipBranches;
 
   if (ViewOpts.Format != CoverageViewOptions::OutputFormat::Text &&
       ViewOpts.Format != CoverageViewOptions::OutputFormat::Lcov) {
@@ -1222,16 +1250,16 @@ int CodeCoverageTool::doExport(int argc, const char **argv,
 
   switch (ViewOpts.Format) {
   case CoverageViewOptions::OutputFormat::Text:
-    Exporter = std::make_unique<CoverageExporterJson>(*Coverage.get(),
-                                                       ViewOpts, outs());
+    Exporter =
+        std::make_unique<CoverageExporterJson>(*Coverage, ViewOpts, outs());
     break;
   case CoverageViewOptions::OutputFormat::HTML:
     // Unreachable because we should have gracefully terminated with an error
     // above.
     llvm_unreachable("Export in HTML is not supported!");
   case CoverageViewOptions::OutputFormat::Lcov:
-    Exporter = std::make_unique<CoverageExporterLcov>(*Coverage.get(),
-                                                       ViewOpts, outs());
+    Exporter =
+        std::make_unique<CoverageExporterLcov>(*Coverage, ViewOpts, outs());
     break;
   }
 

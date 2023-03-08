@@ -64,11 +64,14 @@ enum ID {
 #undef OPTION
 };
 
-#define PREFIX(NAME, VALUE) const char *const NAME[] = VALUE;
+#define PREFIX(NAME, VALUE)                                                    \
+  static constexpr StringLiteral NAME##_init[] = VALUE;                        \
+  static constexpr ArrayRef<StringLiteral> NAME(NAME##_init,                   \
+                                                std::size(NAME##_init) - 1);
 #include "Opts.inc"
 #undef PREFIX
 
-const opt::OptTable::Info InfoTable[] = {
+static constexpr opt::OptTable::Info InfoTable[] = {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
   {                                                                            \
@@ -80,9 +83,11 @@ const opt::OptTable::Info InfoTable[] = {
 #undef OPTION
 };
 
-class NmOptTable : public opt::OptTable {
+class NmOptTable : public opt::GenericOptTable {
 public:
-  NmOptTable() : OptTable(InfoTable) { setGroupedShortOptions(true); }
+  NmOptTable() : opt::GenericOptTable(InfoTable) {
+    setGroupedShortOptions(true);
+  }
 };
 
 enum OutputFormatTy { bsd, sysv, posix, darwin, just_symbols };
@@ -287,22 +292,6 @@ bool operator==(const NMSymbol &A, const NMSymbol &B) {
   return !(A < B) && !(B < A);
 }
 } // anonymous namespace
-
-static char isSymbolList64Bit(SymbolicFile &Obj) {
-  if (auto *IRObj = dyn_cast<IRObjectFile>(&Obj))
-    return Triple(IRObj->getTargetTriple()).isArch64Bit();
-  if (isa<COFFObjectFile>(Obj) || isa<COFFImportFile>(Obj))
-    return false;
-  if (XCOFFObjectFile *XCOFFObj = dyn_cast<XCOFFObjectFile>(&Obj))
-    return XCOFFObj->is64Bit();
-  if (isa<WasmObjectFile>(Obj))
-    return false;
-  if (TapiFile *Tapi = dyn_cast<TapiFile>(&Obj))
-    return Tapi->is64Bit();
-  if (MachOObjectFile *MachO = dyn_cast<MachOObjectFile>(&Obj))
-    return MachO->is64Bit();
-  return cast<ELFObjectFileBase>(Obj).getBytesInAddress() == 8;
-}
 
 static StringRef CurrentFilename;
 
@@ -613,7 +602,7 @@ const struct DarwinStabName DarwinStabNames[] = {
 };
 
 static const char *getDarwinStabString(uint8_t NType) {
-  for (auto I : makeArrayRef(DarwinStabNames))
+  for (auto I : ArrayRef(DarwinStabNames))
     if (I.NType == NType)
       return I.Name;
   return nullptr;
@@ -647,25 +636,25 @@ static void darwinPrintStab(MachOObjectFile *MachO, const NMSymbol &S) {
     outs() << format("   %02x", NType);
 }
 
-static Optional<std::string> demangle(StringRef Name) {
+static std::optional<std::string> demangle(StringRef Name) {
   std::string Demangled;
   if (nonMicrosoftDemangle(Name.str().c_str(), Demangled))
     return Demangled;
-  return None;
+  return std::nullopt;
 }
 
-static Optional<std::string> demangleXCOFF(StringRef Name) {
+static std::optional<std::string> demangleXCOFF(StringRef Name) {
   if (Name.empty() || Name[0] != '.')
     return demangle(Name);
 
   Name = Name.drop_front();
-  Optional<std::string> DemangledName = demangle(Name);
+  std::optional<std::string> DemangledName = demangle(Name);
   if (DemangledName)
     return "." + *DemangledName;
-  return None;
+  return std::nullopt;
 }
 
-static Optional<std::string> demangleMachO(StringRef Name) {
+static std::optional<std::string> demangleMachO(StringRef Name) {
   if (!Name.empty() && Name[0] == '_')
     Name = Name.drop_front();
   return demangle(Name);
@@ -717,7 +706,7 @@ static void printSymbolList(SymbolicFile &Obj,
       outs() << '\n' << CurrentFilename << ":\n";
     } else if (OutputFormat == sysv) {
       outs() << "\n\nSymbols from " << CurrentFilename << ":\n\n";
-      if (isSymbolList64Bit(Obj))
+      if (Obj.is64Bit())
         outs() << "Name                  Value           Class        Type"
                << "         Size             Line  Section\n";
       else
@@ -727,7 +716,7 @@ static void printSymbolList(SymbolicFile &Obj,
   }
 
   const char *printBlanks, *printDashes, *printFormat;
-  if (isSymbolList64Bit(Obj)) {
+  if (Obj.is64Bit()) {
     printBlanks = "                ";
     printDashes = "----------------";
     switch (AddressRadix) {
@@ -762,12 +751,12 @@ static void printSymbolList(SymbolicFile &Obj,
     std::string Name = S.Name;
     MachOObjectFile *MachO = dyn_cast<MachOObjectFile>(&Obj);
     if (Demangle) {
-      function_ref<Optional<std::string>(StringRef)> Fn = ::demangle;
+      function_ref<std::optional<std::string>(StringRef)> Fn = ::demangle;
       if (Obj.isXCOFF())
         Fn = demangleXCOFF;
       if (Obj.isMachO())
         Fn = demangleMachO;
-      if (Optional<std::string> Opt = Fn(S.Name))
+      if (std::optional<std::string> Opt = Fn(S.Name))
         Name = *Opt;
     }
 
@@ -1666,8 +1655,8 @@ static bool shouldDump(SymbolicFile &Obj) {
       !isa<IRObjectFile>(Obj))
     return true;
 
-  return isSymbolList64Bit(Obj) ? BitMode != BitModeTy::Bit32
-                                : BitMode != BitModeTy::Bit64;
+  return Obj.is64Bit() ? BitMode != BitModeTy::Bit32
+                       : BitMode != BitModeTy::Bit64;
 }
 
 static void getXCOFFExports(XCOFFObjectFile *XCOFFObj,
@@ -2297,7 +2286,7 @@ exportSymbolNamesFromFiles(const std::vector<std::string> &InputFilenames) {
   printExportSymbolList(SymbolList);
 }
 
-int main(int argc, char **argv) {
+int llvm_nm_main(int argc, char **argv) {
   InitLLVM X(argc, argv);
   BumpPtrAllocator A;
   StringSaver Saver(A);
@@ -2474,4 +2463,5 @@ int main(int argc, char **argv) {
 
   if (HadError)
     return 1;
+  return 0;
 }

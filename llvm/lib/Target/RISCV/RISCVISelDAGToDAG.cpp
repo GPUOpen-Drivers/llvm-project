@@ -19,13 +19,14 @@
 #include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "riscv-isel"
+#define PASS_NAME "RISCV DAG->DAG Pattern Instruction Selection"
 
 namespace llvm::RISCV {
 #define GET_RISCVVSSEGTable_IMPL
@@ -171,25 +172,25 @@ void RISCVDAGToDAGISel::PostprocessISelDAG() {
     CurDAG->RemoveDeadNodes();
 }
 
-static SDNode *selectImmSeq(SelectionDAG *CurDAG, const SDLoc &DL, const MVT VT,
+static SDValue selectImmSeq(SelectionDAG *CurDAG, const SDLoc &DL, const MVT VT,
                             RISCVMatInt::InstSeq &Seq) {
-  SDNode *Result = nullptr;
   SDValue SrcReg = CurDAG->getRegister(RISCV::X0, VT);
   for (RISCVMatInt::Inst &Inst : Seq) {
-    SDValue SDImm = CurDAG->getTargetConstant(Inst.Imm, DL, VT);
+    SDValue SDImm = CurDAG->getTargetConstant(Inst.getImm(), DL, VT);
+    SDNode *Result = nullptr;
     switch (Inst.getOpndKind()) {
     case RISCVMatInt::Imm:
-      Result = CurDAG->getMachineNode(Inst.Opc, DL, VT, SDImm);
+      Result = CurDAG->getMachineNode(Inst.getOpcode(), DL, VT, SDImm);
       break;
     case RISCVMatInt::RegX0:
-      Result = CurDAG->getMachineNode(Inst.Opc, DL, VT, SrcReg,
+      Result = CurDAG->getMachineNode(Inst.getOpcode(), DL, VT, SrcReg,
                                       CurDAG->getRegister(RISCV::X0, VT));
       break;
     case RISCVMatInt::RegReg:
-      Result = CurDAG->getMachineNode(Inst.Opc, DL, VT, SrcReg, SrcReg);
+      Result = CurDAG->getMachineNode(Inst.getOpcode(), DL, VT, SrcReg, SrcReg);
       break;
     case RISCVMatInt::RegImm:
-      Result = CurDAG->getMachineNode(Inst.Opc, DL, VT, SrcReg, SDImm);
+      Result = CurDAG->getMachineNode(Inst.getOpcode(), DL, VT, SrcReg, SDImm);
       break;
     }
 
@@ -197,10 +198,10 @@ static SDNode *selectImmSeq(SelectionDAG *CurDAG, const SDLoc &DL, const MVT VT,
     SrcReg = SDValue(Result, 0);
   }
 
-  return Result;
+  return SrcReg;
 }
 
-static SDNode *selectImm(SelectionDAG *CurDAG, const SDLoc &DL, const MVT VT,
+static SDValue selectImm(SelectionDAG *CurDAG, const SDLoc &DL, const MVT VT,
                          int64_t Imm, const RISCVSubtarget &Subtarget) {
   RISCVMatInt::InstSeq Seq =
       RISCVMatInt::generateInstSeq(Imm, Subtarget.getFeatureBits());
@@ -541,13 +542,10 @@ void RISCVDAGToDAGISel::selectVSETVLI(SDNode *Node) {
   unsigned IntNo = Node->getConstantOperandVal(IntNoOffset);
 
   assert((IntNo == Intrinsic::riscv_vsetvli ||
-          IntNo == Intrinsic::riscv_vsetvlimax ||
-          IntNo == Intrinsic::riscv_vsetvli_opt ||
-          IntNo == Intrinsic::riscv_vsetvlimax_opt) &&
+          IntNo == Intrinsic::riscv_vsetvlimax) &&
          "Unexpected vsetvli intrinsic");
 
-  bool VLMax = IntNo == Intrinsic::riscv_vsetvlimax ||
-               IntNo == Intrinsic::riscv_vsetvlimax_opt;
+  bool VLMax = IntNo == Intrinsic::riscv_vsetvlimax;
   unsigned Offset = IntNoOffset + (VLMax ? 1 : 2);
 
   assert(Node->getNumOperands() == Offset + 2 &&
@@ -690,10 +688,11 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
 
   switch (Opcode) {
   case ISD::Constant: {
+    assert(VT == Subtarget->getXLenVT() && "Unexpected VT");
     auto *ConstNode = cast<ConstantSDNode>(Node);
-    if (VT == XLenVT && ConstNode->isZero()) {
+    if (ConstNode->isZero()) {
       SDValue New =
-          CurDAG->getCopyFromReg(CurDAG->getEntryNode(), DL, RISCV::X0, XLenVT);
+          CurDAG->getCopyFromReg(CurDAG->getEntryNode(), DL, RISCV::X0, VT);
       ReplaceNode(Node, New.getNode());
       return;
     }
@@ -708,7 +707,47 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     if (!isInt<32>(Imm) && isUInt<32>(Imm) && hasAllWUsers(Node))
       Imm = SignExtend64<32>(Imm);
 
-    ReplaceNode(Node, selectImm(CurDAG, DL, VT, Imm, *Subtarget));
+    ReplaceNode(Node, selectImm(CurDAG, DL, VT, Imm, *Subtarget).getNode());
+    return;
+  }
+  case ISD::ConstantFP: {
+    const APFloat &APF = cast<ConstantFPSDNode>(Node)->getValueAPF();
+    bool NegZeroF64 = APF.isNegZero() && VT == MVT::f64;
+    SDValue Imm;
+    // For +0.0 or f64 -0.0 we need to start from X0. For all others, we will
+    // create an integer immediate.
+    if (APF.isPosZero() || NegZeroF64)
+      Imm = CurDAG->getRegister(RISCV::X0, XLenVT);
+    else
+      Imm = selectImm(CurDAG, DL, XLenVT, APF.bitcastToAPInt().getSExtValue(),
+                      *Subtarget);
+
+    unsigned Opc;
+    switch (VT.SimpleTy) {
+    default:
+      llvm_unreachable("Unexpected size");
+    case MVT::f16:
+      Opc = RISCV::FMV_H_X;
+      break;
+    case MVT::f32:
+      Opc = RISCV::FMV_W_X;
+      break;
+    case MVT::f64:
+      // For RV32, we can't move from a GPR, we need to convert instead. This
+      // should only happen for +0.0 and -0.0.
+      assert((Subtarget->is64Bit() || APF.isZero()) && "Unexpected constant");
+      Opc = Subtarget->is64Bit() ? RISCV::FMV_D_X : RISCV::FCVT_D_W;
+      break;
+    }
+
+    SDNode *Res = CurDAG->getMachineNode(Opc, DL, VT, Imm);
+
+    // For f64 -0.0, we need to insert a fneg.d idiom.
+    if (NegZeroF64)
+      Res = CurDAG->getMachineNode(RISCV::FSGNJN_D, DL, VT, SDValue(Res, 0),
+                                   SDValue(Res, 0));
+
+    ReplaceNode(Node, Res);
     return;
   }
   case ISD::SHL: {
@@ -726,8 +765,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     // 32 leading zeros and C3 trailing zeros.
     if (ShAmt <= 32 && isShiftedMask_64(Mask)) {
       unsigned XLen = Subtarget->getXLen();
-      unsigned LeadingZeros = XLen - (64 - countLeadingZeros(Mask));
-      unsigned TrailingZeros = countTrailingZeros(Mask);
+      unsigned LeadingZeros = XLen - llvm::bit_width(Mask);
+      unsigned TrailingZeros = llvm::countr_zero(Mask);
       if (TrailingZeros > 0 && LeadingZeros == 32) {
         SDNode *SRLIW = CurDAG->getMachineNode(
             RISCV::SRLIW, DL, VT, N0->getOperand(0),
@@ -755,8 +794,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     // 32 leading zeros and C3 trailing zeros.
     if (isShiftedMask_64(Mask) && N0.hasOneUse()) {
       unsigned XLen = Subtarget->getXLen();
-      unsigned LeadingZeros = XLen - (64 - countLeadingZeros(Mask));
-      unsigned TrailingZeros = countTrailingZeros(Mask);
+      unsigned LeadingZeros = XLen - llvm::bit_width(Mask);
+      unsigned TrailingZeros = llvm::countr_zero(Mask);
       if (LeadingZeros == 32 && TrailingZeros > ShAmt) {
         SDNode *SRLIW = CurDAG->getMachineNode(
             RISCV::SRLIW, DL, VT, N0->getOperand(0),
@@ -779,7 +818,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     Mask |= maskTrailingOnes<uint64_t>(ShAmt);
     if (!isMask_64(Mask))
       break;
-    unsigned TrailingOnes = countTrailingOnes(Mask);
+    unsigned TrailingOnes = llvm::countr_one(Mask);
     if (ShAmt >= TrailingOnes)
       break;
     // If the mask has 32 trailing ones, use SRLIW.
@@ -858,178 +897,181 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     SDValue N0 = Node->getOperand(0);
 
     bool LeftShift = N0.getOpcode() == ISD::SHL;
-    if (!LeftShift && N0.getOpcode() != ISD::SRL)
-      break;
+    if (LeftShift || N0.getOpcode() == ISD::SRL) {
+      auto *C = dyn_cast<ConstantSDNode>(N0.getOperand(1));
+      if (!C)
+        break;
+      unsigned C2 = C->getZExtValue();
+      unsigned XLen = Subtarget->getXLen();
+      assert((C2 > 0 && C2 < XLen) && "Unexpected shift amount!");
 
-    auto *C = dyn_cast<ConstantSDNode>(N0.getOperand(1));
-    if (!C)
-      break;
-    unsigned C2 = C->getZExtValue();
-    unsigned XLen = Subtarget->getXLen();
-    assert((C2 > 0 && C2 < XLen) && "Unexpected shift amount!");
+      uint64_t C1 = N1C->getZExtValue();
 
-    uint64_t C1 = N1C->getZExtValue();
+      // Keep track of whether this is a c.andi. If we can't use c.andi, the
+      // shift pair might offer more compression opportunities.
+      // TODO: We could check for C extension here, but we don't have many lit
+      // tests with the C extension enabled so not checking gets better
+      // coverage.
+      // TODO: What if ANDI faster than shift?
+      bool IsCANDI = isInt<6>(N1C->getSExtValue());
 
-    // Keep track of whether this is a c.andi. If we can't use c.andi, the
-    // shift pair might offer more compression opportunities.
-    // TODO: We could check for C extension here, but we don't have many lit
-    // tests with the C extension enabled so not checking gets better coverage.
-    // TODO: What if ANDI faster than shift?
-    bool IsCANDI = isInt<6>(N1C->getSExtValue());
+      // Clear irrelevant bits in the mask.
+      if (LeftShift)
+        C1 &= maskTrailingZeros<uint64_t>(C2);
+      else
+        C1 &= maskTrailingOnes<uint64_t>(XLen - C2);
 
-    // Clear irrelevant bits in the mask.
-    if (LeftShift)
-      C1 &= maskTrailingZeros<uint64_t>(C2);
-    else
-      C1 &= maskTrailingOnes<uint64_t>(XLen - C2);
+      // Some transforms should only be done if the shift has a single use or
+      // the AND would become (srli (slli X, 32), 32)
+      bool OneUseOrZExtW = N0.hasOneUse() || C1 == UINT64_C(0xFFFFFFFF);
 
-    // Some transforms should only be done if the shift has a single use or
-    // the AND would become (srli (slli X, 32), 32)
-    bool OneUseOrZExtW = N0.hasOneUse() || C1 == UINT64_C(0xFFFFFFFF);
+      SDValue X = N0.getOperand(0);
 
-    SDValue X = N0.getOperand(0);
+      // Turn (and (srl x, c2) c1) -> (srli (slli x, c3-c2), c3) if c1 is a mask
+      // with c3 leading zeros.
+      if (!LeftShift && isMask_64(C1)) {
+        unsigned Leading = XLen - llvm::bit_width(C1);
+        if (C2 < Leading) {
+          // If the number of leading zeros is C2+32 this can be SRLIW.
+          if (C2 + 32 == Leading) {
+            SDNode *SRLIW = CurDAG->getMachineNode(
+                RISCV::SRLIW, DL, VT, X, CurDAG->getTargetConstant(C2, DL, VT));
+            ReplaceNode(Node, SRLIW);
+            return;
+          }
 
-    // Turn (and (srl x, c2) c1) -> (srli (slli x, c3-c2), c3) if c1 is a mask
-    // with c3 leading zeros.
-    if (!LeftShift && isMask_64(C1)) {
-      unsigned Leading = XLen - (64 - countLeadingZeros(C1));
-      if (C2 < Leading) {
-        // If the number of leading zeros is C2+32 this can be SRLIW.
-        if (C2 + 32 == Leading) {
-          SDNode *SRLIW = CurDAG->getMachineNode(
-              RISCV::SRLIW, DL, VT, X, CurDAG->getTargetConstant(C2, DL, VT));
-          ReplaceNode(Node, SRLIW);
-          return;
+          // (and (srl (sexti32 Y), c2), c1) -> (srliw (sraiw Y, 31), c3 - 32)
+          // if c1 is a mask with c3 leading zeros and c2 >= 32 and c3-c2==1.
+          //
+          // This pattern occurs when (i32 (srl (sra 31), c3 - 32)) is type
+          // legalized and goes through DAG combine.
+          if (C2 >= 32 && (Leading - C2) == 1 && N0.hasOneUse() &&
+              X.getOpcode() == ISD::SIGN_EXTEND_INREG &&
+              cast<VTSDNode>(X.getOperand(1))->getVT() == MVT::i32) {
+            SDNode *SRAIW =
+                CurDAG->getMachineNode(RISCV::SRAIW, DL, VT, X.getOperand(0),
+                                       CurDAG->getTargetConstant(31, DL, VT));
+            SDNode *SRLIW = CurDAG->getMachineNode(
+                RISCV::SRLIW, DL, VT, SDValue(SRAIW, 0),
+                CurDAG->getTargetConstant(Leading - 32, DL, VT));
+            ReplaceNode(Node, SRLIW);
+            return;
+          }
+
+          // (srli (slli x, c3-c2), c3).
+          // Skip if we could use (zext.w (sraiw X, C2)).
+          bool Skip = Subtarget->hasStdExtZba() && Leading == 32 &&
+                      X.getOpcode() == ISD::SIGN_EXTEND_INREG &&
+                      cast<VTSDNode>(X.getOperand(1))->getVT() == MVT::i32;
+          // Also Skip if we can use bexti.
+          Skip |= Subtarget->hasStdExtZbs() && Leading == XLen - 1;
+          if (OneUseOrZExtW && !Skip) {
+            SDNode *SLLI = CurDAG->getMachineNode(
+                RISCV::SLLI, DL, VT, X,
+                CurDAG->getTargetConstant(Leading - C2, DL, VT));
+            SDNode *SRLI = CurDAG->getMachineNode(
+                RISCV::SRLI, DL, VT, SDValue(SLLI, 0),
+                CurDAG->getTargetConstant(Leading, DL, VT));
+            ReplaceNode(Node, SRLI);
+            return;
+          }
         }
+      }
 
-        // (and (srl (sexti32 Y), c2), c1) -> (srliw (sraiw Y, 31), c3 - 32) if
-        // c1 is a mask with c3 leading zeros and c2 >= 32 and c3-c2==1.
-        //
-        // This pattern occurs when (i32 (srl (sra 31), c3 - 32)) is type
-        // legalized and goes through DAG combine.
-        if (C2 >= 32 && (Leading - C2) == 1 && N0.hasOneUse() &&
-            X.getOpcode() == ISD::SIGN_EXTEND_INREG &&
-            cast<VTSDNode>(X.getOperand(1))->getVT() == MVT::i32) {
-          SDNode *SRAIW =
-              CurDAG->getMachineNode(RISCV::SRAIW, DL, VT, X.getOperand(0),
-                                     CurDAG->getTargetConstant(31, DL, VT));
-          SDNode *SRLIW = CurDAG->getMachineNode(
-              RISCV::SRLIW, DL, VT, SDValue(SRAIW, 0),
-              CurDAG->getTargetConstant(Leading - 32, DL, VT));
-          ReplaceNode(Node, SRLIW);
-          return;
+      // Turn (and (shl x, c2), c1) -> (srli (slli c2+c3), c3) if c1 is a mask
+      // shifted by c2 bits with c3 leading zeros.
+      if (LeftShift && isShiftedMask_64(C1)) {
+        unsigned Leading = XLen - llvm::bit_width(C1);
+
+        if (C2 + Leading < XLen &&
+            C1 == (maskTrailingOnes<uint64_t>(XLen - (C2 + Leading)) << C2)) {
+          // Use slli.uw when possible.
+          if ((XLen - (C2 + Leading)) == 32 && Subtarget->hasStdExtZba()) {
+            SDNode *SLLI_UW =
+                CurDAG->getMachineNode(RISCV::SLLI_UW, DL, VT, X,
+                                       CurDAG->getTargetConstant(C2, DL, VT));
+            ReplaceNode(Node, SLLI_UW);
+            return;
+          }
+
+          // (srli (slli c2+c3), c3)
+          if (OneUseOrZExtW && !IsCANDI) {
+            SDNode *SLLI = CurDAG->getMachineNode(
+                RISCV::SLLI, DL, VT, X,
+                CurDAG->getTargetConstant(C2 + Leading, DL, VT));
+            SDNode *SRLI = CurDAG->getMachineNode(
+                RISCV::SRLI, DL, VT, SDValue(SLLI, 0),
+                CurDAG->getTargetConstant(Leading, DL, VT));
+            ReplaceNode(Node, SRLI);
+            return;
+          }
         }
+      }
 
-        // (srli (slli x, c3-c2), c3).
-        // Skip if we could use (zext.w (sraiw X, C2)).
-        bool Skip = Subtarget->hasStdExtZba() && Leading == 32 &&
-                    X.getOpcode() == ISD::SIGN_EXTEND_INREG &&
-                    cast<VTSDNode>(X.getOperand(1))->getVT() == MVT::i32;
-        // Also Skip if we can use bexti.
-        Skip |= Subtarget->hasStdExtZbs() && Leading == XLen - 1;
-        if (OneUseOrZExtW && !Skip) {
-          SDNode *SLLI = CurDAG->getMachineNode(
-              RISCV::SLLI, DL, VT, X,
-              CurDAG->getTargetConstant(Leading - C2, DL, VT));
+      // Turn (and (shr x, c2), c1) -> (slli (srli x, c2+c3), c3) if c1 is a
+      // shifted mask with c2 leading zeros and c3 trailing zeros.
+      if (!LeftShift && isShiftedMask_64(C1)) {
+        unsigned Leading = XLen - llvm::bit_width(C1);
+        unsigned Trailing = llvm::countr_zero(C1);
+        if (Leading == C2 && C2 + Trailing < XLen && OneUseOrZExtW &&
+            !IsCANDI) {
+          unsigned SrliOpc = RISCV::SRLI;
+          // If the input is zexti32 we should use SRLIW.
+          if (X.getOpcode() == ISD::AND &&
+              isa<ConstantSDNode>(X.getOperand(1)) &&
+              X.getConstantOperandVal(1) == UINT64_C(0xFFFFFFFF)) {
+            SrliOpc = RISCV::SRLIW;
+            X = X.getOperand(0);
+          }
           SDNode *SRLI = CurDAG->getMachineNode(
-              RISCV::SRLI, DL, VT, SDValue(SLLI, 0),
-              CurDAG->getTargetConstant(Leading, DL, VT));
-          ReplaceNode(Node, SRLI);
-          return;
-        }
-      }
-    }
-
-    // Turn (and (shl x, c2), c1) -> (srli (slli c2+c3), c3) if c1 is a mask
-    // shifted by c2 bits with c3 leading zeros.
-    if (LeftShift && isShiftedMask_64(C1)) {
-      unsigned Leading = XLen - (64 - countLeadingZeros(C1));
-
-      if (C2 + Leading < XLen &&
-          C1 == (maskTrailingOnes<uint64_t>(XLen - (C2 + Leading)) << C2)) {
-        // Use slli.uw when possible.
-        if ((XLen - (C2 + Leading)) == 32 && Subtarget->hasStdExtZba()) {
-          SDNode *SLLI_UW = CurDAG->getMachineNode(
-              RISCV::SLLI_UW, DL, VT, X, CurDAG->getTargetConstant(C2, DL, VT));
-          ReplaceNode(Node, SLLI_UW);
-          return;
-        }
-
-        // (srli (slli c2+c3), c3)
-        if (OneUseOrZExtW && !IsCANDI) {
+              SrliOpc, DL, VT, X,
+              CurDAG->getTargetConstant(C2 + Trailing, DL, VT));
           SDNode *SLLI = CurDAG->getMachineNode(
-              RISCV::SLLI, DL, VT, X,
-              CurDAG->getTargetConstant(C2 + Leading, DL, VT));
-          SDNode *SRLI = CurDAG->getMachineNode(
-              RISCV::SRLI, DL, VT, SDValue(SLLI, 0),
-              CurDAG->getTargetConstant(Leading, DL, VT));
-          ReplaceNode(Node, SRLI);
+              RISCV::SLLI, DL, VT, SDValue(SRLI, 0),
+              CurDAG->getTargetConstant(Trailing, DL, VT));
+          ReplaceNode(Node, SLLI);
+          return;
+        }
+        // If the leading zero count is C2+32, we can use SRLIW instead of SRLI.
+        if (Leading > 32 && (Leading - 32) == C2 && C2 + Trailing < 32 &&
+            OneUseOrZExtW && !IsCANDI) {
+          SDNode *SRLIW = CurDAG->getMachineNode(
+              RISCV::SRLIW, DL, VT, X,
+              CurDAG->getTargetConstant(C2 + Trailing, DL, VT));
+          SDNode *SLLI = CurDAG->getMachineNode(
+              RISCV::SLLI, DL, VT, SDValue(SRLIW, 0),
+              CurDAG->getTargetConstant(Trailing, DL, VT));
+          ReplaceNode(Node, SLLI);
           return;
         }
       }
-    }
 
-    // Turn (and (shr x, c2), c1) -> (slli (srli x, c2+c3), c3) if c1 is a
-    // shifted mask with c2 leading zeros and c3 trailing zeros.
-    if (!LeftShift && isShiftedMask_64(C1)) {
-      unsigned Leading = XLen - (64 - countLeadingZeros(C1));
-      unsigned Trailing = countTrailingZeros(C1);
-      if (Leading == C2 && C2 + Trailing < XLen && OneUseOrZExtW && !IsCANDI) {
-        unsigned SrliOpc = RISCV::SRLI;
-        // If the input is zexti32 we should use SRLIW.
-        if (X.getOpcode() == ISD::AND && isa<ConstantSDNode>(X.getOperand(1)) &&
-            X.getConstantOperandVal(1) == UINT64_C(0xFFFFFFFF)) {
-          SrliOpc = RISCV::SRLIW;
-          X = X.getOperand(0);
+      // Turn (and (shl x, c2), c1) -> (slli (srli x, c3-c2), c3) if c1 is a
+      // shifted mask with no leading zeros and c3 trailing zeros.
+      if (LeftShift && isShiftedMask_64(C1)) {
+        unsigned Leading = XLen - llvm::bit_width(C1);
+        unsigned Trailing = llvm::countr_zero(C1);
+        if (Leading == 0 && C2 < Trailing && OneUseOrZExtW && !IsCANDI) {
+          SDNode *SRLI = CurDAG->getMachineNode(
+              RISCV::SRLI, DL, VT, X,
+              CurDAG->getTargetConstant(Trailing - C2, DL, VT));
+          SDNode *SLLI = CurDAG->getMachineNode(
+              RISCV::SLLI, DL, VT, SDValue(SRLI, 0),
+              CurDAG->getTargetConstant(Trailing, DL, VT));
+          ReplaceNode(Node, SLLI);
+          return;
         }
-        SDNode *SRLI = CurDAG->getMachineNode(
-            SrliOpc, DL, VT, X,
-            CurDAG->getTargetConstant(C2 + Trailing, DL, VT));
-        SDNode *SLLI =
-            CurDAG->getMachineNode(RISCV::SLLI, DL, VT, SDValue(SRLI, 0),
-                                   CurDAG->getTargetConstant(Trailing, DL, VT));
-        ReplaceNode(Node, SLLI);
-        return;
-      }
-      // If the leading zero count is C2+32, we can use SRLIW instead of SRLI.
-      if (Leading > 32 && (Leading - 32) == C2 && C2 + Trailing < 32 &&
-          OneUseOrZExtW && !IsCANDI) {
-        SDNode *SRLIW = CurDAG->getMachineNode(
-            RISCV::SRLIW, DL, VT, X,
-            CurDAG->getTargetConstant(C2 + Trailing, DL, VT));
-        SDNode *SLLI =
-            CurDAG->getMachineNode(RISCV::SLLI, DL, VT, SDValue(SRLIW, 0),
-                                   CurDAG->getTargetConstant(Trailing, DL, VT));
-        ReplaceNode(Node, SLLI);
-        return;
-      }
-    }
-
-    // Turn (and (shl x, c2), c1) -> (slli (srli x, c3-c2), c3) if c1 is a
-    // shifted mask with no leading zeros and c3 trailing zeros.
-    if (LeftShift && isShiftedMask_64(C1)) {
-      unsigned Leading = XLen - (64 - countLeadingZeros(C1));
-      unsigned Trailing = countTrailingZeros(C1);
-      if (Leading == 0 && C2 < Trailing && OneUseOrZExtW && !IsCANDI) {
-        SDNode *SRLI = CurDAG->getMachineNode(
-            RISCV::SRLI, DL, VT, X,
-            CurDAG->getTargetConstant(Trailing - C2, DL, VT));
-        SDNode *SLLI =
-            CurDAG->getMachineNode(RISCV::SLLI, DL, VT, SDValue(SRLI, 0),
-                                   CurDAG->getTargetConstant(Trailing, DL, VT));
-        ReplaceNode(Node, SLLI);
-        return;
-      }
-      // If we have (32-C2) leading zeros, we can use SRLIW instead of SRLI.
-      if (C2 < Trailing && Leading + C2 == 32 && OneUseOrZExtW && !IsCANDI) {
-        SDNode *SRLIW = CurDAG->getMachineNode(
-            RISCV::SRLIW, DL, VT, X,
-            CurDAG->getTargetConstant(Trailing - C2, DL, VT));
-        SDNode *SLLI =
-            CurDAG->getMachineNode(RISCV::SLLI, DL, VT, SDValue(SRLIW, 0),
-                                   CurDAG->getTargetConstant(Trailing, DL, VT));
-        ReplaceNode(Node, SLLI);
-        return;
+        // If we have (32-C2) leading zeros, we can use SRLIW instead of SRLI.
+        if (C2 < Trailing && Leading + C2 == 32 && OneUseOrZExtW && !IsCANDI) {
+          SDNode *SRLIW = CurDAG->getMachineNode(
+              RISCV::SRLIW, DL, VT, X,
+              CurDAG->getTargetConstant(Trailing - C2, DL, VT));
+          SDNode *SLLI = CurDAG->getMachineNode(
+              RISCV::SLLI, DL, VT, SDValue(SRLIW, 0),
+              CurDAG->getTargetConstant(Trailing, DL, VT));
+          ReplaceNode(Node, SLLI);
+          return;
+        }
       }
     }
 
@@ -1061,30 +1103,33 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     if (!isMask_64(C2))
       break;
 
-    // If this can be an ANDI, ZEXT.H or ZEXT.W, don't do this if the ANDI/ZEXT
-    // has multiple users or the constant is a simm12. This prevents inserting
-    // a shift and still have uses of the AND/ZEXT. Shifting a simm12 will
-    // likely make it more costly to materialize. Otherwise, using a SLLI
-    // might allow it to be compressed.
+    // If this can be an ANDI or ZEXT.H, don't do this if the ANDI/ZEXT has
+    // multiple users or the constant is a simm12. This prevents inserting a
+    // shift and still have uses of the AND/ZEXT. Shifting a simm12 will likely
+    // make it more costly to materialize. Otherwise, using a SLLI might allow
+    // it to be compressed.
     bool IsANDIOrZExt =
         isInt<12>(C2) ||
-        (C2 == UINT64_C(0xFFFF) &&
-         (Subtarget->hasStdExtZbb() || Subtarget->hasStdExtZbp())) ||
-        (C2 == UINT64_C(0xFFFFFFFF) && Subtarget->hasStdExtZba());
+        (C2 == UINT64_C(0xFFFF) && Subtarget->hasStdExtZbb());
     if (IsANDIOrZExt && (isInt<12>(N1C->getSExtValue()) || !N0.hasOneUse()))
+      break;
+    // If this can be a ZEXT.w, don't do this if the ZEXT has multiple users or
+    // the constant is a simm32.
+    bool IsZExtW = C2 == UINT64_C(0xFFFFFFFF) && Subtarget->hasStdExtZba();
+    if (IsZExtW && (isInt<32>(N1C->getSExtValue()) || !N0.hasOneUse()))
       break;
 
     // We need to shift left the AND input and C1 by a total of XLen bits.
 
     // How far left do we need to shift the AND input?
     unsigned XLen = Subtarget->getXLen();
-    unsigned LeadingZeros = XLen - (64 - countLeadingZeros(C2));
+    unsigned LeadingZeros = XLen - llvm::bit_width(C2);
 
     // The constant gets shifted by the remaining amount unless that would
     // shift bits out.
     uint64_t C1 = N1C->getZExtValue();
     unsigned ConstantShift = XLen - LeadingZeros;
-    if (ConstantShift > (XLen - (64 - countLeadingZeros(C1))))
+    if (ConstantShift > (XLen - llvm::bit_width(C1)))
       break;
 
     uint64_t ShiftedC1 = C1 << ConstantShift;
@@ -1093,7 +1138,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       ShiftedC1 = SignExtend64<32>(ShiftedC1);
 
     // Create (mulhu (slli X, lzcnt(C2)), C1 << (XLen - lzcnt(C2))).
-    SDNode *Imm = selectImm(CurDAG, DL, VT, ShiftedC1, *Subtarget);
+    SDNode *Imm = selectImm(CurDAG, DL, VT, ShiftedC1, *Subtarget).getNode();
     SDNode *SLLI =
         CurDAG->getMachineNode(RISCV::SLLI, DL, VT, N0.getOperand(0),
                                CurDAG->getTargetConstant(LeadingZeros, DL, VT));
@@ -1280,8 +1325,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
                                                {Cmp, Mask, VL, MaskSEW}));
       return;
     }
-    case Intrinsic::riscv_vsetvli_opt:
-    case Intrinsic::riscv_vsetvlimax_opt:
+    case Intrinsic::riscv_vsetvli:
+    case Intrinsic::riscv_vsetvlimax:
       return selectVSETVLI(Node);
     }
     break;
@@ -1292,9 +1337,6 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       // By default we do not custom select any intrinsic.
     default:
       break;
-    case Intrinsic::riscv_vsetvli:
-    case Intrinsic::riscv_vsetvlimax:
-      return selectVSETVLI(Node);
     case Intrinsic::riscv_vlseg2:
     case Intrinsic::riscv_vlseg3:
     case Intrinsic::riscv_vlseg4:
@@ -1784,18 +1826,20 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     ReplaceNode(Node, Extract.getNode());
     return;
   }
-  case ISD::SPLAT_VECTOR:
   case RISCVISD::VMV_S_X_VL:
   case RISCVISD::VFMV_S_F_VL:
   case RISCVISD::VMV_V_X_VL:
   case RISCVISD::VFMV_V_F_VL: {
+    // Only if we have optimized zero-stride vector load.
+    if (!Subtarget->hasOptimizedZeroStrideLoad())
+      break;
+
     // Try to match splat of a scalar load to a strided load with stride of x0.
     bool IsScalarMove = Node->getOpcode() == RISCVISD::VMV_S_X_VL ||
                         Node->getOpcode() == RISCVISD::VFMV_S_F_VL;
-    bool HasPassthruOperand = Node->getOpcode() != ISD::SPLAT_VECTOR;
-    if (HasPassthruOperand && !Node->getOperand(0).isUndef())
+    if (!Node->getOperand(0).isUndef())
       break;
-    SDValue Src = HasPassthruOperand ? Node->getOperand(1) : Node->getOperand(0);
+    SDValue Src = Node->getOperand(1);
     auto *Ld = dyn_cast<LoadSDNode>(Src);
     if (!Ld)
       break;
@@ -1808,9 +1852,7 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       break;
 
     SDValue VL;
-    if (Node->getOpcode() == ISD::SPLAT_VECTOR)
-      VL = CurDAG->getTargetConstant(RISCV::VLMaxSentinel, DL, XLenVT);
-    else if (IsScalarMove) {
+    if (IsScalarMove) {
       // We could deal with more VL if we update the VSETVLI insert pass to
       // avoid introducing more VSETVLI.
       if (!isOneConstant(Node->getOperand(2)))
@@ -1831,10 +1873,12 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
         /*IsMasked*/ false, /*IsTU*/ false, /*IsStrided*/ true, /*FF*/ false,
         Log2SEW, static_cast<unsigned>(LMUL));
     MachineSDNode *Load =
-        CurDAG->getMachineNode(P->Pseudo, DL, Node->getVTList(), Operands);
-
+        CurDAG->getMachineNode(P->Pseudo, DL, {VT, MVT::Other}, Operands);
+    // Update the chain.
+    ReplaceUses(Src.getValue(1), SDValue(Load, 1));
+    // Record the mem-refs
     CurDAG->setNodeMemRefs(Load, {Ld->getMemOperand()});
-
+    // Replace the splat with the vlse.
     ReplaceNode(Node, Load);
     return;
   }
@@ -1930,15 +1974,15 @@ static bool selectConstantAddr(SelectionDAG *CurDAG, const SDLoc &DL,
 
   // If the last instruction would be an ADDI, we can fold its immediate and
   // emit the rest of the sequence as the base.
-  if (Seq.back().Opc != RISCV::ADDI)
+  if (Seq.back().getOpcode() != RISCV::ADDI)
     return false;
-  Lo12 = Seq.back().Imm;
+  Lo12 = Seq.back().getImm();
 
   // Drop the last instruction.
   Seq.pop_back();
   assert(!Seq.empty() && "Expected more instructions in sequence");
 
-  Base = SDValue(selectImmSeq(CurDAG, DL, VT, Seq), 0);
+  Base = selectImmSeq(CurDAG, DL, VT, Seq);
   Offset = CurDAG->getTargetConstant(Lo12, DL, VT);
   return true;
 }
@@ -2059,11 +2103,13 @@ bool RISCVDAGToDAGISel::SelectAddrRegImm(SDValue Addr, SDValue &Base,
 
 bool RISCVDAGToDAGISel::selectShiftMask(SDValue N, unsigned ShiftWidth,
                                         SDValue &ShAmt) {
+  ShAmt = N;
+
   // Shift instructions on RISCV only read the lower 5 or 6 bits of the shift
   // amount. If there is an AND on the shift amount, we can bypass it if it
   // doesn't affect any of those bits.
-  if (N.getOpcode() == ISD::AND && isa<ConstantSDNode>(N.getOperand(1))) {
-    const APInt &AndMask = N->getConstantOperandAPInt(1);
+  if (ShAmt.getOpcode() == ISD::AND && isa<ConstantSDNode>(ShAmt.getOperand(1))) {
+    const APInt &AndMask = ShAmt.getConstantOperandAPInt(1);
 
     // Since the max shift amount is a power of 2 we can subtract 1 to make a
     // mask that covers the bits needed to represent all shift amounts.
@@ -2071,35 +2117,54 @@ bool RISCVDAGToDAGISel::selectShiftMask(SDValue N, unsigned ShiftWidth,
     APInt ShMask(AndMask.getBitWidth(), ShiftWidth - 1);
 
     if (ShMask.isSubsetOf(AndMask)) {
-      ShAmt = N.getOperand(0);
-      return true;
+      ShAmt = ShAmt.getOperand(0);
+    } else {
+      // SimplifyDemandedBits may have optimized the mask so try restoring any
+      // bits that are known zero.
+      KnownBits Known = CurDAG->computeKnownBits(ShAmt.getOperand(0));
+      if (!ShMask.isSubsetOf(AndMask | Known.Zero))
+        return true;
+      ShAmt = ShAmt.getOperand(0);
     }
+  }
 
-    // SimplifyDemandedBits may have optimized the mask so try restoring any
-    // bits that are known zero.
-    KnownBits Known = CurDAG->computeKnownBits(N->getOperand(0));
-    if (ShMask.isSubsetOf(AndMask | Known.Zero)) {
-      ShAmt = N.getOperand(0);
+  if (ShAmt.getOpcode() == ISD::ADD &&
+      isa<ConstantSDNode>(ShAmt.getOperand(1))) {
+    uint64_t Imm = ShAmt.getConstantOperandVal(1);
+    // If we are shifting by X+N where N == 0 mod Size, then just shift by X
+    // to avoid the ADD.
+    if (Imm != 0 && Imm % ShiftWidth == 0) {
+      ShAmt = ShAmt.getOperand(0);
       return true;
     }
-  } else if (N.getOpcode() == ISD::SUB &&
-             isa<ConstantSDNode>(N.getOperand(0))) {
-    uint64_t Imm = N.getConstantOperandVal(0);
+  } else if (ShAmt.getOpcode() == ISD::SUB &&
+             isa<ConstantSDNode>(ShAmt.getOperand(0))) {
+    uint64_t Imm = ShAmt.getConstantOperandVal(0);
     // If we are shifting by N-X where N == 0 mod Size, then just shift by -X to
     // generate a NEG instead of a SUB of a constant.
     if (Imm != 0 && Imm % ShiftWidth == 0) {
-      SDLoc DL(N);
-      EVT VT = N.getValueType();
+      SDLoc DL(ShAmt);
+      EVT VT = ShAmt.getValueType();
       SDValue Zero = CurDAG->getRegister(RISCV::X0, VT);
       unsigned NegOpc = VT == MVT::i64 ? RISCV::SUBW : RISCV::SUB;
       MachineSDNode *Neg = CurDAG->getMachineNode(NegOpc, DL, VT, Zero,
-                                                  N.getOperand(1));
+                                                  ShAmt.getOperand(1));
       ShAmt = SDValue(Neg, 0);
+      return true;
+    }
+    // If we are shifting by N-X where N == -1 mod Size, then just shift by ~X
+    // to generate a NOT instead of a SUB of a constant.
+    if (Imm % ShiftWidth == ShiftWidth - 1) {
+      SDLoc DL(ShAmt);
+      EVT VT = ShAmt.getValueType();
+      MachineSDNode *Not =
+          CurDAG->getMachineNode(RISCV::XORI, DL, VT, ShAmt.getOperand(1),
+                                 CurDAG->getTargetConstant(-1, DL, VT));
+      ShAmt = SDValue(Not, 0);
       return true;
     }
   }
 
-  ShAmt = N;
   return true;
 }
 
@@ -2118,16 +2183,16 @@ bool RISCVDAGToDAGISel::selectSExti32(SDValue N, SDValue &Val) {
   return false;
 }
 
-bool RISCVDAGToDAGISel::selectZExti32(SDValue N, SDValue &Val) {
+bool RISCVDAGToDAGISel::selectZExtBits(SDValue N, unsigned Bits, SDValue &Val) {
   if (N.getOpcode() == ISD::AND) {
     auto *C = dyn_cast<ConstantSDNode>(N.getOperand(1));
-    if (C && C->getZExtValue() == UINT64_C(0xFFFFFFFF)) {
+    if (C && C->getZExtValue() == maskTrailingOnes<uint64_t>(Bits)) {
       Val = N.getOperand(0);
       return true;
     }
   }
   MVT VT = N.getSimpleValueType();
-  APInt Mask = APInt::getHighBitsSet(VT.getSizeInBits(), 32);
+  APInt Mask = APInt::getBitsSetFrom(VT.getSizeInBits(), Bits);
   if (CurDAG->MaskedValueIsZero(N, Mask)) {
     Val = N;
     return true;
@@ -2160,8 +2225,8 @@ bool RISCVDAGToDAGISel::selectSHXADDOp(SDValue N, unsigned ShAmt,
       // leading zeros and c3 trailing zeros. We can use an SRLI by c2+c3
       // followed by a SHXADD with c3 for the X amount.
       if (isShiftedMask_64(Mask)) {
-        unsigned Leading = XLen - (64 - countLeadingZeros(Mask));
-        unsigned Trailing = countTrailingZeros(Mask);
+        unsigned Leading = XLen - llvm::bit_width(Mask);
+        unsigned Trailing = llvm::countr_zero(Mask);
         if (LeftShift && Leading == 0 && C2 < Trailing && Trailing == ShAmt) {
           SDLoc DL(N);
           EVT VT = N.getValueType();
@@ -2198,8 +2263,8 @@ bool RISCVDAGToDAGISel::selectSHXADDOp(SDValue N, unsigned ShAmt,
       if (isShiftedMask_64(Mask)) {
         unsigned C1 = N.getConstantOperandVal(1);
         unsigned XLen = Subtarget->getXLen();
-        unsigned Leading = XLen - (64 - countLeadingZeros(Mask));
-        unsigned Trailing = countTrailingZeros(Mask);
+        unsigned Leading = XLen - llvm::bit_width(Mask);
+        unsigned Trailing = llvm::countr_zero(Mask);
         // Look for (shl (and X, Mask), C1) where Mask has 32 leading zeros and
         // C3 trailing zeros. If C1+C3==ShAmt we can use SRLIW+SHXADD.
         if (LeftShift && Leading == 32 && Trailing > 0 &&
@@ -2231,6 +2296,43 @@ bool RISCVDAGToDAGISel::selectSHXADDOp(SDValue N, unsigned ShAmt,
   return false;
 }
 
+/// Look for various patterns that can be done with a SHL that can be folded
+/// into a SHXADD_UW. \p ShAmt contains 1, 2, or 3 and is set based on which
+/// SHXADD_UW we are trying to match.
+bool RISCVDAGToDAGISel::selectSHXADD_UWOp(SDValue N, unsigned ShAmt,
+                                          SDValue &Val) {
+  if (N.getOpcode() == ISD::AND && isa<ConstantSDNode>(N.getOperand(1)) &&
+      N.hasOneUse()) {
+    SDValue N0 = N.getOperand(0);
+    if (N0.getOpcode() == ISD::SHL && isa<ConstantSDNode>(N0.getOperand(1)) &&
+        N0.hasOneUse()) {
+      uint64_t Mask = N.getConstantOperandVal(1);
+      unsigned C2 = N0.getConstantOperandVal(1);
+
+      Mask &= maskTrailingZeros<uint64_t>(C2);
+
+      // Look for (and (shl y, c2), c1) where c1 is a shifted mask with
+      // 32-ShAmt leading zeros and c2 trailing zeros. We can use SLLI by
+      // c2-ShAmt followed by SHXADD_UW with ShAmt for the X amount.
+      if (isShiftedMask_64(Mask)) {
+        unsigned Leading = llvm::countl_zero(Mask);
+        unsigned Trailing = llvm::countr_zero(Mask);
+        if (Leading == 32 - ShAmt && Trailing == C2 && Trailing > ShAmt) {
+          SDLoc DL(N);
+          EVT VT = N.getValueType();
+          Val = SDValue(CurDAG->getMachineNode(
+                            RISCV::SLLI, DL, VT, N0.getOperand(0),
+                            CurDAG->getTargetConstant(C2 - ShAmt, DL, VT)),
+                        0);
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
 // Return true if all users of this SDNode* only consume the lower \p Bits.
 // This can be used to form W instructions for add/sub/mul/shl even when the
 // root isn't a sext_inreg. This can allow the ADDW/SUBW/MULW/SLLIW to CSE if
@@ -2240,17 +2342,18 @@ bool RISCVDAGToDAGISel::selectSHXADDOp(SDValue N, unsigned ShAmt,
 // may be able to use a W instruction and CSE with the other instruction if
 // this has happened. We could try to detect that the CSE opportunity exists
 // before doing this, but that would be more complicated.
-// TODO: Does this need to look through AND/OR/XOR to their users to find more
-// opportunities.
-bool RISCVDAGToDAGISel::hasAllNBitUsers(SDNode *Node, unsigned Bits) const {
+bool RISCVDAGToDAGISel::hasAllNBitUsers(SDNode *Node, unsigned Bits,
+                                        const unsigned Depth) const {
   assert((Node->getOpcode() == ISD::ADD || Node->getOpcode() == ISD::SUB ||
           Node->getOpcode() == ISD::MUL || Node->getOpcode() == ISD::SHL ||
           Node->getOpcode() == ISD::SRL || Node->getOpcode() == ISD::AND ||
+          Node->getOpcode() == ISD::OR || Node->getOpcode() == ISD::XOR ||
           Node->getOpcode() == ISD::SIGN_EXTEND_INREG ||
-          Node->getOpcode() == RISCVISD::GREV ||
-          Node->getOpcode() == RISCVISD::GORC ||
-          isa<ConstantSDNode>(Node)) &&
+          isa<ConstantSDNode>(Node) || Depth != 0) &&
          "Unexpected opcode");
+
+  if (Depth >= SelectionDAG::MaxRecursionDepth)
+    return false;
 
   for (auto UI = Node->use_begin(), UE = Node->use_end(); UI != UE; ++UI) {
     SDNode *User = *UI;
@@ -2293,16 +2396,58 @@ bool RISCVDAGToDAGISel::hasAllNBitUsers(SDNode *Node, unsigned Bits) const {
       if (Bits < 32)
         return false;
       break;
+    case RISCV::SLL:
+    case RISCV::SRA:
+    case RISCV::SRL:
+    case RISCV::ROL:
+    case RISCV::ROR:
+    case RISCV::BSET:
+    case RISCV::BCLR:
+    case RISCV::BINV:
+      // Shift amount operands only use log2(Xlen) bits.
+      if (UI.getOperandNo() != 1 || Bits < Log2_32(Subtarget->getXLen()))
+        return false;
+      break;
     case RISCV::SLLI:
       // SLLI only uses the lower (XLen - ShAmt) bits.
       if (Bits < Subtarget->getXLen() - User->getConstantOperandVal(1))
         return false;
       break;
     case RISCV::ANDI:
-      if (Bits < (64 - countLeadingZeros(User->getConstantOperandVal(1))))
-        return false;
-      break;
+      if (Bits >= (unsigned)llvm::bit_width(User->getConstantOperandVal(1)))
+        break;
+      goto RecCheck;
+    case RISCV::ORI: {
+      uint64_t Imm = cast<ConstantSDNode>(User->getOperand(1))->getSExtValue();
+      if (Bits >= (unsigned)llvm::bit_width<uint64_t>(~Imm))
+        break;
+      [[fallthrough]];
+    }
+    case RISCV::AND:
+    case RISCV::OR:
+    case RISCV::XOR:
+    case RISCV::XORI:
+    case RISCV::ANDN:
+    case RISCV::ORN:
+    case RISCV::XNOR:
+    case RISCV::SH1ADD:
+    case RISCV::SH2ADD:
+    case RISCV::SH3ADD:
+    RecCheck:
+      if (hasAllNBitUsers(User, Bits, Depth + 1))
+        break;
+      return false;
+    case RISCV::SRLI: {
+      unsigned ShAmt = User->getConstantOperandVal(1);
+      // If we are shifting right by less than Bits, and users don't demand any
+      // bits that were shifted into [Bits-1:0], then we can consider this as an
+      // N-Bit user.
+      if (Bits > ShAmt && hasAllNBitUsers(User, Bits - ShAmt, Depth + 1))
+        break;
+      return false;
+    }
     case RISCV::SEXT_B:
+    case RISCV::PACKH:
       if (Bits < 8)
         return false;
       break;
@@ -2310,7 +2455,12 @@ bool RISCVDAGToDAGISel::hasAllNBitUsers(SDNode *Node, unsigned Bits) const {
     case RISCV::FMV_H_X:
     case RISCV::ZEXT_H_RV32:
     case RISCV::ZEXT_H_RV64:
+    case RISCV::PACKW:
       if (Bits < 16)
+        return false;
+      break;
+    case RISCV::PACK:
+      if (Bits < (Subtarget->getXLen() / 2))
         return false;
       break;
     case RISCV::ADD_UW:
@@ -2369,6 +2519,7 @@ bool RISCVDAGToDAGISel::selectVLOp(SDValue N, SDValue &VL) {
 bool RISCVDAGToDAGISel::selectVSplat(SDValue N, SDValue &SplatVal) {
   if (N.getOpcode() != RISCVISD::VMV_V_X_VL || !N.getOperand(0).isUndef())
     return false;
+  assert(N.getNumOperands() == 3 && "Unexpected number of operands");
   SplatVal = N.getOperand(1);
   return true;
 }
@@ -2382,6 +2533,7 @@ static bool selectVSplatSimmHelper(SDValue N, SDValue &SplatVal,
   if (N.getOpcode() != RISCVISD::VMV_V_X_VL || !N.getOperand(0).isUndef() ||
       !isa<ConstantSDNode>(N.getOperand(1)))
     return false;
+  assert(N.getNumOperands() == 3 && "Unexpected number of operands");
 
   int64_t SplatImm =
       cast<ConstantSDNode>(N.getOperand(1))->getSExtValue();
@@ -2440,6 +2592,25 @@ bool RISCVDAGToDAGISel::selectVSplatUimm5(SDValue N, SDValue &SplatVal) {
   SplatVal =
       CurDAG->getTargetConstant(SplatImm, SDLoc(N), Subtarget->getXLenVT());
 
+  return true;
+}
+
+bool RISCVDAGToDAGISel::selectFPImm(SDValue N, SDValue &Imm) {
+  ConstantFPSDNode *CFP = dyn_cast<ConstantFPSDNode>(N.getNode());
+  if (!CFP)
+    return false;
+  const APFloat &APF = CFP->getValueAPF();
+  // td can handle +0.0 already.
+  if (APF.isPosZero())
+    return false;
+  MVT XLenVT = Subtarget->getXLenVT();
+  if (CFP->getValueType(0) == MVT::f64 && !Subtarget->is64Bit()) {
+    assert(APF.isNegZero() && "Unexpected constant.");
+    return false;
+  }
+  SDLoc DL(N);
+  Imm = selectImm(CurDAG, DL, XLenVT, APF.bitcastToAPInt().getSExtValue(),
+                  *Subtarget);
   return true;
 }
 
@@ -2510,8 +2681,7 @@ bool RISCVDAGToDAGISel::doPeepholeSExtW(SDNode *N) {
   case RISCV::SUBW:
   case RISCV::MULW:
   case RISCV::SLLIW:
-  case RISCV::GREVIW:
-  case RISCV::GORCIW:
+  case RISCV::PACKW:
     // Result is already sign extended just remove the sext.w.
     // NOTE: We only handle the nodes that are selected with hasAllWUsers.
     ReplaceUses(N, N0.getNode());
@@ -2572,7 +2742,7 @@ bool RISCVDAGToDAGISel::doPeepholeMaskedRVV(SDNode *N) {
     return false;
 
   // Retrieve the tail policy operand index, if any.
-  Optional<unsigned> TailPolicyOpIdx;
+  std::optional<unsigned> TailPolicyOpIdx;
   const RISCVInstrInfo &TII = *Subtarget->getInstrInfo();
   const MCInstrDesc &MaskedMCID = TII.get(N->getMachineOpcode());
 
@@ -2671,6 +2841,20 @@ bool RISCVDAGToDAGISel::performCombineVMergeAndVOps(SDNode *N, bool IsTA) {
   // The last operand of unmasked intrinsic should be sew or chain.
   bool HasChainOp =
       True.getOperand(True.getNumOperands() - 1).getValueType() == MVT::Other;
+
+  if (HasChainOp) {
+    // Avoid creating cycles in the DAG. We must ensure that none of the other
+    // operands depend on True through it's Chain.
+    SmallVector<const SDNode *, 4> LoopWorklist;
+    SmallPtrSet<const SDNode *, 16> Visited;
+    LoopWorklist.push_back(False.getNode());
+    LoopWorklist.push_back(Mask.getNode());
+    LoopWorklist.push_back(VL.getNode());
+    if (SDNode *Glued = N->getGluedNode())
+      LoopWorklist.push_back(Glued);
+    if (SDNode::hasPredecessorHelper(True.getNode(), Visited, LoopWorklist))
+      return false;
+  }
 
   // Need True has same VL with N.
   unsigned TrueVLIndex = True.getNumOperands() - HasChainOp - 2;
@@ -2814,3 +2998,7 @@ FunctionPass *llvm::createRISCVISelDag(RISCVTargetMachine &TM,
                                        CodeGenOpt::Level OptLevel) {
   return new RISCVDAGToDAGISel(TM, OptLevel);
 }
+
+char RISCVDAGToDAGISel::ID = 0;
+
+INITIALIZE_PASS(RISCVDAGToDAGISel, DEBUG_TYPE, PASS_NAME, false, false)

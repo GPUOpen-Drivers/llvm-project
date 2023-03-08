@@ -111,12 +111,6 @@ Pass *createFunctionInliningPass(unsigned OptLevel, unsigned SizeOptLevel,
 Pass *createFunctionInliningPass(InlineParams &Params);
 
 //===----------------------------------------------------------------------===//
-/// createPruneEHPass - Return a new pass object which transforms invoke
-/// instructions into calls, if the callee can _not_ unwind the stack.
-///
-Pass *createPruneEHPass();
-
-//===----------------------------------------------------------------------===//
 /// createInternalizePass - This pass loops over all of the functions in the
 /// input module, internalizing all globals (functions and variables) it can.
 ////
@@ -146,20 +140,11 @@ ModulePass *createDeadArgEliminationPass();
 ModulePass *createDeadArgHackingPass();
 
 //===----------------------------------------------------------------------===//
-/// createOpenMPOptLegacyPass - OpenMP specific optimizations.
-Pass *createOpenMPOptCGSCCLegacyPass();
-
-//===----------------------------------------------------------------------===//
 /// createIPSCCPPass - This pass propagates constants from call sites into the
 /// bodies of functions, and keeps track of whether basic blocks are executable
 /// in the process.
 ///
 ModulePass *createIPSCCPPass();
-
-//===----------------------------------------------------------------------===//
-/// createFunctionSpecializationPass - This pass propagates constants from call
-/// sites to the specialized version of the callee function.
-ModulePass *createFunctionSpecializationPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -173,18 +158,6 @@ Pass *createLoopExtractorPass();
 ///
 Pass *createSingleLoopExtractorPass();
 
-/// createBlockExtractorPass - This pass extracts all the specified blocks
-/// from the functions in the module.
-///
-ModulePass *createBlockExtractorPass();
-ModulePass *
-createBlockExtractorPass(const SmallVectorImpl<BasicBlock *> &BlocksToExtract,
-                         bool EraseFunctions);
-ModulePass *
-createBlockExtractorPass(const SmallVectorImpl<SmallVector<BasicBlock *, 16>>
-                             &GroupsOfBlocksToExtract,
-                         bool EraseFunctions);
-
 /// createStripDeadPrototypesPass - This pass removes any function declarations
 /// (prototypes) that are not used.
 ModulePass *createStripDeadPrototypesPass();
@@ -197,34 +170,9 @@ ModulePass *createStripDeadPrototypesPass();
 Pass *createReversePostOrderFunctionAttrsPass();
 
 //===----------------------------------------------------------------------===//
-/// createMergeFunctionsPass - This pass discovers identical functions and
-/// collapses them.
-///
-ModulePass *createMergeFunctionsPass();
-
-//===----------------------------------------------------------------------===//
-/// createHotColdSplittingPass - This pass outlines cold blocks into a separate
-/// function(s).
-ModulePass *createHotColdSplittingPass();
-
-//===----------------------------------------------------------------------===//
-/// createIROutlinerPass - This pass finds similar code regions and factors
-/// those regions out into functions.
-ModulePass *createIROutlinerPass();
-
-//===----------------------------------------------------------------------===//
-/// createPartialInliningPass - This pass inlines parts of functions.
-///
-ModulePass *createPartialInliningPass();
-
-//===----------------------------------------------------------------------===//
 /// createBarrierNoopPass - This pass is purely a module pass barrier in a pass
 /// manager.
 ModulePass *createBarrierNoopPass();
-
-/// createCalledValuePropagationPass - Attach metadata to indirct call sites
-/// indicating the set of functions they may target at run-time.
-ModulePass *createCalledValuePropagationPass();
 
 /// What to do with the summary when running passes that operate on it.
 enum class PassSummaryAction {

@@ -23,34 +23,25 @@
 using namespace llvm;
 
 void llvm::initializeIPO(PassRegistry &Registry) {
-  initializeOpenMPOptCGSCCLegacyPassPass(Registry);
   initializeAnnotation2MetadataLegacyPass(Registry);
-  initializeCalledValuePropagationLegacyPassPass(Registry);
   initializeConstantMergeLegacyPassPass(Registry);
   initializeCrossDSOCFIPass(Registry);
   initializeDAEPass(Registry);
   initializeDAHPass(Registry);
   initializeForceFunctionAttrsLegacyPassPass(Registry);
-  initializeFunctionSpecializationLegacyPassPass(Registry);
   initializeGlobalDCELegacyPassPass(Registry);
   initializeGlobalOptLegacyPassPass(Registry);
   initializeGlobalSplitPass(Registry);
-  initializeHotColdSplittingLegacyPassPass(Registry);
-  initializeIROutlinerLegacyPassPass(Registry);
   initializeAlwaysInlinerLegacyPassPass(Registry);
   initializeSimpleInlinerPass(Registry);
   initializeInferFunctionAttrsLegacyPassPass(Registry);
   initializeInternalizeLegacyPassPass(Registry);
   initializeLoopExtractorLegacyPassPass(Registry);
-  initializeBlockExtractorLegacyPassPass(Registry);
   initializeSingleLoopExtractorPass(Registry);
-  initializeMergeFunctionsLegacyPassPass(Registry);
-  initializePartialInlinerLegacyPassPass(Registry);
   initializeAttributorLegacyPassPass(Registry);
   initializeAttributorCGSCCLegacyPassPass(Registry);
   initializePostOrderFunctionAttrsLegacyPassPass(Registry);
   initializeReversePostOrderFunctionAttrsLegacyPassPass(Registry);
-  initializePruneEHPass(Registry);
   initializeIPSCCPLegacyPassPass(Registry);
   initializeStripDeadPrototypesLegacyPassPass(Registry);
   initializeStripSymbolsPass(Registry);
@@ -63,10 +54,6 @@ void llvm::initializeIPO(PassRegistry &Registry) {
 
 void LLVMInitializeIPO(LLVMPassRegistryRef R) {
   initializeIPO(*unwrap(R));
-}
-
-void LLVMAddCalledValuePropagationPass(LLVMPassManagerRef PM) {
-  unwrap(PM)->add(createCalledValuePropagationPass());
 }
 
 void LLVMAddConstantMergePass(LLVMPassManagerRef PM) {
@@ -97,16 +84,8 @@ void LLVMAddGlobalOptimizerPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createGlobalOptimizerPass());
 }
 
-void LLVMAddPruneEHPass(LLVMPassManagerRef PM) {
-  unwrap(PM)->add(createPruneEHPass());
-}
-
 void LLVMAddIPSCCPPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createIPSCCPPass());
-}
-
-void LLVMAddMergeFunctionsPass(LLVMPassManagerRef PM) {
-  unwrap(PM)->add(createMergeFunctionsPass());
 }
 
 void LLVMAddInternalizePass(LLVMPassManagerRef PM, unsigned AllButMain) {

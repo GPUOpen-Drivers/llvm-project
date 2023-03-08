@@ -3,18 +3,16 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 
 include "llvm/Target/GlobalISel/Combine.td"
 
 // TODO: This really belongs after legalization after scalarization.
-// TODO: GICombineRules should accept subtarget predicates
 
 def fmin_fmax_legacy_matchdata : GIDefMatchData<"AMDGPUPostLegalizerCombinerHelper::FMinFMaxLegacyInfo">;
 
+let Predicates = [HasFminFmaxLegacy] in
 def fcmp_select_to_fmin_fmax_legacy : GICombineRule<
   (defs root:$select, fmin_fmax_legacy_matchdata:$matchinfo),
   (match (wip_match_opcode G_SELECT):$select,

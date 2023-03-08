@@ -183,6 +183,18 @@ enum Kind {
   kw_##DISPLAY_NAME,
 #include "llvm/IR/Attributes.inc"
 
+  // Memory attribute:
+  kw_read,
+  kw_write,
+  kw_readwrite,
+  kw_argmem,
+  kw_inaccessiblemem,
+
+  // Legacy memory attributes:
+  kw_argmemonly,
+  kw_inaccessiblememonly,
+  kw_inaccessiblemem_or_argmemonly,
+
   kw_type,
   kw_opaque,
 
@@ -225,6 +237,8 @@ enum Kind {
   kw_umin,
   kw_fmax,
   kw_fmin,
+  kw_uinc_wrap,
+  kw_udec_wrap,
 
   // Instruction Opcodes (Opcode in UIntVal).
   kw_fneg,
@@ -394,6 +408,15 @@ enum Kind {
   kw_byte,
   kw_bit,
   kw_varFlags,
+  // The following are used by MemProf summary info.
+  kw_callsites,
+  kw_clones,
+  kw_stackIds,
+  kw_allocs,
+  kw_versions,
+  kw_memProf,
+  kw_notcold,
+  kw_notcoldandcold,
 
   // GV's with __attribute__((no_sanitize("address"))), or things in
   // -fsanitize-ignorelist when built with ASan.

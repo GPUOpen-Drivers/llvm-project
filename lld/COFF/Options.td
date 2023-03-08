@@ -161,6 +161,8 @@ def swaprun_net : F<"swaprun:net">, Alias<swaprun>, AliasArgs<["net"]>,
 def verbose : F<"verbose">;
 def wholearchive_flag : F<"wholearchive">,
     HelpText<"Include all object files from all libraries">;
+def release : F<"release">,
+    HelpText<"Set the Checksum in the header of an PE file">;
 
 def force : F<"force">,
     HelpText<"Allow undefined and multiply defined symbols">;
@@ -297,18 +299,21 @@ def summary : F<"summary">;
 
 def ignoreidl : F<"ignoreidl">;
 def ltcg : F<"ltcg">;
+def assemblydebug : F<"assemblydebug">;
 def nologo : F<"nologo">;
 def throwingnew : F<"throwingnew">;
 def editandcontinue : F<"editandcontinue">;
 def fastfail : F<"fastfail">;
 def kernel : F<"kernel">;
 def pdbcompress : F<"pdbcompress">;
+def emitpogophaseinfo : F<"emitpogophaseinfo">;
 
 def delay : P_priv<"delay">;
 def errorreport : P_priv<"errorreport">;
 def idlout : P_priv<"idlout">;
 def ilk : P_priv<"ilk">;
 def ltcg_opt : P_priv<"ltcg">;
+def assemblydebug_opt : P_priv<"assemblydebug">;
 def ltcgout : P_priv<"ltcgout">;
 def maxilksize : P_priv<"maxilksize">;
 def tlbid : P_priv<"tlbid">;

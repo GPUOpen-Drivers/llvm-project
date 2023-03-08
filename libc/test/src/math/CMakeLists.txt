@@ -1318,6 +1318,23 @@ add_fp_unittest(
 )
 
 add_fp_unittest(
+ log10_test
+ NEED_MPFR
+ SUITE
+   libc_math_unittests
+ SRCS
+   log10_test.cpp
+ DEPENDS
+   libc.include.errno
+   libc.src.errno.errno
+   libc.include.math
+   libc.src.math.log10
+   libc.src.__support.FPUtil.fp_bits
+ FLAGS
+   FMA_OPT__ONLY
+)
+
+add_fp_unittest(
   log10f_test
   NEED_MPFR
   SUITE
@@ -1453,6 +1470,34 @@ add_fp_unittest(
 )
 
 add_fp_unittest(
+  asinhf_test
+  NEED_MPFR
+  SUITE
+    libc_math_unittests
+  SRCS
+    asinhf_test.cpp
+  DEPENDS
+    libc.include.errno
+    libc.src.errno.errno
+    libc.src.math.asinhf
+    libc.src.__support.FPUtil.fp_bits
+)
+
+add_fp_unittest(
+  acoshf_test
+  NEED_MPFR
+  SUITE
+    libc_math_unittests
+  SRCS
+    acoshf_test.cpp
+  DEPENDS
+    libc.include.errno
+    libc.src.errno.errno
+    libc.src.math.acoshf
+    libc.src.__support.FPUtil.fp_bits
+)
+
+add_fp_unittest(
   asinf_test
   NEED_MPFR
   SUITE
@@ -1464,6 +1509,19 @@ add_fp_unittest(
     libc.src.errno.errno
     libc.src.math.asinf
     libc.src.__support.FPUtil.fp_bits
+)
+
+add_fp_unittest(
+  asin_test
+  NEED_MPFR
+  SUITE
+    libc_math_unittests
+  SRCS
+    asin_test.cpp
+  DEPENDS
+    libc.include.errno
+    libc.src.errno.errno
+    libc.src.math.asin
 )
 
 add_fp_unittest(
@@ -1506,6 +1564,19 @@ add_fp_unittest(
   DEPENDS
     libc.src.math.generic.inv_trigf_utils
     libc.src.__support.FPUtil.fp_bits
+)
+
+add_fp_unittest(
+  pow_test
+  NEED_MPFR
+  SUITE
+    libc_math_unittests
+  SRCS
+    pow_test.cpp
+  DEPENDS
+  libc.include.errno
+  libc.src.errno.errno
+  libc.src.math.pow
 )
 
 add_subdirectory(generic)

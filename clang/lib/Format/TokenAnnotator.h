@@ -34,17 +34,29 @@ enum LineType {
   LT_CommentAbovePPDirective,
 };
 
+enum ScopeType {
+  // Contained in class declaration/definition.
+  ST_Class,
+  // Contained within function definition.
+  ST_Function,
+  // Contained within other scope block (loop, if/else, etc).
+  ST_Other,
+};
+
 class AnnotatedLine {
 public:
   AnnotatedLine(const UnwrappedLine &Line)
       : First(Line.Tokens.front().Tok), Level(Line.Level),
+        PPLevel(Line.PPLevel),
         MatchingOpeningBlockLineIndex(Line.MatchingOpeningBlockLineIndex),
         MatchingClosingBlockLineIndex(Line.MatchingClosingBlockLineIndex),
-        InPPDirective(Line.InPPDirective), InMacroBody(Line.InMacroBody),
+        InPPDirective(Line.InPPDirective),
+        InPragmaDirective(Line.InPragmaDirective),
+        InMacroBody(Line.InMacroBody),
         MustBeDeclaration(Line.MustBeDeclaration), MightBeFunctionDecl(false),
         IsMultiVariableDeclStmt(false), Affected(false),
         LeadingEmptyLinesAffected(false), ChildrenAffected(false),
-        IsContinuation(Line.IsContinuation),
+        ReturnTypeWrapped(false), IsContinuation(Line.IsContinuation),
         FirstStartColumn(Line.FirstStartColumn) {
     assert(!Line.Tokens.empty());
 
@@ -127,9 +139,11 @@ public:
 
   LineType Type;
   unsigned Level;
+  unsigned PPLevel;
   size_t MatchingOpeningBlockLineIndex;
   size_t MatchingClosingBlockLineIndex;
   bool InPPDirective;
+  bool InPragmaDirective;
   bool InMacroBody;
   bool MustBeDeclaration;
   bool MightBeFunctionDecl;
@@ -145,6 +159,9 @@ public:
 
   /// \c True if one of this line's children intersects with an input range.
   bool ChildrenAffected;
+
+  /// \c True if breaking after last attribute group in function return type.
+  bool ReturnTypeWrapped;
 
   /// \c True if this line should be indented by ContinuationIndent in addition
   /// to the normal indention level.
@@ -170,7 +187,7 @@ public:
   // FIXME: Can/should this be done in the UnwrappedLineParser?
   void setCommentLineLevels(SmallVectorImpl<AnnotatedLine *> &Lines) const;
 
-  void annotate(AnnotatedLine &Line) const;
+  void annotate(AnnotatedLine &Line);
   void calculateFormattingInformation(AnnotatedLine &Line) const;
 
 private:
@@ -212,6 +229,8 @@ private:
   const FormatStyle &Style;
 
   const AdditionalKeywords &Keywords;
+
+  SmallVector<ScopeType> Scopes;
 };
 
 } // end namespace format

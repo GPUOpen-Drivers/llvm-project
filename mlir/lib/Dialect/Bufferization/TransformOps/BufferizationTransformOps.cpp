@@ -14,6 +14,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 
 using namespace mlir;
@@ -34,6 +35,9 @@ transform::OneShotBufferizeOp::apply(TransformResults &transformResults,
   options.createDeallocs = getCreateDeallocs();
   options.testAnalysisOnly = getTestAnalysisOnly();
   options.printConflicts = getPrintConflicts();
+  if (getFunctionBoundaryTypeConversion().has_value())
+    options.functionBoundaryTypeConversion =
+        *getFunctionBoundaryTypeConversion();
 
   ArrayRef<Operation *> payloadOps = state.getPayloadOps(getTarget());
   for (Operation *target : payloadOps) {
@@ -56,14 +60,32 @@ transform::OneShotBufferizeOp::apply(TransformResults &transformResults,
 
 void transform::OneShotBufferizeOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), getTarget(),
-                       TransformMappingResource::get());
-
   // Handles that are not modules are not longer usable.
-  if (!getTargetIsModule())
-    effects.emplace_back(MemoryEffects::Free::get(), getTarget(),
-                         TransformMappingResource::get());
+  if (!getTargetIsModule()) {
+    consumesHandle(getTarget(), effects);
+  } else {
+    onlyReadsHandle(getTarget(), effects);
+  }
+
+  modifiesPayload(effects);
 }
+
+//===----------------------------------------------------------------------===//
+// EmptyTensorToAllocTensorOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+EmptyTensorToAllocTensorOp::applyToOne(tensor::EmptyOp target,
+                                       ApplyToEachResultList &results,
+                                       transform::TransformState &state) {
+  IRRewriter rewriter(target->getContext());
+  rewriter.setInsertionPoint(target);
+  auto alloc = rewriter.replaceOpWithNewOp<bufferization::AllocTensorOp>(
+      target, target.getType(), target.getDynamicSizes());
+  results.push_back(alloc);
+  return DiagnosedSilenceableFailure::success();
+}
+
 //===----------------------------------------------------------------------===//
 // Transform op registration
 //===----------------------------------------------------------------------===//
@@ -93,6 +115,8 @@ public:
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Bufferization/TransformOps/BufferizationTransformOps.cpp.inc"
+
+#include "mlir/Dialect/Bufferization/IR/BufferizationEnums.cpp.inc"
 
 void mlir::bufferization::registerTransformDialectExtension(
     DialectRegistry &registry) {

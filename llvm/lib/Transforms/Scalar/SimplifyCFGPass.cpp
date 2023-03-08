@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -58,6 +56,11 @@ static cl::opt<bool> UserKeepLoops(
     "keep-loops", cl::Hidden, cl::init(true),
     cl::desc("Preserve canonical loop structure (default = true)"));
 
+static cl::opt<bool> UserSwitchRangeToICmp(
+    "switch-range-to-icmp", cl::Hidden, cl::init(false),
+    cl::desc(
+        "Convert switches into an integer range comparison (default = false)"));
+
 static cl::opt<bool> UserSwitchToLookup(
     "switch-to-lookup", cl::Hidden, cl::init(false),
     cl::desc("Convert switches to lookup tables (default = false)"));
@@ -105,12 +108,12 @@ performBlockTailMerging(Function &F, ArrayRef<BasicBlock *> BBs,
       std::get<1>(I) = PHINode::Create(std::get<0>(I)->getType(),
                                        /*NumReservedValues=*/BBs.size(),
                                        CanonicalBB->getName() + ".op");
-      CanonicalBB->getInstList().push_back(std::get<1>(I));
+      std::get<1>(I)->insertInto(CanonicalBB, CanonicalBB->end());
     }
     // Make it so that this canonical block actually has the right
     // terminator.
     CanonicalTerm = Term->clone();
-    CanonicalBB->getInstList().push_back(CanonicalTerm);
+    CanonicalTerm->insertInto(CanonicalBB, CanonicalBB->end());
     // If the canonical terminator has operands, rewrite it to take PHI's.
     for (auto I : zip(NewOps, CanonicalTerm->operands()))
       std::get<1>(I) = std::get<0>(I);
@@ -310,6 +313,8 @@ static void applyCommandLineOverridesToOptions(SimplifyCFGOptions &Options) {
     Options.BonusInstThreshold = UserBonusInstThreshold;
   if (UserForwardSwitchCond.getNumOccurrences())
     Options.ForwardSwitchCondToPhi = UserForwardSwitchCond;
+  if (UserSwitchRangeToICmp.getNumOccurrences())
+    Options.ConvertSwitchRangeToICmp = UserSwitchRangeToICmp;
   if (UserSwitchToLookup.getNumOccurrences())
     Options.ConvertSwitchToLookupTable = UserSwitchToLookup;
   if (UserKeepLoops.getNumOccurrences())
@@ -336,6 +341,8 @@ void SimplifyCFGPass::printPipeline(
   OS << "<";
   OS << "bonus-inst-threshold=" << Options.BonusInstThreshold << ";";
   OS << (Options.ForwardSwitchCondToPhi ? "" : "no-") << "forward-switch-cond;";
+  OS << (Options.ConvertSwitchRangeToICmp ? "" : "no-")
+     << "switch-range-to-icmp;";
   OS << (Options.ConvertSwitchToLookupTable ? "" : "no-")
      << "switch-to-lookup;";
   OS << (Options.NeedCanonicalLoop ? "" : "no-") << "keep-loops;";

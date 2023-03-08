@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -223,7 +221,7 @@ AMDGPUPromoteAllocaImpl::getLocalSizeYZ(IRBuilder<> &Builder) {
     ST.makeLIDRangeMetadata(LocalSizeY);
     ST.makeLIDRangeMetadata(LocalSizeZ);
 
-    return std::make_pair(LocalSizeY, LocalSizeZ);
+    return std::pair(LocalSizeY, LocalSizeZ);
   }
 
   // We must read the size out of the dispatch pointer.
@@ -284,7 +282,7 @@ AMDGPUPromoteAllocaImpl::getLocalSizeYZ(IRBuilder<> &Builder) {
   Value *GEPZU = Builder.CreateConstInBoundsGEP1_64(I32Ty, CastDispatchPtr, 2);
   LoadInst *LoadZU = Builder.CreateAlignedLoad(I32Ty, GEPZU, Align(4));
 
-  MDNode *MD = MDNode::get(Mod->getContext(), None);
+  MDNode *MD = MDNode::get(Mod->getContext(), std::nullopt);
   LoadXY->setMetadata(LLVMContext::MD_invariant_load, MD);
   LoadZU->setMetadata(LLVMContext::MD_invariant_load, MD);
   ST.makeLIDRangeMetadata(LoadZU);
@@ -292,7 +290,7 @@ AMDGPUPromoteAllocaImpl::getLocalSizeYZ(IRBuilder<> &Builder) {
   // Extract y component. Upper half of LoadZU should be zero already.
   Value *Y = Builder.CreateLShr(LoadXY, 16);
 
-  return std::make_pair(Y, LoadZU);
+  return std::pair(Y, LoadZU);
 }
 
 Value *AMDGPUPromoteAllocaImpl::getWorkitemID(IRBuilder<> &Builder,
@@ -437,7 +435,7 @@ static bool tryPromoteAllocaToVector(AllocaInst *Alloca, const DataLayout &DL,
   unsigned ElementSize = DL.getTypeSizeInBits(VecEltTy) / 8;
   while (!Uses.empty()) {
     Use *U = Uses.pop_back_val();
-    Instruction *Inst = dyn_cast<Instruction>(U->getUser());
+    Instruction *Inst = cast<Instruction>(U->getUser());
 
     if (Value *Ptr = getLoadStorePointerOperand(Inst)) {
       // This is a store of the pointer, not to the pointer.
@@ -562,7 +560,8 @@ static bool tryPromoteAllocaToVector(AllocaInst *Alloca, const DataLayout &DL,
       Value *Index = calculateVectorIndex(Ptr, GEPVectorIdx);
       Type *VecPtrTy = VectorTy->getPointerTo(Alloca->getAddressSpace());
       Value *BitCast = Builder.CreateBitCast(Alloca, VecPtrTy);
-      Value *VecValue = Builder.CreateLoad(VectorTy, BitCast);
+      Value *VecValue =
+          Builder.CreateAlignedLoad(VectorTy, BitCast, Alloca->getAlign());
       Value *ExtractElement = Builder.CreateExtractElement(VecValue, Index);
       if (Inst->getType() != VecEltTy)
         ExtractElement = Builder.CreateBitOrPointerCast(ExtractElement, Inst->getType());
@@ -576,12 +575,13 @@ static bool tryPromoteAllocaToVector(AllocaInst *Alloca, const DataLayout &DL,
       Value *Index = calculateVectorIndex(Ptr, GEPVectorIdx);
       Type *VecPtrTy = VectorTy->getPointerTo(Alloca->getAddressSpace());
       Value *BitCast = Builder.CreateBitCast(Alloca, VecPtrTy);
-      Value *VecValue = Builder.CreateLoad(VectorTy, BitCast);
+      Value *VecValue =
+          Builder.CreateAlignedLoad(VectorTy, BitCast, Alloca->getAlign());
       Value *Elt = SI->getValueOperand();
       if (Elt->getType() != VecEltTy)
         Elt = Builder.CreateBitOrPointerCast(Elt, VecEltTy);
       Value *NewVecValue = Builder.CreateInsertElement(VecValue, Elt, Index);
-      Builder.CreateStore(NewVecValue, BitCast);
+      Builder.CreateAlignedStore(NewVecValue, BitCast, Alloca->getAlign());
       Inst->eraseFromParent();
       break;
     }
@@ -798,7 +798,7 @@ bool AMDGPUPromoteAllocaImpl::hasSufficientLocalMem(const Function &F) {
     }
   }
 
-  LocalMemLimit = ST.getLocalMemorySize();
+  LocalMemLimit = ST.getAddressableLocalMemorySize();
   if (LocalMemLimit == 0)
     return false;
 
@@ -1002,12 +1002,9 @@ bool AMDGPUPromoteAllocaImpl::handleAlloca(AllocaInst &I, bool SufficientLDS) {
 
   Type *GVTy = ArrayType::get(I.getAllocatedType(), WorkGroupSize);
   GlobalVariable *GV = new GlobalVariable(
-      *Mod, GVTy, false, GlobalValue::InternalLinkage,
-      UndefValue::get(GVTy),
-      Twine(F->getName()) + Twine('.') + I.getName(),
-      nullptr,
-      GlobalVariable::NotThreadLocal,
-      AMDGPUAS::LOCAL_ADDRESS);
+      *Mod, GVTy, false, GlobalValue::InternalLinkage, PoisonValue::get(GVTy),
+      Twine(F->getName()) + Twine('.') + I.getName(), nullptr,
+      GlobalVariable::NotThreadLocal, AMDGPUAS::LOCAL_ADDRESS);
   GV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
   GV->setAlignment(I.getAlign());
 
@@ -1099,9 +1096,9 @@ bool AMDGPUPromoteAllocaImpl::handleAlloca(AllocaInst &I, bool SufficientLDS) {
       continue;
     case Intrinsic::memset: {
       MemSetInst *MemSet = cast<MemSetInst>(Intr);
-      Builder.CreateMemSet(
-          MemSet->getRawDest(), MemSet->getValue(), MemSet->getLength(),
-          MaybeAlign(MemSet->getDestAlignment()), MemSet->isVolatile());
+      Builder.CreateMemSet(MemSet->getRawDest(), MemSet->getValue(),
+                           MemSet->getLength(), MemSet->getDestAlign(),
+                           MemSet->isVolatile());
       Intr->eraseFromParent();
       continue;
     }

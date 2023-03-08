@@ -179,8 +179,9 @@ class MipsAsmParser : public MCTargetAsmParser {
                                bool MatchingInlineAsm) override;
 
   /// Parse a register as used in CFI directives
-  bool ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc) override;
-  OperandMatchResultTy tryParseRegister(unsigned &RegNo, SMLoc &StartLoc,
+  bool parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
+                     SMLoc &EndLoc) override;
+  OperandMatchResultTy tryParseRegister(MCRegister &RegNo, SMLoc &StartLoc,
                                         SMLoc &EndLoc) override;
 
   bool parseParenSuffix(StringRef Name, OperandVector &Operands);
@@ -790,6 +791,9 @@ public:
       return MipsMCExpr::create(MipsMCExpr::MEK_TPREL_LO, E, Ctx);
     }
   }
+
+  bool areEqualRegs(const MCParsedAsmOperand &Op1,
+                    const MCParsedAsmOperand &Op2) const override;
 };
 
 /// MipsOperand - Instances of this class represent a parsed Mips machine
@@ -1745,16 +1749,6 @@ public:
 
 } // end anonymous namespace
 
-namespace llvm {
-
-extern const MCInstrDesc MipsInsts[];
-
-} // end namespace llvm
-
-static const MCInstrDesc &getInstDesc(unsigned Opcode) {
-  return MipsInsts[Opcode];
-}
-
 static bool hasShortDelaySlot(MCInst &Inst) {
   switch (Inst.getOpcode()) {
     case Mips::BEQ_MM:
@@ -1835,14 +1829,12 @@ static bool isEvaluated(const MCExpr *Expr) {
   return false;
 }
 
-static bool needsExpandMemInst(MCInst &Inst) {
-  const MCInstrDesc &MCID = getInstDesc(Inst.getOpcode());
-
+static bool needsExpandMemInst(MCInst &Inst, const MCInstrDesc &MCID) {
   unsigned NumOp = MCID.getNumOperands();
   if (NumOp != 3 && NumOp != 4)
     return false;
 
-  const MCOperandInfo &OpInfo = MCID.OpInfo[NumOp - 1];
+  const MCOperandInfo &OpInfo = MCID.operands()[NumOp - 1];
   if (OpInfo.OperandType != MCOI::OPERAND_MEMORY &&
       OpInfo.OperandType != MCOI::OPERAND_UNKNOWN &&
       OpInfo.OperandType != MipsII::OPERAND_MEM_SIMM9)
@@ -1874,7 +1866,7 @@ bool MipsAsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,
                                        const MCSubtargetInfo *STI) {
   MipsTargetStreamer &TOut = getTargetStreamer();
   const unsigned Opcode = Inst.getOpcode();
-  const MCInstrDesc &MCID = getInstDesc(Opcode);
+  const MCInstrDesc &MCID = MII.get(Opcode);
   bool ExpandedJalSym = false;
 
   Inst.setLoc(IDLoc);
@@ -2155,9 +2147,8 @@ bool MipsAsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,
   if (MCID.mayLoad() || MCID.mayStore()) {
     // Check the offset of memory operand, if it is a symbol
     // reference or immediate we may have to expand instructions.
-    if (needsExpandMemInst(Inst)) {
-      const MCInstrDesc &MCID = getInstDesc(Inst.getOpcode());
-      switch (MCID.OpInfo[MCID.getNumOperands() - 1].OperandType) {
+    if (needsExpandMemInst(Inst, MCID)) {
+      switch (MCID.operands()[MCID.getNumOperands() - 1].OperandType) {
       case MipsII::OPERAND_MEM_SIMM9:
         expandMem9Inst(Inst, IDLoc, Out, STI, MCID.mayLoad());
         break;
@@ -2173,7 +2164,7 @@ bool MipsAsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,
     if (MCID.mayLoad() && Opcode != Mips::LWP_MM) {
       // Try to create 16-bit GP relative load instruction.
       for (unsigned i = 0; i < MCID.getNumOperands(); i++) {
-        const MCOperandInfo &OpInfo = MCID.OpInfo[i];
+        const MCOperandInfo &OpInfo = MCID.operands()[i];
         if ((OpInfo.OperandType == MCOI::OPERAND_MEMORY) ||
             (OpInfo.OperandType == MCOI::OPERAND_UNKNOWN)) {
           MCOperand &Op = Inst.getOperand(i);
@@ -2670,7 +2661,7 @@ bool MipsAsmParser::expandJalWithRegs(MCInst &Inst, SMLoc IDLoc,
 
   // If .set reorder is active and branch instruction has a delay slot,
   // emit a NOP after it.
-  const MCInstrDesc &MCID = getInstDesc(JalrInst.getOpcode());
+  const MCInstrDesc &MCID = MII.get(JalrInst.getOpcode());
   if (MCID.hasDelaySlot() && AssemblerOptions.back()->isReorder())
     TOut.emitEmptyDelaySlot(hasShortDelaySlot(JalrInst), IDLoc,
                             STI);
@@ -2680,9 +2671,7 @@ bool MipsAsmParser::expandJalWithRegs(MCInst &Inst, SMLoc IDLoc,
 
 /// Can the value be represented by a unsigned N-bit value and a shift left?
 template <unsigned N> static bool isShiftedUIntAtAnyPosition(uint64_t x) {
-  unsigned BitNum = findFirstSet(x);
-
-  return (x == x >> BitNum << BitNum) && isUInt<N>(x >> BitNum);
+  return x && isUInt<N>(x >> llvm::countr_zero(x));
 }
 
 /// Load (or add) an immediate into a register.
@@ -2807,11 +2796,14 @@ bool MipsAsmParser::loadImmediate(int64_t ImmValue, unsigned DstReg,
       return true;
     }
 
+    // We've processed ImmValue satisfying isUInt<16> above, so ImmValue must be
+    // at least 17-bit wide here.
+    unsigned BitWidth = llvm::bit_width((uint64_t)ImmValue);
+    assert(BitWidth >= 17 && "ImmValue must be at least 17-bit wide");
+
     // Traditionally, these immediates are shifted as little as possible and as
     // such we align the most significant bit to bit 15 of our temporary.
-    unsigned FirstSet = findFirstSet((uint64_t)ImmValue);
-    unsigned LastSet = findLastSet((uint64_t)ImmValue);
-    unsigned ShiftAmount = FirstSet - (15 - (LastSet - FirstSet));
+    unsigned ShiftAmount = BitWidth - 16;
     uint16_t Bits = (ImmValue >> ShiftAmount) & 0xffff;
     TOut.emitRRI(Mips::ORi, TmpReg, ZeroReg, Bits, IDLoc, STI);
     TOut.emitRRI(Mips::DSLL, TmpReg, TmpReg, ShiftAmount, IDLoc, STI);
@@ -3467,7 +3459,7 @@ bool MipsAsmParser::expandLoadDoubleImmToGPR(MCInst &Inst, SMLoc IDLoc,
 
   getStreamer().switchSection(ReadOnlySection);
   getStreamer().emitLabel(Sym, IDLoc);
-  getStreamer().emitValueToAlignment(8);
+  getStreamer().emitValueToAlignment(Align(8));
   getStreamer().emitIntValue(ImmOp64, 8);
   getStreamer().switchSection(CS);
 
@@ -3550,7 +3542,7 @@ bool MipsAsmParser::expandLoadDoubleImmToFPR(MCInst &Inst, bool Is64FPU,
 
   getStreamer().switchSection(ReadOnlySection);
   getStreamer().emitLabel(Sym, IDLoc);
-  getStreamer().emitValueToAlignment(8);
+  getStreamer().emitValueToAlignment(Align(8));
   getStreamer().emitIntValue(ImmOp64, 8);
   getStreamer().switchSection(CS);
 
@@ -3568,7 +3560,7 @@ bool MipsAsmParser::expandUncondBranchMMPseudo(MCInst &Inst, SMLoc IDLoc,
                                                const MCSubtargetInfo *STI) {
   MipsTargetStreamer &TOut = getTargetStreamer();
 
-  assert(getInstDesc(Inst.getOpcode()).getNumOperands() == 1 &&
+  assert(MII.get(Inst.getOpcode()).getNumOperands() == 1 &&
          "unexpected number of operands");
 
   MCOperand Offset = Inst.getOperand(0);
@@ -3601,7 +3593,7 @@ bool MipsAsmParser::expandUncondBranchMMPseudo(MCInst &Inst, SMLoc IDLoc,
 
   // If .set reorder is active and branch instruction has a delay slot,
   // emit a NOP after it.
-  const MCInstrDesc &MCID = getInstDesc(Inst.getOpcode());
+  const MCInstrDesc &MCID = MII.get(Inst.getOpcode());
   if (MCID.hasDelaySlot() && AssemblerOptions.back()->isReorder())
     TOut.emitEmptyDelaySlot(true, IDLoc, STI);
 
@@ -3692,8 +3684,8 @@ void MipsAsmParser::expandMem16Inst(MCInst &Inst, SMLoc IDLoc, MCStreamer &Out,
   unsigned BaseReg = BaseRegOp.getReg();
   unsigned TmpReg = DstReg;
 
-  const MCInstrDesc &Desc = getInstDesc(OpCode);
-  int16_t DstRegClass = Desc.OpInfo[StartOp].RegClass;
+  const MCInstrDesc &Desc = MII.get(OpCode);
+  int16_t DstRegClass = Desc.operands()[StartOp].RegClass;
   unsigned DstRegClassID =
       getContext().getRegisterInfo()->getRegClass(DstRegClass).getID();
   bool IsGPR = (DstRegClassID == Mips::GPR32RegClassID) ||
@@ -3819,8 +3811,8 @@ void MipsAsmParser::expandMem9Inst(MCInst &Inst, SMLoc IDLoc, MCStreamer &Out,
   unsigned BaseReg = BaseRegOp.getReg();
   unsigned TmpReg = DstReg;
 
-  const MCInstrDesc &Desc = getInstDesc(OpCode);
-  int16_t DstRegClass = Desc.OpInfo[StartOp].RegClass;
+  const MCInstrDesc &Desc = MII.get(OpCode);
+  int16_t DstRegClass = Desc.operands()[StartOp].RegClass;
   unsigned DstRegClassID =
       getContext().getRegisterInfo()->getRegClass(DstRegClass).getID();
   bool IsGPR = (DstRegClassID == Mips::GPR32RegClassID) ||
@@ -5902,7 +5894,7 @@ unsigned MipsAsmParser::checkTargetMatchPredicate(MCInst &Inst) {
     return Match_Success;
   }
 
-  uint64_t TSFlags = getInstDesc(Inst.getOpcode()).TSFlags;
+  uint64_t TSFlags = MII.get(Inst.getOpcode()).TSFlags;
   if ((TSFlags & MipsII::HasFCCRegOperand) &&
       (Inst.getOperand(0).getReg() != Mips::FCC0) && !hasEightFccRegisters())
     return Match_NoFCCRegisterForCurrentISA;
@@ -5938,6 +5930,9 @@ bool MipsAsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     return false;
   case Match_MissingFeature:
     Error(IDLoc, "instruction requires a CPU feature not currently enabled");
+    return true;
+  case Match_InvalidTiedOperand:
+    Error(IDLoc, "operand must match destination register");
     return true;
   case Match_InvalidOperand: {
     SMLoc ErrorLoc = IDLoc;
@@ -6392,12 +6387,12 @@ bool MipsAsmParser::parseOperand(OperandVector &Operands, StringRef Mnemonic) {
   return true;
 }
 
-bool MipsAsmParser::ParseRegister(unsigned &RegNo, SMLoc &StartLoc,
+bool MipsAsmParser::parseRegister(MCRegister &RegNo, SMLoc &StartLoc,
                                   SMLoc &EndLoc) {
   return tryParseRegister(RegNo, StartLoc, EndLoc) != MatchOperand_Success;
 }
 
-OperandMatchResultTy MipsAsmParser::tryParseRegister(unsigned &RegNo,
+OperandMatchResultTy MipsAsmParser::tryParseRegister(MCRegister &RegNo,
                                                      SMLoc &StartLoc,
                                                      SMLoc &EndLoc) {
   SmallVector<std::unique_ptr<MCParsedAsmOperand>, 1> Operands;
@@ -6927,6 +6922,19 @@ bool MipsAsmParser::parseBracketSuffix(StringRef Name,
 
 static std::string MipsMnemonicSpellCheck(StringRef S, const FeatureBitset &FBS,
                                           unsigned VariantID = 0);
+
+bool MipsAsmParser::areEqualRegs(const MCParsedAsmOperand &Op1,
+                                 const MCParsedAsmOperand &Op2) const {
+  // This target-overriden function exists to maintain current behaviour for
+  // e.g.
+  //   dahi    $3, $3, 0x5678
+  // as tested in test/MC/Mips/mips64r6/valid.s.
+  // FIXME: Should this test actually fail with an error? If so, then remove
+  // this overloaded method.
+  if (!Op1.isReg() || !Op2.isReg())
+    return true;
+  return Op1.getReg() == Op2.getReg();
+}
 
 bool MipsAsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                                      SMLoc NameLoc, OperandVector &Operands) {

@@ -101,7 +101,7 @@ void ComputeOffsetsHelper::Compute(Scope &scope) {
   }
   // Assign offsets for non-COMMON EQUIVALENCE blocks
   for (auto &[symbol, blockInfo] : equivalenceBlock_) {
-    if (!InCommonBlock(*symbol)) {
+    if (!FindCommonBlockContaining(*symbol)) {
       DoSymbol(*symbol);
       DoEquivalenceBlockBase(*symbol, blockInfo);
       offset_ = std::max(offset_, symbol->offset() + blockInfo.size);
@@ -110,7 +110,7 @@ void ComputeOffsetsHelper::Compute(Scope &scope) {
   // Process remaining non-COMMON symbols; this is all of them if there
   // was no use of EQUIVALENCE in the scope.
   for (auto &symbol : scope.GetSymbols()) {
-    if (!InCommonBlock(*symbol) &&
+    if (!FindCommonBlockContaining(*symbol) &&
         dependents_.find(symbol) == dependents_.end() &&
         equivalenceBlock_.find(symbol) == equivalenceBlock_.end()) {
       DoSymbol(*symbol);
@@ -156,7 +156,7 @@ void ComputeOffsetsHelper::DoCommonBlock(Symbol &commonBlock) {
     Symbol &symbol{*object};
     auto errorSite{
         commonBlock.name().empty() ? symbol.name() : commonBlock.name()};
-    if (std::size_t padding{DoSymbol(symbol)}) {
+    if (std::size_t padding{DoSymbol(symbol.GetUltimate())}) {
       context_.Say(errorSite,
           "COMMON block /%s/ requires %zd bytes of padding before '%s' for alignment"_port_en_US,
           commonBlock.name(), padding, symbol.name());
@@ -173,9 +173,12 @@ void ComputeOffsetsHelper::DoCommonBlock(Symbol &commonBlock) {
       Symbol &base{*dep.symbol};
       if (const auto *baseBlock{FindCommonBlockContaining(base)}) {
         if (baseBlock == &commonBlock) {
-          context_.Say(errorSite,
-              "'%s' is storage associated with '%s' by EQUIVALENCE elsewhere in COMMON block /%s/"_err_en_US,
-              symbol.name(), base.name(), commonBlock.name());
+          if (base.offset() != symbol.offset() - dep.offset ||
+              llvm::is_contained(details.objects(), base)) {
+            context_.Say(errorSite,
+                "'%s' is storage associated with '%s' by EQUIVALENCE elsewhere in COMMON block /%s/"_err_en_US,
+                symbol.name(), base.name(), commonBlock.name());
+          }
         } else { // 8.10.3(1)
           context_.Say(errorSite,
               "'%s' in COMMON block /%s/ must not be storage associated with '%s' in COMMON block /%s/ by EQUIVALENCE"_err_en_US,

@@ -290,6 +290,52 @@ entry:
   ret i1 %0
 }
 
+define i1 @issubnormal_f_daz(float %x) #0 {
+; CHECK-32-LABEL: issubnormal_f_daz:
+; CHECK-32:       # %bb.0: # %entry
+; CHECK-32-NEXT:    movl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-32-NEXT:    andl {{[0-9]+}}(%esp), %eax
+; CHECK-32-NEXT:    decl %eax
+; CHECK-32-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-32-NEXT:    setb %al
+; CHECK-32-NEXT:    retl
+;
+; CHECK-64-LABEL: issubnormal_f_daz:
+; CHECK-64:       # %bb.0: # %entry
+; CHECK-64-NEXT:    movd %xmm0, %eax
+; CHECK-64-NEXT:    andl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-64-NEXT:    decl %eax
+; CHECK-64-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-64-NEXT:    setb %al
+; CHECK-64-NEXT:    retq
+entry:
+  %0 = tail call i1 @llvm.is.fpclass.f32(float %x, i32 144)  ; 0x90 = "subnormal"
+  ret i1 %0
+}
+
+define i1 @issubnormal_f_maybe_daz(float %x) #1 {
+; CHECK-32-LABEL: issubnormal_f_maybe_daz:
+; CHECK-32:       # %bb.0: # %entry
+; CHECK-32-NEXT:    movl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-32-NEXT:    andl {{[0-9]+}}(%esp), %eax
+; CHECK-32-NEXT:    decl %eax
+; CHECK-32-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-32-NEXT:    setb %al
+; CHECK-32-NEXT:    retl
+;
+; CHECK-64-LABEL: issubnormal_f_maybe_daz:
+; CHECK-64:       # %bb.0: # %entry
+; CHECK-64-NEXT:    movd %xmm0, %eax
+; CHECK-64-NEXT:    andl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-64-NEXT:    decl %eax
+; CHECK-64-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-64-NEXT:    setb %al
+; CHECK-64-NEXT:    retq
+entry:
+  %0 = tail call i1 @llvm.is.fpclass.f32(float %x, i32 144)  ; 0x90 = "subnormal"
+  ret i1 %0
+}
+
 define i1 @is_plus_subnormal_f(float %x) {
 ; CHECK-32-LABEL: is_plus_subnormal_f:
 ; CHECK-32:       # %bb.0: # %entry
@@ -364,6 +410,123 @@ define i1 @iszero_f(float %x) {
 ; CHECK-64-NEXT:    retq
 entry:
   %0 = tail call i1 @llvm.is.fpclass.f32(float %x, i32 96)  ; 0x60 = "zero"
+  ret i1 %0
+}
+
+define i1 @iszero_f_daz(float %x) #0 {
+; CHECK-32-LABEL: iszero_f_daz:
+; CHECK-32:       # %bb.0: # %entry
+; CHECK-32-NEXT:    testl $2147483647, {{[0-9]+}}(%esp) # imm = 0x7FFFFFFF
+; CHECK-32-NEXT:    sete %al
+; CHECK-32-NEXT:    retl
+;
+; CHECK-64-LABEL: iszero_f_daz:
+; CHECK-64:       # %bb.0: # %entry
+; CHECK-64-NEXT:    movd %xmm0, %eax
+; CHECK-64-NEXT:    testl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-64-NEXT:    sete %al
+; CHECK-64-NEXT:    retq
+entry:
+  %0 = tail call i1 @llvm.is.fpclass.f32(float %x, i32 96)  ; 0x60 = "zero"
+  ret i1 %0
+}
+
+define i1 @iszero_f_maybe_daz(float %x) #1 {
+; CHECK-32-LABEL: iszero_f_maybe_daz:
+; CHECK-32:       # %bb.0: # %entry
+; CHECK-32-NEXT:    testl $2147483647, {{[0-9]+}}(%esp) # imm = 0x7FFFFFFF
+; CHECK-32-NEXT:    sete %al
+; CHECK-32-NEXT:    retl
+;
+; CHECK-64-LABEL: iszero_f_maybe_daz:
+; CHECK-64:       # %bb.0: # %entry
+; CHECK-64-NEXT:    movd %xmm0, %eax
+; CHECK-64-NEXT:    testl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-64-NEXT:    sete %al
+; CHECK-64-NEXT:    retq
+entry:
+  %0 = tail call i1 @llvm.is.fpclass.f32(float %x, i32 96)  ; 0x60 = "zero"
+  ret i1 %0
+}
+
+define i1 @issubnormal_or_zero_f(float %x) {
+; CHECK-32-LABEL: issubnormal_or_zero_f:
+; CHECK-32:       # %bb.0: # %entry
+; CHECK-32-NEXT:    movl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-32-NEXT:    andl {{[0-9]+}}(%esp), %eax
+; CHECK-32-NEXT:    sete %cl
+; CHECK-32-NEXT:    decl %eax
+; CHECK-32-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-32-NEXT:    setb %al
+; CHECK-32-NEXT:    orb %cl, %al
+; CHECK-32-NEXT:    retl
+;
+; CHECK-64-LABEL: issubnormal_or_zero_f:
+; CHECK-64:       # %bb.0: # %entry
+; CHECK-64-NEXT:    movd %xmm0, %eax
+; CHECK-64-NEXT:    andl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-64-NEXT:    sete %cl
+; CHECK-64-NEXT:    decl %eax
+; CHECK-64-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-64-NEXT:    setb %al
+; CHECK-64-NEXT:    orb %cl, %al
+; CHECK-64-NEXT:    retq
+entry:
+  %0 = tail call i1 @llvm.is.fpclass.f32(float %x, i32 240)  ; 0xf0 = "subnormal|zero"
+  ret i1 %0
+}
+
+define i1 @issubnormal_or_zero_f_daz(float %x) #0 {
+; CHECK-32-LABEL: issubnormal_or_zero_f_daz:
+; CHECK-32:       # %bb.0: # %entry
+; CHECK-32-NEXT:    movl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-32-NEXT:    andl {{[0-9]+}}(%esp), %eax
+; CHECK-32-NEXT:    sete %cl
+; CHECK-32-NEXT:    decl %eax
+; CHECK-32-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-32-NEXT:    setb %al
+; CHECK-32-NEXT:    orb %cl, %al
+; CHECK-32-NEXT:    retl
+;
+; CHECK-64-LABEL: issubnormal_or_zero_f_daz:
+; CHECK-64:       # %bb.0: # %entry
+; CHECK-64-NEXT:    movd %xmm0, %eax
+; CHECK-64-NEXT:    andl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-64-NEXT:    sete %cl
+; CHECK-64-NEXT:    decl %eax
+; CHECK-64-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-64-NEXT:    setb %al
+; CHECK-64-NEXT:    orb %cl, %al
+; CHECK-64-NEXT:    retq
+entry:
+  %0 = tail call i1 @llvm.is.fpclass.f32(float %x, i32 240)  ; 0xf0 = "subnormal|zero"
+  ret i1 %0
+}
+
+define i1 @issubnormal_or_zero_f_maybe_daz(float %x) #1 {
+; CHECK-32-LABEL: issubnormal_or_zero_f_maybe_daz:
+; CHECK-32:       # %bb.0: # %entry
+; CHECK-32-NEXT:    movl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-32-NEXT:    andl {{[0-9]+}}(%esp), %eax
+; CHECK-32-NEXT:    sete %cl
+; CHECK-32-NEXT:    decl %eax
+; CHECK-32-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-32-NEXT:    setb %al
+; CHECK-32-NEXT:    orb %cl, %al
+; CHECK-32-NEXT:    retl
+;
+; CHECK-64-LABEL: issubnormal_or_zero_f_maybe_daz:
+; CHECK-64:       # %bb.0: # %entry
+; CHECK-64-NEXT:    movd %xmm0, %eax
+; CHECK-64-NEXT:    andl $2147483647, %eax # imm = 0x7FFFFFFF
+; CHECK-64-NEXT:    sete %cl
+; CHECK-64-NEXT:    decl %eax
+; CHECK-64-NEXT:    cmpl $8388607, %eax # imm = 0x7FFFFF
+; CHECK-64-NEXT:    setb %al
+; CHECK-64-NEXT:    orb %cl, %al
+; CHECK-64-NEXT:    retq
+entry:
+  %0 = tail call i1 @llvm.is.fpclass.f32(float %x, i32 240)  ; 0xf0 = "subnormal|zero"
   ret i1 %0
 }
 
@@ -857,12 +1020,13 @@ define <4 x i1> @isnan_v4f(<4 x float> %x) {
 ; CHECK-32-NEXT:    # kill: def $ah killed $ah killed $ax
 ; CHECK-32-NEXT:    sahf
 ; CHECK-32-NEXT:    setp %dh
+; CHECK-32-NEXT:    shlb $2, %dh
 ; CHECK-32-NEXT:    fucomp %st(0)
 ; CHECK-32-NEXT:    fnstsw %ax
 ; CHECK-32-NEXT:    # kill: def $ah killed $ah killed $ax
 ; CHECK-32-NEXT:    sahf
 ; CHECK-32-NEXT:    setp %dl
-; CHECK-32-NEXT:    addb %dl, %dl
+; CHECK-32-NEXT:    shlb $3, %dl
 ; CHECK-32-NEXT:    orb %dh, %dl
 ; CHECK-32-NEXT:    fucomp %st(0)
 ; CHECK-32-NEXT:    fnstsw %ax
@@ -876,7 +1040,6 @@ define <4 x i1> @isnan_v4f(<4 x float> %x) {
 ; CHECK-32-NEXT:    setp %al
 ; CHECK-32-NEXT:    addb %al, %al
 ; CHECK-32-NEXT:    orb %dh, %al
-; CHECK-32-NEXT:    shlb $2, %al
 ; CHECK-32-NEXT:    orb %dl, %al
 ; CHECK-32-NEXT:    movb %al, (%ecx)
 ; CHECK-32-NEXT:    movl %ecx, %eax
@@ -903,11 +1066,12 @@ define <4 x i1> @isnan_v4f_strictfp(<4 x float> %x) strictfp {
 ; CHECK-32-NEXT:    andl %ecx, %edx
 ; CHECK-32-NEXT:    cmpl $2139095041, %edx # imm = 0x7F800001
 ; CHECK-32-NEXT:    setge %dh
+; CHECK-32-NEXT:    shlb $2, %dh
 ; CHECK-32-NEXT:    movl {{[0-9]+}}(%esp), %esi
 ; CHECK-32-NEXT:    andl %ecx, %esi
 ; CHECK-32-NEXT:    cmpl $2139095041, %esi # imm = 0x7F800001
 ; CHECK-32-NEXT:    setge %dl
-; CHECK-32-NEXT:    addb %dl, %dl
+; CHECK-32-NEXT:    shlb $3, %dl
 ; CHECK-32-NEXT:    orb %dh, %dl
 ; CHECK-32-NEXT:    movl {{[0-9]+}}(%esp), %esi
 ; CHECK-32-NEXT:    andl %ecx, %esi
@@ -918,7 +1082,6 @@ define <4 x i1> @isnan_v4f_strictfp(<4 x float> %x) strictfp {
 ; CHECK-32-NEXT:    setge %cl
 ; CHECK-32-NEXT:    addb %cl, %cl
 ; CHECK-32-NEXT:    orb %dh, %cl
-; CHECK-32-NEXT:    shlb $2, %cl
 ; CHECK-32-NEXT:    orb %dl, %cl
 ; CHECK-32-NEXT:    movb %cl, (%eax)
 ; CHECK-32-NEXT:    popl %esi
@@ -972,3 +1135,9 @@ declare i1 @llvm.is.fpclass.f64(double, i32)
 declare <1 x i1> @llvm.is.fpclass.v1f32(<1 x float>, i32)
 declare <2 x i1> @llvm.is.fpclass.v2f32(<2 x float>, i32)
 declare <4 x i1> @llvm.is.fpclass.v4f32(<4 x float>, i32)
+
+; Assume DAZ
+attributes #0 = { "denormal-fp-math"="ieee,preserve-sign" }
+
+; Maybe daz
+attributes #1 = { "denormal-fp-math"="ieee,dynamic" }

@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -139,26 +137,29 @@ public:
                                bool IsLoad, bool IsKill = true) const;
 
   /// If \p OnlyToVGPR is true, this will only succeed if this
-  bool spillSGPR(MachineBasicBlock::iterator MI,
-                 int FI, RegScavenger *RS,
-                 LiveIntervals *LIS = nullptr,
+  bool spillSGPR(MachineBasicBlock::iterator MI, int FI, RegScavenger *RS,
+                 SlotIndexes *Indexes = nullptr, LiveIntervals *LIS = nullptr,
                  bool OnlyToVGPR = false) const;
 
-  bool restoreSGPR(MachineBasicBlock::iterator MI,
-                   int FI, RegScavenger *RS,
-                   LiveIntervals *LIS = nullptr,
+  bool restoreSGPR(MachineBasicBlock::iterator MI, int FI, RegScavenger *RS,
+                   SlotIndexes *Indexes = nullptr, LiveIntervals *LIS = nullptr,
                    bool OnlyToVGPR = false) const;
 
   bool spillEmergencySGPR(MachineBasicBlock::iterator MI,
                           MachineBasicBlock &RestoreMBB, Register SGPR,
                           RegScavenger *RS) const;
 
-  void eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
+  bool supportsBackwardScavenger() const override {
+    return true;
+  }
+
+  bool eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
                            unsigned FIOperandNum,
                            RegScavenger *RS) const override;
 
   bool eliminateSGPRToVGPRSpillFrameIndex(MachineBasicBlock::iterator MI,
                                           int FI, RegScavenger *RS,
+                                          SlotIndexes *Indexes = nullptr,
                                           LiveIntervals *LIS = nullptr) const;
 
   StringRef getRegAsmName(MCRegister Reg) const override;
@@ -180,10 +181,6 @@ public:
 
   LLVM_READONLY
   static const TargetRegisterClass *getSGPRClassForBitWidth(unsigned BitWidth);
-
-  /// Return the 'base' register class for this register.
-  /// e.g. SGPR0 => SReg_32, VGPR => VGPR_32 SGPR0_SGPR1 -> SReg_32, etc.
-  const TargetRegisterClass *getPhysRegClass(MCRegister Reg) const;
 
   /// \returns true if this class contains only SGPR registers
   static bool isSGPRClass(const TargetRegisterClass *RC) {
@@ -368,7 +365,7 @@ public:
     uint64_t Even = Mask & 0xAAAAAAAAAAAAAAAAULL;
     Mask = (Even >> 1) | Mask;
     uint64_t Odd = Mask & 0x5555555555555555ULL;
-    return countPopulation(Odd);
+    return llvm::popcount(Odd);
   }
 
   // \returns a DWORD offset of a \p SubReg

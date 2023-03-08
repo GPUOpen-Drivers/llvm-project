@@ -14,7 +14,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -41,6 +40,7 @@
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
@@ -99,6 +99,11 @@ ImplicationSearchThreshold(
   cl::desc("The number of predecessors to search for a stronger "
            "condition to use to thread over a weaker condition"),
   cl::init(3), cl::Hidden);
+
+static cl::opt<unsigned> PhiDuplicateThreshold(
+    "jump-threading-phi-threshold",
+    cl::desc("Max PHIs in BB to duplicate for jump threading"), cl::init(76),
+    cl::Hidden);
 
 static cl::opt<bool> PrintLVIAfterJumpThreading(
     "print-lvi-after-jump-threading",
@@ -518,8 +523,23 @@ static unsigned getJumpThreadDuplicationCost(const TargetTransformInfo *TTI,
                                              Instruction *StopAt,
                                              unsigned Threshold) {
   assert(StopAt->getParent() == BB && "Not an instruction from proper BB?");
+
+  // Do not duplicate the BB if it has a lot of PHI nodes.
+  // If a threadable chain is too long then the number of PHI nodes can add up,
+  // leading to a substantial increase in compile time when rewriting the SSA.
+  unsigned PhiCount = 0;
+  Instruction *FirstNonPHI = nullptr;
+  for (Instruction &I : *BB) {
+    if (!isa<PHINode>(&I)) {
+      FirstNonPHI = &I;
+      break;
+    }
+    if (++PhiCount > PhiDuplicateThreshold)
+      return ~0U;
+  }
+
   /// Ignore PHI nodes, these will be flattened when duplication happens.
-  BasicBlock::const_iterator I(BB->getFirstNonPHI());
+  BasicBlock::const_iterator I(FirstNonPHI);
 
   // FIXME: THREADING will delete values that are just used to compute the
   // branch, so they shouldn't count against the duplication cost.
@@ -1254,7 +1274,7 @@ bool JumpThreadingPass::processImpliedCondition(BasicBlock *BB) {
       return false;
 
     bool CondIsTrue = PBI->getSuccessor(0) == CurrentBB;
-    Optional<bool> Implication =
+    std::optional<bool> Implication =
         isImpliedCondition(PBI->getCondition(), Cond, DL, CondIsTrue);
 
     // If the branch condition of BB (which is Cond) and CurrentPred are
@@ -1912,7 +1932,7 @@ bool JumpThreadingPass::processBranchOnXOR(BinaryOperator *BO) {
       // If all preds provide undef, just nuke the xor, because it is undef too.
       BO->replaceAllUsesWith(UndefValue::get(BO->getType()));
       BO->eraseFromParent();
-    } else if (SplitVal->isZero()) {
+    } else if (SplitVal->isZero() && BO != BO->getOperand(isLHS)) {
       // If all preds provide 0, replace the xor with the other input.
       BO->replaceAllUsesWith(BO->getOperand(isLHS));
       BO->eraseFromParent();
@@ -2019,6 +2039,7 @@ void JumpThreadingPass::updateSSA(
   // PHI insertion, of which we are prepared to do, clean these up now.
   SSAUpdater SSAUpdate;
   SmallVector<Use *, 16> UsesToRename;
+  SmallVector<DbgValueInst *, 4> DbgValues;
 
   for (Instruction &I : *BB) {
     // Scan all uses of this instruction to see if it is used outside of its
@@ -2034,8 +2055,16 @@ void JumpThreadingPass::updateSSA(
       UsesToRename.push_back(&U);
     }
 
+    // Find debug values outside of the block
+    findDbgValues(DbgValues, &I);
+    DbgValues.erase(remove_if(DbgValues,
+                              [&](const DbgValueInst *DbgVal) {
+                                return DbgVal->getParent() == BB;
+                              }),
+                    DbgValues.end());
+
     // If there are no uses outside the block, we're done with this instruction.
-    if (UsesToRename.empty())
+    if (UsesToRename.empty() && DbgValues.empty())
       continue;
     LLVM_DEBUG(dbgs() << "JT: Renaming non-local uses of: " << I << "\n");
 
@@ -2048,6 +2077,11 @@ void JumpThreadingPass::updateSSA(
 
     while (!UsesToRename.empty())
       SSAUpdate.RewriteUse(*UsesToRename.pop_back_val());
+    if (!DbgValues.empty()) {
+      SSAUpdate.UpdateDebugValues(&I, DbgValues);
+      DbgValues.clear();
+    }
+
     LLVM_DEBUG(dbgs() << "\n");
   }
 }
@@ -2063,6 +2097,30 @@ JumpThreadingPass::cloneInstructions(BasicBlock::iterator BI,
   // copy of the block 'NewBB'.  If there are PHI nodes in the source basic
   // block, evaluate them to account for entry from PredBB.
   DenseMap<Instruction *, Value *> ValueMapping;
+
+  // Retargets llvm.dbg.value to any renamed variables.
+  auto RetargetDbgValueIfPossible = [&](Instruction *NewInst) -> bool {
+    auto DbgInstruction = dyn_cast<DbgValueInst>(NewInst);
+    if (!DbgInstruction)
+      return false;
+
+    SmallSet<std::pair<Value *, Value *>, 16> OperandsToRemap;
+    for (auto DbgOperand : DbgInstruction->location_ops()) {
+      auto DbgOperandInstruction = dyn_cast<Instruction>(DbgOperand);
+      if (!DbgOperandInstruction)
+        continue;
+
+      auto I = ValueMapping.find(DbgOperandInstruction);
+      if (I != ValueMapping.end()) {
+        OperandsToRemap.insert(
+            std::pair<Value *, Value *>(DbgOperand, I->second));
+      }
+    }
+
+    for (auto &[OldOp, MappedOp] : OperandsToRemap)
+      DbgInstruction->replaceVariableLocationOp(OldOp, MappedOp);
+    return true;
+  };
 
   // Clone the phi nodes of the source basic block into NewBB.  The resulting
   // phi nodes are trivial since NewBB only has one predecessor, but SSAUpdater
@@ -2088,9 +2146,12 @@ JumpThreadingPass::cloneInstructions(BasicBlock::iterator BI,
   for (; BI != BE; ++BI) {
     Instruction *New = BI->clone();
     New->setName(BI->getName());
-    NewBB->getInstList().push_back(New);
+    New->insertInto(NewBB, NewBB->end());
     ValueMapping[&*BI] = New;
     adaptNoAliasScopes(New, ClonedScopes, Context);
+
+    if (RetargetDbgValueIfPossible(New))
+      continue;
 
     // Remap operands to patch up intra-block references.
     for (unsigned i = 0, e = New->getNumOperands(); i != e; ++i)
@@ -2476,18 +2537,7 @@ BasicBlock *JumpThreadingPass::splitBlockPreds(BasicBlock *BB,
 bool JumpThreadingPass::doesBlockHaveProfileData(BasicBlock *BB) {
   const Instruction *TI = BB->getTerminator();
   assert(TI->getNumSuccessors() > 1 && "not a split");
-
-  MDNode *WeightsNode = TI->getMetadata(LLVMContext::MD_prof);
-  if (!WeightsNode)
-    return false;
-
-  MDString *MDName = cast<MDString>(WeightsNode->getOperand(0));
-  if (MDName->getString() != "branch_weights")
-    return false;
-
-  // Ensure there are weights for all of the successors. Note that the first
-  // operand to the metadata node is a name, not a weight.
-  return WeightsNode->getNumOperands() == TI->getNumSuccessors() + 1;
+  return hasValidBranchWeightMD(*TI);
 }
 
 /// Update the block frequency of BB and branch weight and the metadata on the
@@ -2681,7 +2731,7 @@ bool JumpThreadingPass::duplicateCondBranchOnPHIIntoPred(
     if (New) {
       // Otherwise, insert the new instruction into the block.
       New->setName(BI->getName());
-      PredBB->getInstList().insert(OldPredBranch->getIterator(), New);
+      New->insertInto(PredBB, OldPredBranch->getIterator());
       // Update Dominance from simplified New instruction operands.
       for (unsigned i = 0, e = New->getNumOperands(); i != e; ++i)
         if (BasicBlock *SuccBB = dyn_cast<BasicBlock>(New->getOperand(i)))
@@ -2735,12 +2785,30 @@ void JumpThreadingPass::unfoldSelectInstr(BasicBlock *Pred, BasicBlock *BB,
                                          BB->getParent(), BB);
   // Move the unconditional branch to NewBB.
   PredTerm->removeFromParent();
-  NewBB->getInstList().insert(NewBB->end(), PredTerm);
+  PredTerm->insertInto(NewBB, NewBB->end());
   // Create a conditional branch and update PHI nodes.
   auto *BI = BranchInst::Create(NewBB, BB, SI->getCondition(), Pred);
   BI->applyMergedLocation(PredTerm->getDebugLoc(), SI->getDebugLoc());
+  BI->copyMetadata(*SI, {LLVMContext::MD_prof});
   SIUse->setIncomingValue(Idx, SI->getFalseValue());
   SIUse->addIncoming(SI->getTrueValue(), NewBB);
+  // Set the block frequency of NewBB.
+  if (HasProfileData) {
+    uint64_t TrueWeight, FalseWeight;
+    if (extractBranchWeights(*SI, TrueWeight, FalseWeight) &&
+        (TrueWeight + FalseWeight) != 0) {
+      SmallVector<BranchProbability, 2> BP;
+      BP.emplace_back(BranchProbability::getBranchProbability(
+          TrueWeight, TrueWeight + FalseWeight));
+      BP.emplace_back(BranchProbability::getBranchProbability(
+          FalseWeight, TrueWeight + FalseWeight));
+      BPI->setEdgeProbability(Pred, BP);
+    }
+
+    auto NewBBFreq =
+        BFI->getBlockFreq(Pred) * BPI->getEdgeProbability(Pred, NewBB);
+    BFI->setBlockFreq(NewBB, NewBBFreq.getFrequency());
+  }
 
   // The select is now dead.
   SI->eraseFromParent();

@@ -103,6 +103,7 @@ add_header_library(
   HDRS
     pthread_mutexattr.h
   DEPENDS
+    libc.src.__support.common
     libc.include.pthread
 )
 
@@ -385,4 +386,27 @@ add_entrypoint_object(
     libc.include.errno
     libc.include.pthread
     libc.src.__support.threads.thread
+)
+
+add_entrypoint_object(
+  pthread_once
+  SRCS
+    pthread_once.cpp
+  HDRS
+    pthread_once.h
+  DEPENDS
+    libc.include.pthread
+    libc.src.__support.threads.callonce
+)
+
+add_entrypoint_object(
+  pthread_atfork
+  SRCS
+    pthread_atfork.cpp
+  HDRS
+    pthread_atfork.h
+  DEPENDS
+    libc.include.errno
+    libc.include.pthread
+    libc.src.__support.threads.fork_callbacks
 )

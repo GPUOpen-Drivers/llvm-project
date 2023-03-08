@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -176,9 +174,6 @@ static bool SinkInstruction(Instruction *Inst,
 
 static bool ProcessBlock(BasicBlock &BB, DominatorTree &DT, LoopInfo &LI,
                          AAResults &AA) {
-  // Can't sink anything out of a block that has less than two successors.
-  if (BB.getTerminator()->getNumSuccessors() <= 1) return false;
-
   // Don't bother sinking code out of unreachable blocks. In addition to being
   // unprofitable, it can also lead to infinite looping, because in an
   // unreachable loop there may be nowhere to stop.

@@ -799,8 +799,8 @@ static std::unique_ptr<FunctionAST> ParseDefinition() {
 static std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
   SourceLocation FnLoc = CurLoc;
   if (auto E = ParseExpression()) {
-    // Make an anonymous proto.
-    auto Proto = std::make_unique<PrototypeAST>(FnLoc, "__anon_expr",
+    // Make the top-level expression be our "main" function.
+    auto Proto = std::make_unique<PrototypeAST>(FnLoc, "main",
                                                  std::vector<std::string>());
     return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
   }
@@ -1037,7 +1037,7 @@ Value *IfExprAST::codegen() {
   ThenBB = Builder->GetInsertBlock();
 
   // Emit else block.
-  TheFunction->getBasicBlockList().push_back(ElseBB);
+  TheFunction->insert(TheFunction->end(), ElseBB);
   Builder->SetInsertPoint(ElseBB);
 
   Value *ElseV = Else->codegen();
@@ -1049,7 +1049,7 @@ Value *IfExprAST::codegen() {
   ElseBB = Builder->GetInsertBlock();
 
   // Emit merge block.
-  TheFunction->getBasicBlockList().push_back(MergeBB);
+  TheFunction->insert(TheFunction->end(), MergeBB);
   Builder->SetInsertPoint(MergeBB);
   PHINode *PN = Builder->CreatePHI(Type::getDoubleTy(*TheContext), 2, "iftmp");
 

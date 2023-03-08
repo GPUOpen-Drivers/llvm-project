@@ -16,7 +16,7 @@
 #include "flang/Common/indirection.h"
 #include "flang/Parser/char-block.h"
 #include "flang/Semantics/tools.h"
-#include "mlir/Dialect/Arithmetic/IR/Arithmetic.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/StringRef.h"
@@ -34,13 +34,6 @@ using SomeExpr = Fortran::evaluate::Expr<Fortran::evaluate::SomeType>;
 inline llvm::StringRef toStringRef(const Fortran::parser::CharBlock &cb) {
   return {cb.begin(), cb.size()};
 }
-
-namespace fir {
-/// Return the integer value of a arith::ConstantOp.
-inline std::int64_t toInt(mlir::arith::ConstantOp cop) {
-  return cop.getValue().cast<mlir::IntegerAttr>().getValue().getSExtValue();
-}
-} // namespace fir
 
 /// Template helper to remove Fortran::common::Indirection wrappers.
 template <typename A>

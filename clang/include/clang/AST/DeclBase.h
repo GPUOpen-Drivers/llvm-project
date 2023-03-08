@@ -474,6 +474,9 @@ public:
 
   bool isInStdNamespace() const;
 
+  // Return true if this is a FileContext Decl.
+  bool isFileContextDecl() const;
+
   ASTContext &getASTContext() const LLVM_READONLY;
 
   /// Helper to get the language options from the ASTContext.
@@ -1386,6 +1389,8 @@ public:
 class DeclContext {
   /// For makeDeclVisibleInContextImpl
   friend class ASTDeclReader;
+  /// For checking the new bits in the Serialization part.
+  friend class ASTDeclWriter;
   /// For reconcileExternalVisibleStorage, CreateStoredDeclsMap,
   /// hasNeedToReconcileExternalVisibleStorage
   friend class ExternalASTSource;
@@ -1574,10 +1579,14 @@ class DeclContext {
 
     /// Indicates whether this struct has had its field layout randomized.
     uint64_t IsRandomized : 1;
+
+    /// True if a valid hash is stored in ODRHash. This should shave off some
+    /// extra storage and prevent CXXRecordDecl to store unused bits.
+    uint64_t ODRHash : 26;
   };
 
   /// Number of non-inherited bits in RecordDeclBitfields.
-  enum { NumRecordDeclBits = 15 };
+  enum { NumRecordDeclBits = 41 };
 
   /// Stores the bits used by OMPDeclareReductionDecl.
   /// If modified NumOMPDeclareReductionDeclBits and the accessor
@@ -1664,10 +1673,14 @@ class DeclContext {
 
     /// Indicates if the function uses Floating Point Constrained Intrinsics
     uint64_t UsesFPIntrin : 1;
+
+    // Indicates this function is a constrained friend, where the constraint
+    // refers to an enclosing template for hte purposes of [temp.friend]p9.
+    uint64_t FriendConstraintRefersToEnclosingTemplate : 1;
   };
 
   /// Number of non-inherited bits in FunctionDeclBitfields.
-  enum { NumFunctionDeclBits = 28 };
+  enum { NumFunctionDeclBits = 29 };
 
   /// Stores the bits used by CXXConstructorDecl. If modified
   /// NumCXXConstructorDeclBits and the accessor
@@ -1679,12 +1692,12 @@ class DeclContext {
     /// For the bits in FunctionDeclBitfields.
     uint64_t : NumFunctionDeclBits;
 
-    /// 23 bits to fit in the remaining available space.
+    /// 22 bits to fit in the remaining available space.
     /// Note that this makes CXXConstructorDeclBitfields take
     /// exactly 64 bits and thus the width of NumCtorInitializers
     /// will need to be shrunk if some bit is added to NumDeclContextBitfields,
     /// NumFunctionDeclBitfields or CXXConstructorDeclBitfields.
-    uint64_t NumCtorInitializers : 20;
+    uint64_t NumCtorInitializers : 19;
     uint64_t IsInheritingConstructor : 1;
 
     /// Whether this constructor has a trail-allocated explicit specifier.
@@ -1901,6 +1914,10 @@ protected:
 
 public:
   ~DeclContext();
+
+  // For use when debugging; hasValidDeclKind() will always return true for
+  // a correctly constructed object within its lifetime.
+  bool hasValidDeclKind() const;
 
   Decl::Kind getDeclKind() const {
     return static_cast<Decl::Kind>(DeclContextBits.DeclKind);
@@ -2523,6 +2540,8 @@ public:
   static bool classof(const Decl *D);
   static bool classof(const DeclContext *D) { return true; }
 
+  void dumpAsDecl() const;
+  void dumpAsDecl(const ASTContext *Ctx) const;
   void dumpDeclContext() const;
   void dumpLookups() const;
   void dumpLookups(llvm::raw_ostream &OS, bool DumpDecls = false,

@@ -256,7 +256,7 @@ protected:
     if (!m_should_perform_action)
       return;
     m_should_perform_action = false;
-    bool internal_breakpoint = true;
+    bool all_stopping_locs_internal = true;
 
     ThreadSP thread_sp(m_thread_wp.lock());
 
@@ -362,29 +362,21 @@ protected:
                            " not running commands to avoid recursion.");
             bool ignoring_breakpoints =
                 process->GetIgnoreBreakpointsInExpressions();
-            if (ignoring_breakpoints) {
-              m_should_stop = false;
-              // Internal breakpoints will always stop.
-              for (size_t j = 0; j < num_owners; j++) {
-                lldb::BreakpointLocationSP bp_loc_sp =
-                    bp_site_sp->GetOwnerAtIndex(j);
-                if (bp_loc_sp->GetBreakpoint().IsInternal()) {
-                  m_should_stop = true;
-                  break;
-                }
-              }
-            } else {
-              m_should_stop = true;
+            // Internal breakpoints should be allowed to do their job, we
+            // can make sure they don't do anything that would cause recursive
+            // command execution:
+            if (!m_was_all_internal) {
+              m_should_stop = !ignoring_breakpoints;
+              LLDB_LOGF(log,
+                        "StopInfoBreakpoint::PerformAction - in expression, "
+                        "continuing: %s.",
+                        m_should_stop ? "true" : "false");
+              Debugger::ReportWarning(
+                  "hit breakpoint while running function, skipping commands "
+                  "and conditions to prevent recursion",
+                    process->GetTarget().GetDebugger().GetID());
+              return;
             }
-            LLDB_LOGF(log,
-                      "StopInfoBreakpoint::PerformAction - in expression, "
-                      "continuing: %s.",
-                      m_should_stop ? "true" : "false");
-            Debugger::ReportWarning(
-                "hit breakpoint while running function, skipping commands and "
-                "conditions to prevent recursion",
-                process->GetTarget().GetDebugger().GetID());
-            return;
           }
 
           StoppointCallbackContext context(event_ptr, exe_ctx, false);
@@ -428,8 +420,6 @@ protected:
               }
               continue;
             }
-
-            internal_breakpoint = bp_loc_sp->GetBreakpoint().IsInternal();
 
             // First run the precondition, but since the precondition is per
             // breakpoint, only run it once per breakpoint.
@@ -517,7 +507,7 @@ protected:
                         loc_desc.GetData());
               // We want this stop reported, so you will know we auto-continued
               // but only for external breakpoints:
-              if (!internal_breakpoint)
+              if (!bp_loc_sp->GetBreakpoint().IsInternal())
                 thread_sp->SetShouldReportStop(eVoteYes);
               auto_continue_says_stop = false;
             }
@@ -546,6 +536,9 @@ protected:
               else
                 actually_said_continue = true;
             }
+
+            if (m_should_stop && !bp_loc_sp->GetBreakpoint().IsInternal())
+              all_stopping_locs_internal = false;
 
             // If we are going to stop for this breakpoint, then remove the
             // breakpoint.
@@ -584,7 +577,7 @@ protected:
                   __FUNCTION__, m_value);
       }
 
-      if ((!m_should_stop || internal_breakpoint) &&
+      if ((!m_should_stop || all_stopping_locs_internal) &&
           thread_sp->CompletedPlanOverridesBreakpoint()) {
 
         // Override should_stop decision when we have completed step plan

@@ -15,7 +15,9 @@
 
 #include "flang/Common/Fortran.h"
 #include "flang/Lower/AbstractConverter.h"
+#include "flang/Lower/EnvironmentDefault.h"
 #include "flang/Lower/LoweringOptions.h"
+#include "flang/Lower/StatementContext.h"
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Support/KindMapping.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -55,10 +57,11 @@ public:
          const Fortran::evaluate::TargetCharacteristics &targetCharacteristics,
          const Fortran::parser::AllCookedSources &allCooked,
          llvm::StringRef triple, fir::KindMapping &kindMap,
-         const Fortran::lower::LoweringOptions &loweringOptions) {
+         const Fortran::lower::LoweringOptions &loweringOptions,
+         const std::vector<Fortran::lower::EnvironmentDefault> &envDefaults) {
     return LoweringBridge(ctx, semanticsContext, defaultKinds, intrinsics,
                           targetCharacteristics, allCooked, triple, kindMap,
-                          loweringOptions);
+                          loweringOptions, envDefaults);
   }
 
   //===--------------------------------------------------------------------===//
@@ -91,12 +94,19 @@ public:
     return loweringOptions;
   }
 
+  const std::vector<Fortran::lower::EnvironmentDefault> &
+  getEnvironmentDefaults() const {
+    return envDefaults;
+  }
+
   /// Create a folding context. Careful: this is very expensive.
   Fortran::evaluate::FoldingContext createFoldingContext() const;
 
   Fortran::semantics::SemanticsContext &getSemanticsContext() const {
     return semanticsContext;
   }
+
+  Fortran::lower::StatementContext &fctCtx() { return functionContext; }
 
   bool validModule() { return getModule(); }
 
@@ -121,11 +131,13 @@ private:
       const Fortran::evaluate::TargetCharacteristics &targetCharacteristics,
       const Fortran::parser::AllCookedSources &cooked, llvm::StringRef triple,
       fir::KindMapping &kindMap,
-      const Fortran::lower::LoweringOptions &loweringOptions);
+      const Fortran::lower::LoweringOptions &loweringOptions,
+      const std::vector<Fortran::lower::EnvironmentDefault> &envDefaults);
   LoweringBridge() = delete;
   LoweringBridge(const LoweringBridge &) = delete;
 
   Fortran::semantics::SemanticsContext &semanticsContext;
+  Fortran::lower::StatementContext functionContext;
   const Fortran::common::IntrinsicTypeDefaultKinds &defaultKinds;
   const Fortran::evaluate::IntrinsicProcTable &intrinsics;
   const Fortran::evaluate::TargetCharacteristics &targetCharacteristics;
@@ -134,6 +146,7 @@ private:
   std::unique_ptr<mlir::ModuleOp> module;
   fir::KindMapping &kindMap;
   const Fortran::lower::LoweringOptions &loweringOptions;
+  const std::vector<Fortran::lower::EnvironmentDefault> &envDefaults;
 };
 
 } // namespace lower

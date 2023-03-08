@@ -37,6 +37,7 @@ func.func @empty_func() -> () {
 // CHECK: func private @external_func_with_return_val(memref<4xi32, strided{{.*}}>) -> f32
 // CHECK-FULLY-DYNAMIC-LAYOUT-MAP-LABEL: func private @external_func_with_return_val(memref<4xi32,
 // CHECK-FULLY-DYNAMIC-LAYOUT-MAP-SAME: strided<[?], offset: ?>>
+// CHECK-NO-LAYOUT-MAP-LABEL: func private @external_func_with_return_val(memref<4xi32>)
 func.func private @external_func_with_return_val(tensor<4xi32>) -> f32
 
 // -----
@@ -53,7 +54,9 @@ func.func private @external_func_with_return_val(tensor<4xi32>) -> f32
 //       CHECK-NO-LAYOUT-MAP:   %[[subview:.*]] = memref.subview {{.*}} : memref<20x10xf32> to memref<2x?xf32, strided<[10, 1], offset: ?>>
 //       CHECK-NO-LAYOUT-MAP:   %[[alloc_no_layout:.*]] = memref.alloc(%{{.*}}) : memref<2x?xf32>
 //       CHECK-NO-LAYOUT-MAP:   memref.copy %[[subview]], %[[alloc_no_layout]]
-//       CHECK-NO-LAYOUT-MAP:   memref.dealloc %[[alloc]]
+// TODO: %alloc should be deallocated here, but we currently do not dealloc
+// buffers that are inserted due to to_tensor/to_memref canonicalization (when
+// the buffer types have different layout maps).
 //       CHECK-NO-LAYOUT-MAP:   return %[[alloc_no_layout]]
 
 // CHECK-FULLY-DYNAMIC-LAYOUT-MAP-LABEL: func @return_extract_slice(%{{.*}}) -> memref<2x?xf32,
@@ -69,6 +72,7 @@ func.func @return_extract_slice(%idx: index, %sz: index) -> (tensor<2x?xf32>)
 // -----
 
 // CHECK-LABEL: func private @private_func
+// CHECK-NO-LAYOUT-MAP-LABEL: func private @private_func(memref<?xf32>) -> f32
 func.func private @private_func(tensor<?xf32>) -> (f32)
 
 // private_func may modify the buffer arg, but that's OK because %t is writable.
@@ -432,9 +436,9 @@ func.func @main() {
   %v1 = arith.constant 1.0 : f32
   %v2 = arith.constant 2.0 : f32
 
-  // CHECK-NEXT:   %[[A:.*]] = memref.alloc() {alignment = 128 : i64} : memref<64xf32>
-  // CHECK-NEXT:   %[[B:.*]] = memref.alloc() {alignment = 128 : i64} : memref<64xf32>
-  // CHECK-NEXT:   %[[C:.*]] = memref.alloc() {alignment = 128 : i64} : memref<f32>
+  // CHECK-NEXT:   %[[A:.*]] = memref.alloc() {alignment = 64 : i64} : memref<64xf32>
+  // CHECK-NEXT:   %[[B:.*]] = memref.alloc() {alignment = 64 : i64} : memref<64xf32>
+  // CHECK-NEXT:   %[[C:.*]] = memref.alloc() {alignment = 64 : i64} : memref<f32>
   //  CHECK-DAG:   %[[cA:.*]] = memref.cast %[[A]] : memref<64xf32> to memref<64xf32, strided<[?], offset: ?>>
   //  CHECK-DAG:   %[[cB:.*]] = memref.cast %[[B]] : memref<64xf32> to memref<64xf32, strided<[?], offset: ?>>
   //  CHECK-DAG:   %[[cC:.*]] = memref.cast %[[C]] : memref<f32> to memref<f32, strided<[], offset: ?>>
@@ -603,3 +607,21 @@ func.func @transfer_read(
 //       CHECK: return %[[RES]] : vector<4xf32>
   return %0 : vector<4xf32>
 }
+
+// -----
+
+// CHECK-LABEL: func @main(
+func.func @main() {
+  // CHECK: %[[const:.*]] = memref.get_global
+  %t = arith.constant dense<[1.0, 2.0, 3.0]> : tensor<3xf32>
+  // CHECK: %[[alloc:.*]] = memref.alloc
+  // CHECK: memref.copy %[[const]], %[[alloc]]
+  // CHECK: %[[casted:.*]] = memref.cast %[[alloc]] : memref<3xf32> to memref<*xf32>
+  %unranked = tensor.cast %t : tensor<3xf32> to tensor<*xf32>
+  // CHECK: call @maybe_writing_func(%[[casted]])
+  func.call @maybe_writing_func(%unranked) : (tensor<*xf32>) -> ()
+  return
+}
+
+// This function may write to buffer(%ptr).
+func.func private @maybe_writing_func(%ptr : tensor<*xf32>)

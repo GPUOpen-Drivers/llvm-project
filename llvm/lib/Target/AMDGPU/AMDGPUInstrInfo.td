@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -393,7 +391,7 @@ def AMDGPUldexp : PatFrags<(ops node:$src0, node:$src1),
 
 def AMDGPUfp_class : PatFrags<(ops node:$src0, node:$src1),
   [(int_amdgcn_class node:$src0, node:$src1),
-  (AMDGPUfp_class_impl node:$src0, node:$src1)]>;
+   (AMDGPUfp_class_impl node:$src0, node:$src1)]>;
 
 def AMDGPUfmed3 : PatFrags<(ops node:$src0, node:$src1, node:$src2),
   [(int_amdgcn_fmed3 node:$src0, node:$src1, node:$src2),

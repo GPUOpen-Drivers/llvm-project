@@ -124,6 +124,8 @@ public:
   GetRecognizedArguments(const StructuredData::ObjectSP &implementor,
                          lldb::StackFrameSP frame_sp) override;
 
+  lldb::ScriptedProcessInterfaceUP CreateScriptedProcessInterface() override;
+
   StructuredData::GenericSP
   OSPlugin_CreatePluginObject(const char *class_name,
                               lldb::ProcessSP process_sp) override;
@@ -201,6 +203,9 @@ public:
                           StructuredData::ObjectSP &callee_wrapper_sp,
                           const TypeSummaryOptions &options,
                           std::string &retval) override;
+
+  bool FormatterCallbackFunction(const char *function_name,
+                                 lldb::TypeImplSP type_impl_sp) override;
 
   bool GetDocumentationForItem(const char *item, std::string &dest) override;
 

@@ -1,5 +1,3 @@
-# Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-# Notified per clause 4(b) of the license.
 # This function returns the messages of various POSIX error codes as they are returned by std::error_code.
 # The purpose of this function is to supply those error messages to llvm-lit using the errc_messages config.
 # Currently supplied and needed error codes: ENOENT, EISDIR, EINVAL and EACCES.

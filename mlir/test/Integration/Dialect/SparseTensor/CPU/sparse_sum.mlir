@@ -1,18 +1,32 @@
-// RUN: mlir-opt %s --sparse-compiler | \
-// RUN: TENSOR0="%mlir_src_dir/test/Integration/data/test_symmetric.mtx" \
-// RUN: mlir-cpu-runner \
-// RUN:  -e entry -entry-point-result=void  \
-// RUN:  -shared-libs=%mlir_lib_dir/libmlir_c_runner_utils%shlibext | \
-// RUN: FileCheck %s
+// DEFINE: %{option} = enable-runtime-library=true
+// DEFINE: %{compile} = mlir-opt %s --sparse-compiler=%{option}
+// DEFINE: %{run} = TENSOR0="%mlir_src_dir/test/Integration/data/test_symmetric.mtx" \
+// DEFINE: mlir-cpu-runner \
+// DEFINE:  -e entry -entry-point-result=void  \
+// DEFINE:  -shared-libs=%mlir_lib_dir/libmlir_c_runner_utils%shlibext | \
+// DEFINE: FileCheck %s
 //
-// Do the same run, but now with SIMDization as well. This should not change the outcome.
+// RUN: %{compile} | %{run}
 //
-// RUN: mlir-opt %s --sparse-compiler="vectorization-strategy=any-storage-inner-loop vl=2" | \
-// RUN: TENSOR0="%mlir_src_dir/test/Integration/data/test_symmetric.mtx" \
-// RUN: mlir-cpu-runner \
-// RUN:  -e entry -entry-point-result=void  \
-// RUN:  -shared-libs=%mlir_lib_dir/libmlir_c_runner_utils%shlibext | \
-// RUN: FileCheck %s
+// Do the same run, but now with direct IR generation.
+// REDEFINE: %{option} = enable-runtime-library=false
+// RUN: %{compile} | %{run}
+//
+// Do the same run, but now with direct IR generation and vectorization.
+// REDEFINE: %{option} = "enable-runtime-library=false vl=2 reassociate-fp-reductions=true enable-index-optimizations=true"
+// RUN: %{compile} | %{run}
+
+// If SVE is available, do the same run, but now with direct IR generation and VLA
+// vectorization.
+// REDEFINE: %{option} = "enable-runtime-library=false vl=4  enable-arm-sve=%ENABLE_VLA"
+// REDEFINE: %{run} = TENSOR0="%mlir_src_dir/test/Integration/data/test_symmetric.mtx" \
+// REDEFINE: %lli \
+// REDEFINE:   --entry-function=entry_lli \
+// REDEFINE:   --extra-module=%S/Inputs/main_for_lli.ll \
+// REDEFINE:   %VLA_ARCH_ATTR_OPTIONS \
+// REDEFINE:   --dlopen=%mlir_native_utils_lib_dir/libmlir_c_runner_utils%shlibext | \
+// REDEFINE: FileCheck %s
+// RUN: %{compile} | mlir-translate -mlir-to-llvmir | %{run}
 
 !Filename = !llvm.ptr<i8>
 
@@ -65,7 +79,7 @@ module {
 
     // Read the sparse matrix from file, construct sparse storage.
     %fileName = call @getTensorFilename(%c0) : (index) -> (!Filename)
-    %a = sparse_tensor.new %fileName : !Filename to tensor<?x?xf64, #SparseMatrix>
+    %a = sparse_tensor.new expand_symmetry %fileName : !Filename to tensor<?x?xf64, #SparseMatrix>
 
     // Call the kernel.
     %0 = call @kernel_sum_reduce(%a, %x)

@@ -190,6 +190,11 @@
 #endif
 
 #if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
+    defined(__AVXIFMA__)
+#include <avxifmaintrin.h>
+#endif
+
+#if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
     defined(__AVX512VBMI__)
 #include <avx512vbmiintrin.h>
 #endif
@@ -252,6 +257,16 @@
 #if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
     defined(__GFNI__)
 #include <gfniintrin.h>
+#endif
+
+#if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
+    defined(__AVXVNNIINT8__)
+#include <avxvnniint8intrin.h>
+#endif
+
+#if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
+    defined(__AVXNECONVERT__)
+#include <avxneconvertintrin.h>
 #endif
 
 #if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
@@ -508,6 +523,10 @@ _storebe_i64(void * __P, long long __D) {
     defined(__INVPCID__)
 #include <invpcidintrin.h>
 #endif
+#if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
+    defined(__AMX_FP16__)
+#include <amxfp16intrin.h>
+#endif
 
 #if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
     defined(__KL__) || defined(__WIDEKL__)
@@ -515,7 +534,7 @@ _storebe_i64(void * __P, long long __D) {
 #endif
 
 #if !(defined(_MSC_VER) || defined(__SCE__)) || __has_feature(modules) ||      \
-    defined(__AMXTILE__) || defined(__AMXINT8__) || defined(__AMXBF16__)
+    defined(__AMX_TILE__) || defined(__AMX_INT8__) || defined(__AMX_BF16__)
 #include <amxintrin.h>
 #endif
 

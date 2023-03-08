@@ -163,8 +163,7 @@ class VOPProfileI2F<ValueType dstVt, ValueType srcVt> :
 
   let Ins64 = (ins Src0RC64:$src0, clampmod:$clamp, omod:$omod);
   let InsVOP3Base = (ins Src0VOP3DPP:$src0, clampmod:$clamp, omod:$omod);
-  let Asm64 = "$vdst, $src0$clamp$omod";
-  let AsmVOP3DPPBase = Asm64;
+  let AsmVOP3Base = "$vdst, $src0$clamp$omod";
 
   let HasModifiers = 0;
   let HasClamp = 1;
@@ -175,8 +174,7 @@ class VOPProfileI2F_True16<ValueType dstVt, ValueType srcVt> :
 
   let Ins64 = (ins Src0RC64:$src0, clampmod:$clamp, omod:$omod);
   let InsVOP3Base = (ins Src0VOP3DPP:$src0, clampmod:$clamp, omod:$omod);
-  let Asm64 = "$vdst, $src0$clamp$omod";
-  let AsmVOP3DPPBase = Asm64;
+  let AsmVOP3Base = "$vdst, $src0$clamp$omod";
 
   let HasModifiers = 0;
   let HasClamp = 1;
@@ -231,9 +229,9 @@ defm V_MOV_B64 : VOP1Inst <"v_mov_b64", VOP_I64_I64>;
 // TODO: Make profile for this, there is VOP3 encoding also
 def V_READFIRSTLANE_B32 :
   InstSI <(outs SReg_32:$vdst),
-    (ins VRegOrLds_32:$src0),
+    (ins VRegOrLdsSrc_32:$src0),
     "v_readfirstlane_b32 $vdst, $src0",
-    [(set i32:$vdst, (int_amdgcn_readfirstlane (i32 VRegOrLds_32:$src0)))]>,
+    [(set i32:$vdst, (int_amdgcn_readfirstlane (i32 VRegOrLdsSrc_32:$src0)))]>,
   Enc32 {
 
   let isCodeGenOnly = 0;
@@ -382,7 +380,6 @@ class VOP_MOVREL<RegisterOperand Src1RC> : VOPProfile<[untyped, i32, untyped, un
   let Ins32 = (ins Src0RC32:$vdst, Src1RC:$src0);
   let Ins64 = (ins Src0RC64:$vdst, Src1RC:$src0);
   let Asm32 = getAsm32<1, 1>.ret;
-  let Asm64 = getAsm64<1, 1, 0, 0, 1>.ret;
 
   let OutsSDWA = (outs Src0RC32:$vdst);
   let InsSDWA = (ins Src0ModSDWA:$src0_modifiers, Src0SDWA:$src0,
@@ -397,7 +394,16 @@ class VOP_MOVREL<RegisterOperand Src1RC> : VOPProfile<[untyped, i32, untyped, un
   let AsmDPP16 = getAsmDPP16<1, 1, 0>.ret;
   let InsDPP8 = (ins Src0RC32:$old, Src0RC32:$src0, dpp8:$dpp8, FI:$fi);
   let AsmDPP8 = getAsmDPP8<1, 1, 0>.ret;
+
   let OutsVOP3DPP = (outs Src0RC64:$vdst);
+  let InsVOP3DPP = getInsVOP3DPP<InsVOP3Base, Src0RC64, NumSrcArgs>.ret;
+  let InsVOP3DPP16 = getInsVOP3DPP16<InsVOP3Base, Src0RC64, NumSrcArgs>.ret;
+  let InsVOP3DPP8 = getInsVOP3DPP8<InsVOP3Base, Src0RC64, NumSrcArgs>.ret;
+
+  let AsmVOP3Base =
+      getAsmVOP3Base<NumSrcArgs, 1 /* HasDst */, HasClamp,
+                        HasOpSel, HasOMod, IsVOP3P, HasModifiers,
+                        HasModifiers, HasModifiers, HasModifiers>.ret;
 
   let HasDst = 0;
   let EmitDst = 1; // force vdst emission
@@ -522,13 +528,10 @@ def : GCNPat<
 >;
 }
 
-def VOP_SWAP_I32 : VOPProfile<[i32, i32, i32, untyped]> {
-  let Outs32 = (outs VGPR_32:$vdst, VGPR_32:$vdst1);
-  let Ins32 = (ins VGPR_32:$src0, VGPR_32:$src1);
-  let Outs64 = Outs32;
+def VOP_SWAP_I32 : VOPProfile<[i32, i32, untyped, untyped]> {
+  let Outs32 = (outs VGPR_32:$vdst, VRegSrc_32:$vdst1);
+  let Ins32 = (ins VRegSrc_32:$src0, VGPR_32:$src1);
   let Asm32 = " $vdst, $src0";
-  let Asm64 = "";
-  let Ins64 = (ins);
 }
 
 let SubtargetPredicate = isGFX9Plus in {
@@ -539,7 +542,7 @@ let SubtargetPredicate = isGFX9Plus in {
   }
 
   let isReMaterializable = 1 in
-  defm V_SAT_PK_U8_I16    : VOP1Inst<"v_sat_pk_u8_i16", VOP_I32_I32>;
+  defm V_SAT_PK_U8_I16    : VOP1Inst_t16<"v_sat_pk_u8_i16", VOP_I16_I32>;
 
   let mayRaiseFPException = 0 in {
     let OtherPredicates = [Has16BitInsts, NotHasTrue16BitInsts] in {
@@ -627,7 +630,7 @@ let SubtargetPredicate = isGFX10Plus in {
 
 def VOPProfileAccMov : VOP_NO_EXT<VOP_I32_I32> {
   let DstRC = RegisterOperand<AGPR_32>;
-  let Src0RC32 = RegisterOperand<AGPR_32>;
+  let Src0RC32 = ARegSrc_32;
   let Asm32 = " $vdst, $src0";
 }
 
@@ -813,6 +816,7 @@ defm V_RNDNE_F16_t16         : VOP1_Real_FULL_t16_gfx11<0x05e, "v_rndne_f16">;
 defm V_FRACT_F16_t16         : VOP1_Real_FULL_t16_gfx11<0x05f, "v_fract_f16">;
 defm V_SIN_F16_t16           : VOP1_Real_FULL_t16_gfx11<0x060, "v_sin_f16">;
 defm V_COS_F16_t16           : VOP1_Real_FULL_t16_gfx11<0x061, "v_cos_f16">;
+defm V_SAT_PK_U8_I16_t16     : VOP1_Real_FULL_t16_gfx11<0x062, "v_sat_pk_u8_i16">;
 defm V_CVT_NORM_I16_F16_t16  : VOP1_Real_FULL_t16_gfx11<0x063, "v_cvt_norm_i16_f16">;
 defm V_CVT_NORM_U16_F16_t16  : VOP1_Real_FULL_t16_gfx11<0x064, "v_cvt_norm_u16_f16">;
 
@@ -895,7 +899,7 @@ defm V_RNDNE_F16         : VOP1_Real_gfx10<0x05e>;
 defm V_FRACT_F16         : VOP1_Real_gfx10<0x05f>;
 defm V_SIN_F16           : VOP1_Real_gfx10<0x060>;
 defm V_COS_F16           : VOP1_Real_gfx10<0x061>;
-defm V_SAT_PK_U8_I16     : VOP1_Real_gfx10_FULL_gfx11<0x062>;
+defm V_SAT_PK_U8_I16     : VOP1_Real_gfx10<0x062>;
 defm V_CVT_NORM_I16_F16  : VOP1_Real_gfx10<0x063>;
 defm V_CVT_NORM_U16_F16  : VOP1_Real_gfx10<0x064>;
 

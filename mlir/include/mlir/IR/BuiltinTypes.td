@@ -17,7 +17,6 @@
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinDialect.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"
-include "mlir/IR/SubElementInterfaces.td"
 
 // TODO: Currently the types defined in this file are prefixed with `Builtin_`.
 // This is to differentiate the types here with the ones in OpBase.td. We should
@@ -77,6 +76,49 @@ class Builtin_FloatType<string name>
 }
 
 //===----------------------------------------------------------------------===//
+// Float8E5M2Type
+
+def Builtin_Float8E5M2 : Builtin_FloatType<"Float8E5M2"> {
+  let summary = "8-bit floating point with 2 bit mantissa";
+  let description = [{
+    An 8-bit floating point type with 1 sign bit, 5 bits exponent and 2 bits
+    mantissa. This is not a standard type as defined by IEEE-754, but it
+    follows similar conventions with the following characteristics:
+
+      * bit encoding: S1E5M2
+      * exponent bias: 15
+      * infinities: supported with exponent set to all 1s and mantissa 0s
+      * NaNs: supported with exponent bits set to all 1s and mantissa of
+        (01, 10, or 11)
+      * denormals when exponent is 0
+
+    Described in: https://arxiv.org/abs/2209.05433
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Float8E4M3FNType
+
+def Builtin_Float8E4M3FN : Builtin_FloatType<"Float8E4M3FN"> {
+  let summary = "8-bit floating point with 3 bit mantissa";
+  let description = [{
+    An 8-bit floating point type with 1 sign bit, 4 bits exponent and 3 bits
+    mantissa. This is not a standard type as defined by IEEE-754, but it follows
+    similar conventions, with the exception that there are no infinity values
+    and only two NaN representations. This type has the following
+    characteristics:
+
+      * bit encoding: S1E4M3
+      * exponent bias: 7
+      * infinities: Not supported
+      * NaNs: supported with exponent bits and mantissa bits set to all 1s
+      * denormals when exponent is 0
+
+    Described in: https://arxiv.org/abs/2209.05433
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // BFloat16Type
 
 def Builtin_BFloat16 : Builtin_FloatType<"BFloat16"> {
@@ -122,9 +164,7 @@ def Builtin_Float128 : Builtin_FloatType<"Float128"> {
 // FunctionType
 //===----------------------------------------------------------------------===//
 
-def Builtin_Function : Builtin_Type<"Function", [
-    DeclareTypeInterfaceMethods<SubElementTypeInterface>
-  ]> {
+def Builtin_Function : Builtin_Type<"Function"> {
   let summary = "Map from a list of inputs to a list of results";
   let description = [{
     Syntax:
@@ -271,7 +311,7 @@ def Builtin_Integer : Builtin_Type<"Integer"> {
 //===----------------------------------------------------------------------===//
 
 def Builtin_MemRef : Builtin_Type<"MemRef", [
-    DeclareTypeInterfaceMethods<SubElementTypeInterface>, ShapedTypeInterface
+    ShapedTypeInterface
   ], "BaseMemRefType"> {
   let summary = "Shaped reference to a region of memory";
   let description = [{
@@ -378,7 +418,7 @@ def Builtin_MemRef : Builtin_Type<"MemRef", [
     affine form through explicit linearization:
 
     ```mlir
-    affine_map<(d0, ... dN)[offset, stride0, ... strideN] -> 
+    affine_map<(d0, ... dN)[offset, stride0, ... strideN] ->
                 (offset + d0 * stride0 + ... dN * strideN)>
     ```
 
@@ -541,12 +581,6 @@ def Builtin_MemRef : Builtin_Type<"MemRef", [
     /// New `Attribute getMemorySpace()` method should be used instead.
     unsigned getMemorySpaceAsInt() const;
 
-    // TODO: merge these two special values in a single one used everywhere.
-    // Unfortunately, uses of `-1` have crept deep into the codebase now and are
-    // hard to track.
-    static int64_t getDynamicStrideOrOffset() {
-      return ShapedType::kDynamicStrideOrOffset;
-    }
   }];
   let skipDefaultBuilders = 1;
   let genVerifyDecl = 1;
@@ -612,7 +646,7 @@ def Builtin_Opaque : Builtin_Type<"Opaque"> {
 //===----------------------------------------------------------------------===//
 
 def Builtin_RankedTensor : Builtin_Type<"RankedTensor", [
-    DeclareTypeInterfaceMethods<SubElementTypeInterface>, ShapedTypeInterface
+    ShapedTypeInterface
   ], "TensorType"> {
   let summary = "Multi-dimensional array with a fixed number of dimensions";
   let description = [{
@@ -716,9 +750,7 @@ def Builtin_RankedTensor : Builtin_Type<"RankedTensor", [
 // TupleType
 //===----------------------------------------------------------------------===//
 
-def Builtin_Tuple : Builtin_Type<"Tuple", [
-    DeclareTypeInterfaceMethods<SubElementTypeInterface>
-  ]> {
+def Builtin_Tuple : Builtin_Type<"Tuple"> {
   let summary = "Fixed-sized collection of other types";
   let description = [{
     Syntax:
@@ -786,7 +818,7 @@ def Builtin_Tuple : Builtin_Type<"Tuple", [
 //===----------------------------------------------------------------------===//
 
 def Builtin_UnrankedMemRef : Builtin_Type<"UnrankedMemRef", [
-    DeclareTypeInterfaceMethods<SubElementTypeInterface>, ShapedTypeInterface
+    ShapedTypeInterface
   ], "BaseMemRefType"> {
   let summary = "Shaped reference, with unknown rank, to a region of memory";
   let description = [{
@@ -843,7 +875,7 @@ def Builtin_UnrankedMemRef : Builtin_Type<"UnrankedMemRef", [
     using ShapedType::Trait<UnrankedMemRefType>::getDimSize;
     using ShapedType::Trait<UnrankedMemRefType>::getDynamicDimIndex;
 
-    ArrayRef<int64_t> getShape() const { return llvm::None; }
+    ArrayRef<int64_t> getShape() const { return std::nullopt; }
 
     /// [deprecated] Returns the memory space in old raw integer representation.
     /// New `Attribute getMemorySpace()` method should be used instead.
@@ -858,7 +890,7 @@ def Builtin_UnrankedMemRef : Builtin_Type<"UnrankedMemRef", [
 //===----------------------------------------------------------------------===//
 
 def Builtin_UnrankedTensor : Builtin_Type<"UnrankedTensor", [
-    DeclareTypeInterfaceMethods<SubElementTypeInterface>, ShapedTypeInterface
+    ShapedTypeInterface
   ], "TensorType"> {
   let summary = "Multi-dimensional array with unknown dimensions";
   let description = [{
@@ -896,7 +928,7 @@ def Builtin_UnrankedTensor : Builtin_Type<"UnrankedTensor", [
     using ShapedType::Trait<UnrankedTensorType>::getDimSize;
     using ShapedType::Trait<UnrankedTensorType>::getDynamicDimIndex;
 
-    ArrayRef<int64_t> getShape() const { return llvm::None; }
+    ArrayRef<int64_t> getShape() const { return std::nullopt; }
   }];
   let skipDefaultBuilders = 1;
   let genVerifyDecl = 1;
@@ -906,9 +938,7 @@ def Builtin_UnrankedTensor : Builtin_Type<"UnrankedTensor", [
 // VectorType
 //===----------------------------------------------------------------------===//
 
-def Builtin_Vector : Builtin_Type<"Vector", [
-    DeclareTypeInterfaceMethods<SubElementTypeInterface>, ShapedTypeInterface
-  ], "Type"> {
+def Builtin_Vector : Builtin_Type<"Vector", [ShapedTypeInterface], "Type"> {
   let summary = "Multi-dimensional SIMD vector type";
   let description = [{
     Syntax:
@@ -994,7 +1024,7 @@ def Builtin_Vector : Builtin_Type<"Vector", [
 
     /// Clone this vector type with the given shape and element type. If the
     /// provided shape is `None`, the current shape of the type is used.
-    VectorType cloneWith(Optional<ArrayRef<int64_t>> shape,
+    VectorType cloneWith(std::optional<ArrayRef<int64_t>> shape,
                          Type elementType) const;
   }];
   let skipDefaultBuilders = 1;

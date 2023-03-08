@@ -108,7 +108,12 @@ void AMDGCN::Linker::constructLldCommand(Compilation &C, const JobAction &JA,
                                          const llvm::opt::ArgList &Args) const {
   // Construct lld command.
   // The output from ld.lld is an HSA code object file.
-  ArgStringList LldArgs{"-flavor", "gnu", "--no-undefined", "-shared",
+  ArgStringList LldArgs{"-flavor",
+                        "gnu",
+                        "-m",
+                        "elf64_amdgpu",
+                        "--no-undefined",
+                        "-shared",
                         "-plugin-opt=-amdgpu-internalize-symbols"};
 
   auto &TC = getToolChain();
@@ -232,7 +237,7 @@ void HIPAMDToolChain::addClangTargetOptions(
       DriverArgs.getLastArgValue(options::OPT_gpu_max_threads_per_block_EQ);
   if (!MaxThreadsPerBlock.empty()) {
     std::string ArgStr =
-        std::string("--gpu-max-threads-per-block=") + MaxThreadsPerBlock.str();
+        (Twine("--gpu-max-threads-per-block=") + MaxThreadsPerBlock).str();
     CC1Args.push_back(DriverArgs.MakeArgStringRef(ArgStr));
   }
 
@@ -265,8 +270,7 @@ HIPAMDToolChain::TranslateArgs(const llvm::opt::DerivedArgList &Args,
   const OptTable &Opts = getDriver().getOpts();
 
   for (Arg *A : Args) {
-    if (!shouldSkipArgument(A) &&
-        !shouldSkipSanitizeOption(*this, Args, BoundArch, A))
+    if (!shouldSkipSanitizeOption(*this, Args, BoundArch, A))
       DAL->append(A);
   }
 
@@ -310,7 +314,7 @@ void HIPAMDToolChain::AddIAMCUIncludeArgs(const ArgList &Args,
 
 void HIPAMDToolChain::AddHIPIncludeArgs(const ArgList &DriverArgs,
                                         ArgStringList &CC1Args) const {
-  RocmInstallation.AddHIPIncludeArgs(DriverArgs, CC1Args);
+  RocmInstallation->AddHIPIncludeArgs(DriverArgs, CC1Args);
 }
 
 SanitizerMask HIPAMDToolChain::getSupportedSanitizers() const {
@@ -339,7 +343,7 @@ HIPAMDToolChain::getDeviceLibs(const llvm::opt::ArgList &DriverArgs) const {
   ArgStringList LibraryPaths;
 
   // Find in --hip-device-lib-path and HIP_LIBRARY_PATH.
-  for (auto Path : RocmInstallation.getRocmDeviceLibPathArg())
+  for (StringRef Path : RocmInstallation->getRocmDeviceLibPathArg())
     LibraryPaths.push_back(DriverArgs.MakeArgString(Path));
 
   addDirectoryList(DriverArgs, LibraryPaths, "", "HIP_DEVICE_LIB_PATH");
@@ -349,7 +353,7 @@ HIPAMDToolChain::getDeviceLibs(const llvm::opt::ArgList &DriverArgs) const {
   if (!BCLibArgs.empty()) {
     llvm::for_each(BCLibArgs, [&](StringRef BCName) {
       StringRef FullName;
-      for (std::string LibraryPath : LibraryPaths) {
+      for (StringRef LibraryPath : LibraryPaths) {
         SmallString<128> Path(LibraryPath);
         llvm::sys::path::append(Path, BCName);
         FullName = Path;
@@ -361,7 +365,7 @@ HIPAMDToolChain::getDeviceLibs(const llvm::opt::ArgList &DriverArgs) const {
       getDriver().Diag(diag::err_drv_no_such_file) << BCName;
     });
   } else {
-    if (!RocmInstallation.hasDeviceLibrary()) {
+    if (!RocmInstallation->hasDeviceLibrary()) {
       getDriver().Diag(diag::err_drv_no_rocm_device_lib) << 0;
       return {};
     }
@@ -372,7 +376,7 @@ HIPAMDToolChain::getDeviceLibs(const llvm::opt::ArgList &DriverArgs) const {
     if (DriverArgs.hasFlag(options::OPT_fgpu_sanitize,
                            options::OPT_fno_gpu_sanitize, true) &&
         getSanitizerArgs(DriverArgs).needsAsanRt()) {
-      auto AsanRTL = RocmInstallation.getAsanRTLPath();
+      auto AsanRTL = RocmInstallation->getAsanRTLPath();
       if (AsanRTL.empty()) {
         unsigned DiagID = getDriver().getDiags().getCustomDiagID(
             DiagnosticsEngine::Error,
@@ -382,15 +386,15 @@ HIPAMDToolChain::getDeviceLibs(const llvm::opt::ArgList &DriverArgs) const {
         getDriver().Diag(DiagID);
         return {};
       } else
-        BCLibs.push_back({AsanRTL.str(), /*ShouldInternalize=*/false});
+        BCLibs.emplace_back(AsanRTL, /*ShouldInternalize=*/false);
     }
 
     // Add the HIP specific bitcode library.
-    BCLibs.push_back(RocmInstallation.getHIPPath());
+    BCLibs.push_back(RocmInstallation->getHIPPath());
 
     // Add common device libraries like ocml etc.
-    for (auto N : getCommonDeviceLibNames(DriverArgs, GpuArch.str()))
-      BCLibs.push_back(StringRef(N));
+    for (StringRef N : getCommonDeviceLibNames(DriverArgs, GpuArch.str()))
+      BCLibs.emplace_back(N);
 
     // Add instrument lib.
     auto InstLib =

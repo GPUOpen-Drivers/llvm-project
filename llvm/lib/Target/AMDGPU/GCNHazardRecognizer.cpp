@@ -3,8 +3,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-// Modifications Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
-// Notified per clause 4(b) of the license.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -819,7 +817,7 @@ int GCNHazardRecognizer::createsVALUHazard(const MachineInstr &MI) {
   int VDataIdx = AMDGPU::getNamedOperandIdx(Opcode, AMDGPU::OpName::vdata);
   int VDataRCID = -1;
   if (VDataIdx != -1)
-    VDataRCID = Desc.OpInfo[VDataIdx].RegClass;
+    VDataRCID = Desc.operands()[VDataIdx].RegClass;
 
   if (TII->isMUBUF(MI) || TII->isMTBUF(MI)) {
     // There is no hazard if the instruction does not use vector regs
@@ -844,13 +842,13 @@ int GCNHazardRecognizer::createsVALUHazard(const MachineInstr &MI) {
   if (TII->isMIMG(MI)) {
     int SRsrcIdx = AMDGPU::getNamedOperandIdx(Opcode, AMDGPU::OpName::srsrc);
     assert(SRsrcIdx != -1 &&
-           AMDGPU::getRegBitWidth(Desc.OpInfo[SRsrcIdx].RegClass) == 256);
+           AMDGPU::getRegBitWidth(Desc.operands()[SRsrcIdx].RegClass) == 256);
     (void)SRsrcIdx;
   }
 
   if (TII->isFLAT(MI)) {
     int DataIdx = AMDGPU::getNamedOperandIdx(Opcode, AMDGPU::OpName::vdata);
-    if (AMDGPU::getRegBitWidth(Desc.OpInfo[DataIdx].RegClass) > 64)
+    if (AMDGPU::getRegBitWidth(Desc.operands()[DataIdx].RegClass) > 64)
       return DataIdx;
   }
 
@@ -921,8 +919,7 @@ int GCNHazardRecognizer::checkVALUHazards(MachineInstr *VALU) {
           if (DstSel->getImm() == AMDGPU::SDWA::DWORD)
             return false;
       } else {
-        if ((AMDGPU::getNamedOperandIdx(MI.getOpcode(),
-                                        AMDGPU::OpName::op_sel) == -1) ||
+        if (!AMDGPU::hasNamedOperand(MI.getOpcode(), AMDGPU::OpName::op_sel) ||
             !(TII->getNamedOperand(MI, AMDGPU::OpName::src0_modifiers)
                   ->getImm() &
               SISrcMods::DST_OP_SEL))
@@ -1213,7 +1210,7 @@ bool GCNHazardRecognizer::fixSMEMtoVectorWriteHazards(MachineInstr *MI) {
   const MachineOperand *SDST = TII->getNamedOperand(*MI, SDSTName);
   if (!SDST) {
     for (const auto &MO : MI->implicit_operands()) {
-      if (MO.isDef() && TRI->isSGPRClass(TRI->getPhysRegClass(MO.getReg()))) {
+      if (MO.isDef() && TRI->isSGPRClass(TRI->getPhysRegBaseClass(MO.getReg()))) {
         SDST = &MO;
         break;
       }
@@ -1294,7 +1291,7 @@ bool GCNHazardRecognizer::fixVcmpxExecWARHazard(MachineInstr *MI) {
       if (TII->getNamedOperand(MI, AMDGPU::OpName::sdst))
         return true;
       for (auto MO : MI.implicit_operands())
-        if (MO.isDef() && TRI->isSGPRClass(TRI->getPhysRegClass(MO.getReg())))
+        if (MO.isDef() && TRI->isSGPRClass(TRI->getPhysRegBaseClass(MO.getReg())))
           return true;
     }
     if (MI.getOpcode() == AMDGPU::S_WAITCNT_DEPCTR &&
@@ -1334,6 +1331,12 @@ static bool shouldRunLdsBranchVmemWARHazardFixup(const MachineFunction &MF,
   return false;
 }
 
+static bool isStoreCountWaitZero(const MachineInstr &I) {
+  return I.getOpcode() == AMDGPU::S_WAITCNT_VSCNT &&
+         I.getOperand(0).getReg() == AMDGPU::SGPR_NULL &&
+         !I.getOperand(1).getImm();
+}
+
 bool GCNHazardRecognizer::fixLdsBranchVmemWARHazard(MachineInstr *MI) {
   if (!RunLdsBranchVmemWARHazardFixup)
     return false;
@@ -1353,9 +1356,7 @@ bool GCNHazardRecognizer::fixLdsBranchVmemWARHazard(MachineInstr *MI) {
     return false;
 
   auto IsExpiredFn = [&IsHazardInst](const MachineInstr &I, int) {
-    return IsHazardInst(I) || (I.getOpcode() == AMDGPU::S_WAITCNT_VSCNT &&
-                               I.getOperand(0).getReg() == AMDGPU::SGPR_NULL &&
-                               !I.getOperand(1).getImm());
+    return IsHazardInst(I) || isStoreCountWaitZero(I);
   };
 
   auto IsHazardFn = [InstType, &IsHazardInst](const MachineInstr &I) {
@@ -1372,9 +1373,7 @@ bool GCNHazardRecognizer::fixLdsBranchVmemWARHazard(MachineInstr *MI) {
       if (InstType == InstType2)
         return true;
 
-      return I.getOpcode() == AMDGPU::S_WAITCNT_VSCNT &&
-             I.getOperand(0).getReg() == AMDGPU::SGPR_NULL &&
-             !I.getOperand(1).getImm();
+      return isStoreCountWaitZero(I);
     };
 
     return ::getWaitStatesSince(IsHazardFn, &I, IsExpiredFn) !=
@@ -1847,13 +1846,13 @@ bool GCNHazardRecognizer::fixShift64HighRegBug(MachineInstr *MI) {
   Amt->setReg(NewAmt);
   Amt->setIsKill(false);
   // We do not update liveness, so verifier may see it as undef.
-  Amt->setIsUndef(true);
+  Amt->setIsUndef();
   if (OverlappedDst)
     MI->getOperand(0).setReg(NewReg);
   if (OverlappedSrc) {
     Src1->setReg(NewReg);
     Src1->setIsKill(false);
-    Src1->setIsUndef(true);
+    Src1->setIsUndef();
   }
 
   return true;
@@ -1963,7 +1962,7 @@ int GCNHazardRecognizer::checkMAIHazards908(MachineInstr *MI) {
   unsigned Opc = MI->getOpcode();
 
   auto IsVALUFn = [](const MachineInstr &MI) {
-    return SIInstrInfo::isVALU(MI);
+    return SIInstrInfo::isVALU(MI) || MI.isInlineAsm();
   };
 
   if (Opc != AMDGPU::V_ACCVGPR_READ_B32_e64) { // MFMA or v_accvgpr_write
@@ -2814,8 +2813,8 @@ bool GCNHazardRecognizer::fixVALUMaskWriteHazard(MachineInstr *MI) {
           return true;
       } else {
         const MCInstrDesc &InstDesc = I.getDesc();
-        const MCOperandInfo &OpInfo = InstDesc.OpInfo[OpNo];
-        if (TII.isLiteralConstant(Op, OpInfo))
+        const MCOperandInfo &OpInfo = InstDesc.operands()[OpNo];
+        if (!TII.isInlineConstant(Op, OpInfo))
           return true;
       }
     }

@@ -21,6 +21,7 @@ Basic Commands
    llvm-config
    llvm-cov
    llvm-cxxmap
+   llvm-debuginfo-analyzer
    llvm-diff
    llvm-dis
    llvm-dwarfdump
@@ -30,6 +31,7 @@ Basic Commands
    llvm-link
    llvm-lipo
    llvm-mca
+   llvm-opt-report
    llvm-otool
    llvm-profdata
    llvm-readobj

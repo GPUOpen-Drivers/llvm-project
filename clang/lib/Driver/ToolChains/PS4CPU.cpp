@@ -8,6 +8,7 @@
 
 #include "PS4CPU.h"
 #include "CommonArgs.h"
+#include "clang/Config/config.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/DriverDiagnostic.h"
@@ -158,34 +159,32 @@ void tools::PScpu::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   const bool IsPS4 = TC.getTriple().isPS4();
   const bool IsPS5 = TC.getTriple().isPS5();
   assert(IsPS4 || IsPS5);
-  (void)IsPS5;
 
-  ArgStringList DbgOpts;
+  auto AddCodeGenFlag = [&](Twine Flag) {
+    const char *Prefix = nullptr;
+    if (IsPS4 && D.getLTOMode() == LTOK_Thin)
+      Prefix = "-lto-thin-debug-options=";
+    else if (IsPS4 && D.getLTOMode() == LTOK_Full)
+      Prefix = "-lto-debug-options=";
+    else if (IsPS5)
+      Prefix = "-plugin-opt=";
+    else
+      llvm_unreachable("new LTO mode?");
 
-  // This tells LTO to perform JustMyCode instrumentation.
-  if (UseLTO && UseJMC)
-    DbgOpts.push_back("-enable-jmc-instrument");
-
-  // We default to creating the arange section, but LTO does not. Enable it
-  // here.
-  if (UseLTO)
-    DbgOpts.push_back("-generate-arange-section");
+    CmdArgs.push_back(Args.MakeArgString(Twine(Prefix) + Flag));
+  };
 
   if (UseLTO) {
-    if (IsPS4) {
-      StringRef F = (D.getLTOMode() == LTOK_Thin) ?
-                      "-lto-thin-debug-options=" : "-lto-debug-options=";
-      F = makeArgString(Args, F.data(), DbgOpts.front(), "");
-      DbgOpts.erase(DbgOpts.begin());
-      for (auto X : DbgOpts)
-        F = makeArgString(Args, F.data(), " ", X);
-      CmdArgs.push_back(F.data());
-    } else {
-      for (auto D : DbgOpts) {
-        CmdArgs.push_back("-mllvm");
-        CmdArgs.push_back(D);
-      }
-    }
+    // We default to creating the arange section, but LTO does not. Enable it
+    // here.
+    AddCodeGenFlag("-generate-arange-section");
+
+    // This tells LTO to perform JustMyCode instrumentation.
+    if (UseJMC)
+      AddCodeGenFlag("-enable-jmc-instrument");
+
+    if (Arg *A = Args.getLastArg(options::OPT_fcrash_diagnostics_dir))
+      AddCodeGenFlag(Twine("-crash-diagnostics-dir=") + A->getValue());
   }
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs))
@@ -255,15 +254,14 @@ toolchains::PS4PS5Base::PS4PS5Base(const Driver &D, const llvm::Triple &Triple,
   // SDK include or lib directories. This behavior could be changed if
   // -Weverything or -Winvalid-or-nonexistent-directory options are passed.
   // If -isysroot was passed, use that as the SDK base path.
-  std::string PrefixDir;
   if (const Arg *A = Args.getLastArg(options::OPT_isysroot)) {
-    PrefixDir = A->getValue();
-    if (!llvm::sys::fs::exists(PrefixDir))
-      D.Diag(clang::diag::warn_missing_sysroot) << PrefixDir;
+    SDKRootDir = A->getValue();
+    if (!llvm::sys::fs::exists(SDKRootDir))
+      D.Diag(clang::diag::warn_missing_sysroot) << SDKRootDir;
   } else
-    PrefixDir = std::string(SDKDir.str());
+    SDKRootDir = std::string(SDKDir.str());
 
-  SmallString<512> SDKIncludeDir(PrefixDir);
+  SmallString<512> SDKIncludeDir(SDKRootDir);
   llvm::sys::path::append(SDKIncludeDir, "target/include");
   if (!Args.hasArg(options::OPT_nostdinc) &&
       !Args.hasArg(options::OPT_nostdlibinc) &&
@@ -274,7 +272,7 @@ toolchains::PS4PS5Base::PS4PS5Base(const Driver &D, const llvm::Triple &Triple,
         << Twine(Platform, " system headers").str() << SDKIncludeDir;
   }
 
-  SmallString<512> SDKLibDir(SDKDir);
+  SmallString<512> SDKLibDir(SDKRootDir);
   llvm::sys::path::append(SDKLibDir, "target/lib");
   if (!Args.hasArg(options::OPT_nostdlib) &&
       !Args.hasArg(options::OPT_nodefaultlibs) &&
@@ -287,6 +285,42 @@ toolchains::PS4PS5Base::PS4PS5Base(const Driver &D, const llvm::Triple &Triple,
     return;
   }
   getFilePaths().push_back(std::string(SDKLibDir.str()));
+}
+
+void toolchains::PS4PS5Base::AddClangSystemIncludeArgs(
+    const ArgList &DriverArgs,
+    ArgStringList &CC1Args) const {
+  const Driver &D = getDriver();
+
+  if (DriverArgs.hasArg(options::OPT_nostdinc))
+    return;
+
+  if (!DriverArgs.hasArg(options::OPT_nobuiltininc)) {
+    SmallString<128> Dir(D.ResourceDir);
+    llvm::sys::path::append(Dir, "include");
+    addSystemInclude(DriverArgs, CC1Args, Dir.str());
+  }
+
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc))
+    return;
+
+  // Add dirs specified via 'configure --with-c-include-dirs'.
+  StringRef CIncludeDirs(C_INCLUDE_DIRS);
+  if (!CIncludeDirs.empty()) {
+    SmallVector<StringRef, 5> dirs;
+    CIncludeDirs.split(dirs, ":");
+    for (StringRef dir : dirs) {
+      StringRef Prefix =
+        llvm::sys::path::is_absolute(dir) ? StringRef(D.SysRoot) : "";
+      addExternCSystemInclude(DriverArgs, CC1Args, Prefix + dir);
+    }
+    return;
+  }
+
+  addExternCSystemInclude(DriverArgs, CC1Args,
+                          SDKRootDir + "/target/include");
+  addExternCSystemInclude(DriverArgs, CC1Args,
+                          SDKRootDir + "/target/include_common");
 }
 
 Tool *toolchains::PS4CPU::buildAssembler() const {

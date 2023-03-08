@@ -49,6 +49,7 @@
 #include "llvm/Transforms/IPO/Internalize.h"
 
 #include <memory>
+#include <optional>
 using namespace clang;
 using namespace llvm;
 
@@ -114,6 +115,7 @@ namespace clang {
     const LangOptions &LangOpts;
     std::unique_ptr<raw_pwrite_stream> AsmOutStream;
     ASTContext *Context;
+    IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS;
 
     Timer LLVMIRGeneration;
     unsigned LLVMIRGenerationRefCount;
@@ -146,7 +148,7 @@ namespace clang {
 
   public:
     BackendConsumer(BackendAction Action, DiagnosticsEngine &Diags,
-                    IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS,
+                    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                     const HeaderSearchOptions &HeaderSearchOpts,
                     const PreprocessorOptions &PPOpts,
                     const CodeGenOptions &CodeGenOpts,
@@ -157,10 +159,10 @@ namespace clang {
                     CoverageSourceInfo *CoverageInfo = nullptr)
         : Diags(Diags), Action(Action), HeaderSearchOpts(HeaderSearchOpts),
           CodeGenOpts(CodeGenOpts), TargetOpts(TargetOpts), LangOpts(LangOpts),
-          AsmOutStream(std::move(OS)), Context(nullptr),
+          AsmOutStream(std::move(OS)), Context(nullptr), FS(VFS),
           LLVMIRGeneration("irgen", "LLVM IR Generation Time"),
           LLVMIRGenerationRefCount(0),
-          Gen(CreateLLVMCodeGen(Diags, InFile, std::move(FS), HeaderSearchOpts,
+          Gen(CreateLLVMCodeGen(Diags, InFile, std::move(VFS), HeaderSearchOpts,
                                 PPOpts, CodeGenOpts, C, CoverageInfo)),
           LinkModules(std::move(LinkModules)) {
       TimerIsEnabled = CodeGenOpts.TimePasses;
@@ -172,7 +174,7 @@ namespace clang {
     // to use the clang diagnostic handler for IR input files. It avoids
     // initializing the OS field.
     BackendConsumer(BackendAction Action, DiagnosticsEngine &Diags,
-                    IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS,
+                    IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                     const HeaderSearchOptions &HeaderSearchOpts,
                     const PreprocessorOptions &PPOpts,
                     const CodeGenOptions &CodeGenOpts,
@@ -182,10 +184,10 @@ namespace clang {
                     CoverageSourceInfo *CoverageInfo = nullptr)
         : Diags(Diags), Action(Action), HeaderSearchOpts(HeaderSearchOpts),
           CodeGenOpts(CodeGenOpts), TargetOpts(TargetOpts), LangOpts(LangOpts),
-          Context(nullptr),
+          Context(nullptr), FS(VFS),
           LLVMIRGeneration("irgen", "LLVM IR Generation Time"),
           LLVMIRGenerationRefCount(0),
-          Gen(CreateLLVMCodeGen(Diags, "", std::move(FS), HeaderSearchOpts,
+          Gen(CreateLLVMCodeGen(Diags, "", std::move(VFS), HeaderSearchOpts,
                                 PPOpts, CodeGenOpts, C, CoverageInfo)),
           LinkModules(std::move(LinkModules)), CurLinkModule(Module) {
       TimerIsEnabled = CodeGenOpts.TimePasses;
@@ -380,7 +382,7 @@ namespace clang {
 
       EmitBackendOutput(Diags, HeaderSearchOpts, CodeGenOpts, TargetOpts,
                         LangOpts, C.getTargetInfo().getDataLayoutString(),
-                        getModule(), Action, std::move(AsmOutStream));
+                        getModule(), Action, FS, std::move(AsmOutStream));
 
       Ctx.setDiagnosticHandler(std::move(OldDiagnosticHandler));
 
@@ -422,7 +424,8 @@ namespace clang {
                                 bool &BadDebugInfo, StringRef &Filename,
                                 unsigned &Line, unsigned &Column) const;
 
-    Optional<FullSourceLoc> getFunctionSourceLocation(const Function &F) const;
+    std::optional<FullSourceLoc>
+    getFunctionSourceLocation(const Function &F) const;
 
     void DiagnosticHandlerImpl(const llvm::DiagnosticInfo &DI);
     /// Specialized handler for InlineAsm diagnostic.
@@ -435,6 +438,11 @@ namespace clang {
     /// \return True if the diagnostic has been successfully reported, false
     /// otherwise.
     bool StackSizeDiagHandler(const llvm::DiagnosticInfoStackSize &D);
+    /// Specialized handler for ResourceLimit diagnostic.
+    /// \return True if the diagnostic has been successfully reported, false
+    /// otherwise.
+    bool ResourceLimitDiagHandler(const llvm::DiagnosticInfoResourceLimit &D);
+
     /// Specialized handler for unsupported backend feature diagnostic.
     void UnsupportedDiagHandler(const llvm::DiagnosticInfoUnsupported &D);
     /// Specialized handlers for optimization remarks.
@@ -623,10 +631,23 @@ BackendConsumer::StackSizeDiagHandler(const llvm::DiagnosticInfoStackSize &D) {
   if (!Loc)
     return false;
 
-  // FIXME: Shouldn't need to truncate to uint32_t
   Diags.Report(*Loc, diag::warn_fe_frame_larger_than)
-      << static_cast<uint32_t>(D.getStackSize())
-      << static_cast<uint32_t>(D.getStackLimit())
+      << D.getStackSize()
+      << D.getStackLimit()
+      << llvm::demangle(D.getFunction().getName().str());
+  return true;
+}
+
+bool BackendConsumer::ResourceLimitDiagHandler(
+    const llvm::DiagnosticInfoResourceLimit &D) {
+  auto Loc = getFunctionSourceLocation(D.getFunction());
+  if (!Loc)
+    return false;
+  unsigned DiagID = diag::err_fe_backend_resource_limit;
+  ComputeDiagID(D.getSeverity(), backend_resource_limit, DiagID);
+
+  Diags.Report(*Loc, DiagID)
+      << D.getResourceName() << D.getResourceSize() << D.getResourceLimit()
       << llvm::demangle(D.getFunction().getName().str());
   return true;
 }
@@ -673,14 +694,14 @@ const FullSourceLoc BackendConsumer::getBestLocationFromDebugLoc(
   return Loc;
 }
 
-Optional<FullSourceLoc>
+std::optional<FullSourceLoc>
 BackendConsumer::getFunctionSourceLocation(const Function &F) const {
   auto Hash = llvm::hash_value(F.getName());
   for (const auto &Pair : ManglingFullSourceLocs) {
     if (Pair.first == Hash)
       return Pair.second;
   }
-  return Optional<FullSourceLoc>();
+  return std::nullopt;
 }
 
 void BackendConsumer::UnsupportedDiagHandler(
@@ -873,6 +894,11 @@ void BackendConsumer::DiagnosticHandlerImpl(const DiagnosticInfo &DI) {
     if (StackSizeDiagHandler(cast<DiagnosticInfoStackSize>(DI)))
       return;
     ComputeDiagID(Severity, backend_frame_larger_than, DiagID);
+    break;
+  case llvm::DK_ResourceLimit:
+    if (ResourceLimitDiagHandler(cast<DiagnosticInfoResourceLimit>(DI)))
+      return;
+    ComputeDiagID(Severity, backend_resource_limit, DiagID);
     break;
   case DK_Linker:
     ComputeDiagID(Severity, linking_module, DiagID);
@@ -1078,6 +1104,8 @@ CodeGenAction::loadModule(MemoryBufferRef MBRef) {
   CompilerInstance &CI = getCompilerInstance();
   SourceManager &SM = CI.getSourceManager();
 
+  VMContext->setOpaquePointers(CI.getCodeGenOpts().OpaquePointers);
+
   // For ThinLTO backend invocations, ensure that the context
   // merges types based on ODR identifiers. We also need to read
   // the correct module out of a multi-module bitcode file.
@@ -1157,7 +1185,7 @@ void CodeGenAction::ExecuteAction() {
 
   SourceManager &SM = CI.getSourceManager();
   FileID FID = SM.getMainFileID();
-  Optional<MemoryBufferRef> MainFile = SM.getBufferOrNone(FID);
+  std::optional<MemoryBufferRef> MainFile = SM.getBufferOrNone(FID);
   if (!MainFile)
     return;
 
@@ -1211,10 +1239,10 @@ void CodeGenAction::ExecuteAction() {
   std::unique_ptr<llvm::ToolOutputFile> OptRecordFile =
       std::move(*OptRecordFileOrErr);
 
-  EmitBackendOutput(Diagnostics, CI.getHeaderSearchOpts(), CodeGenOpts,
-                    TargetOpts, CI.getLangOpts(),
-                    CI.getTarget().getDataLayoutString(), TheModule.get(), BA,
-                    std::move(OS));
+  EmitBackendOutput(
+      Diagnostics, CI.getHeaderSearchOpts(), CodeGenOpts, TargetOpts,
+      CI.getLangOpts(), CI.getTarget().getDataLayoutString(), TheModule.get(),
+      BA, CI.getFileManager().getVirtualFileSystemPtr(), std::move(OS));
   if (OptRecordFile)
     OptRecordFile->keep();
 }
