@@ -488,6 +488,12 @@ def F8E4M3FN : Type<CPred<"$_self.isFloat8E4M3FN()">, "f8E4M3FN type">,
                BuildableType<"$_builder.getFloat8E4M3FNType()">;
 def F8E5M2 : Type<CPred<"$_self.isFloat8E5M2()">, "f8E5M2 type">,
              BuildableType<"$_builder.getFloat8E5M2Type()">;
+def F8E4M3FNUZ : Type<CPred<"$_self.isFloat8E4M3FNUZ()">, "f8E4M3FNUZ type">,
+                 BuildableType<"$_builder.getFloat8E4M3FNUZType()">;
+def F8E4M3B11FNUZ : Type<CPred<"$_self.isFloat8E4M3B11FNUZ()">, "f8E4M3B11FNUZ type">,
+                 BuildableType<"$_builder.getFloat8E4M3B11FNUZType()">;
+def F8E5M2FNUZ : Type<CPred<"$_self.isFloat8E5M2FNUZ()">, "f8E5M2FNUZ type">,
+                 BuildableType<"$_builder.getFloat8E5M2FNUZType()">;
 
 def AnyComplex : Type<CPred<"$_self.isa<::mlir::ComplexType>()">,
                       "complex-type", "::mlir::ComplexType">;
@@ -2234,6 +2240,12 @@ class OpBuilder<dag p, code b = ""> {
   dag dagParams = p;
   code body = b;
 }
+
+// OpBuilder like the above, but the emitted 'build' method is marked as
+// deprecated in C++. Use of it will emit a warning by the C++ compiler
+// with the given reason.
+class DeprecatedOpBuilder<string reason, dag p, code b = "">
+  : OpBuilder<p, b>, CppDeprecated<reason>;
 
 // A base decorator class that may optionally be added to OpVariables.
 class OpVariableDecorator;

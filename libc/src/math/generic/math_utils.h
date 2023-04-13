@@ -12,7 +12,8 @@
 #include "src/__support/CPP/bit.h"
 #include "src/__support/CPP/type_traits.h"
 #include "src/__support/common.h"
-#include <errno.h>
+#include "src/errno/libc_errno.h"
+
 #include <math.h>
 
 #include <stdint.h>
@@ -52,12 +53,12 @@ template <> struct XFlowValues<double> {
 
 template <typename T> LIBC_INLINE T with_errno(T x, int err) {
   if (math_errhandling & MATH_ERRNO)
-    errno = err;
+    libc_errno = err;
   return x;
 }
 
 template <typename T> LIBC_INLINE void force_eval(T x) {
-  volatile T y UNUSED = x;
+  volatile T y LIBC_UNUSED = x;
 }
 
 template <typename T> LIBC_INLINE T opt_barrier(T x) {

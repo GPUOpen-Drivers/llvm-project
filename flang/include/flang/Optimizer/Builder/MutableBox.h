@@ -52,7 +52,8 @@ mlir::Value createUnallocatedBox(fir::FirOpBuilder &builder, mlir::Location loc,
 fir::MutableBoxValue createTempMutableBox(fir::FirOpBuilder &builder,
                                           mlir::Location loc, mlir::Type type,
                                           llvm::StringRef name = {},
-                                          mlir::Value sourceBox = {});
+                                          mlir::Value sourceBox = {},
+                                          bool isPolymorphic = false);
 
 /// Update a MutableBoxValue to describe entity \p source (that must be in
 /// memory). If \lbounds is not empty, it is used to defined the MutableBoxValue
@@ -127,8 +128,8 @@ void genFinalization(fir::FirOpBuilder &builder, mlir::Location loc,
 void genInlinedAllocation(fir::FirOpBuilder &builder, mlir::Location loc,
                           const fir::MutableBoxValue &box,
                           mlir::ValueRange lbounds, mlir::ValueRange extents,
-                          mlir::ValueRange lenParams,
-                          llvm::StringRef allocName);
+                          mlir::ValueRange lenParams, llvm::StringRef allocName,
+                          bool mustBeHeap = false);
 
 void genInlinedDeallocate(fir::FirOpBuilder &builder, mlir::Location loc,
                           const fir::MutableBoxValue &box);

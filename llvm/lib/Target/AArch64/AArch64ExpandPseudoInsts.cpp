@@ -20,7 +20,6 @@
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "Utils/AArch64BaseInfo.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
@@ -36,6 +35,7 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -1177,6 +1177,8 @@ bool AArch64ExpandPseudo::expandMI(MachineBasicBlock &MBB,
         .add(MI.getOperand(2))
         .addImm(AArch64_AM::getShifterImm(AArch64_AM::LSL, 0));
     transferImpOps(MI, MIB1, MIB1);
+    if (auto DebugNumber = MI.peekDebugInstrNum())
+      NewMI->setDebugInstrNum(DebugNumber);
     MI.eraseFromParent();
     return true;
   }

@@ -878,8 +878,7 @@ void TargetPassConfig::addIRPasses() {
 
   // For MachO, lower @llvm.global_dtors into @llvm.global_ctors with
   // __cxa_atexit() calls to avoid emitting the deprecated __mod_term_func.
-  if (TM->getTargetTriple().isOSBinFormatMachO() &&
-      TM->Options.LowerGlobalDtorsViaCxaAtExit)
+  if (TM->getTargetTriple().isOSBinFormatMachO())
     addPass(createLowerGlobalDtorsLegacyPass());
 
   // Make sure that no unreachable blocks are instruction selected.
@@ -977,6 +976,8 @@ void TargetPassConfig::addISelPrepare() {
   // Force codegen to run according to the callgraph.
   if (requiresCodeGenSCCOrder())
     addPass(new DummyCGSCCPass);
+
+  addPass(createCallBrPass());
 
   // Add both the safe stack and the stack protection passes: each of them will
   // only protect functions that have corresponding attributes.

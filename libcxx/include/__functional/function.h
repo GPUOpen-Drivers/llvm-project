@@ -12,6 +12,7 @@
 
 #include <__assert>
 #include <__config>
+#include <__exception/exception.h>
 #include <__functional/binary_function.h>
 #include <__functional/invoke.h>
 #include <__functional/unary_function.h>
@@ -23,15 +24,17 @@
 #include <__memory/builtin_new_allocator.h>
 #include <__memory/compressed_pair.h>
 #include <__memory/unique_ptr.h>
+#include <__type_traits/aligned_storage.h>
+#include <__type_traits/is_trivially_copy_constructible.h>
+#include <__type_traits/is_trivially_destructible.h>
 #include <__type_traits/strip_signature.h>
 #include <__utility/forward.h>
 #include <__utility/move.h>
 #include <__utility/piecewise_construct.h>
 #include <__utility/swap.h>
-#include <exception>
+#include <__verbose_abort>
 #include <new>
 #include <tuple>
-#include <type_traits>
 #include <typeinfo>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
@@ -68,10 +71,10 @@ _LIBCPP_DIAGNOSTIC_POP
 _LIBCPP_NORETURN inline _LIBCPP_INLINE_VISIBILITY
 void __throw_bad_function_call()
 {
-#ifndef _LIBCPP_NO_EXCEPTIONS
+#ifndef _LIBCPP_HAS_NO_EXCEPTIONS
     throw bad_function_call();
 #else
-    _VSTD::abort();
+    _LIBCPP_VERBOSE_ABORT("bad_function_call was thrown in -fno-exceptions mode");
 #endif
 }
 
@@ -614,15 +617,15 @@ struct __policy
     _LIBCPP_INLINE_VISIBILITY
     static const __policy* __create_empty()
     {
-        static const _LIBCPP_CONSTEXPR __policy __policy_ = {nullptr, nullptr,
-                                                             true,
+        static const _LIBCPP_CONSTEXPR __policy __policy = {nullptr, nullptr,
+                                                            true,
 #ifndef _LIBCPP_HAS_NO_RTTI
-                                                             &typeid(void)
+                                                            &typeid(void)
 #else
-                                                             nullptr
+                                                            nullptr
 #endif
         };
-        return &__policy_;
+        return &__policy;
     }
 
   private:
@@ -640,7 +643,7 @@ struct __policy
     template <typename _Fun>
     _LIBCPP_INLINE_VISIBILITY static const __policy*
     __choose_policy(/* is_small = */ false_type) {
-      static const _LIBCPP_CONSTEXPR __policy __policy_ = {
+      static const _LIBCPP_CONSTEXPR __policy __policy = {
           &__large_clone<_Fun>, &__large_destroy<_Fun>, false,
 #ifndef _LIBCPP_HAS_NO_RTTI
           &typeid(typename _Fun::_Target)
@@ -648,14 +651,14 @@ struct __policy
           nullptr
 #endif
       };
-        return &__policy_;
+        return &__policy;
     }
 
     template <typename _Fun>
     _LIBCPP_INLINE_VISIBILITY static const __policy*
         __choose_policy(/* is_small = */ true_type)
     {
-        static const _LIBCPP_CONSTEXPR __policy __policy_ = {
+        static const _LIBCPP_CONSTEXPR __policy __policy = {
             nullptr, nullptr, false,
 #ifndef _LIBCPP_HAS_NO_RTTI
             &typeid(typename _Fun::_Target)
@@ -663,7 +666,7 @@ struct __policy
             nullptr
 #endif
         };
-        return &__policy_;
+        return &__policy;
     }
 };
 

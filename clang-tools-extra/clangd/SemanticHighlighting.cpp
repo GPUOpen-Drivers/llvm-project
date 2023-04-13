@@ -156,7 +156,7 @@ std::optional<HighlightingKind> kindForDecl(const NamedDecl *D,
     return HighlightingKind::Concept;
   if (const auto *UUVD = dyn_cast<UnresolvedUsingValueDecl>(D)) {
     auto Targets = Resolver->resolveUsingValueDecl(UUVD);
-    if (!Targets.empty()) {
+    if (!Targets.empty() && Targets[0] != UUVD) {
       return kindForDecl(Targets[0], Resolver);
     }
     return HighlightingKind::Unknown;
@@ -519,10 +519,11 @@ private:
     Loc = getHighlightableSpellingToken(Loc, SourceMgr);
     if (Loc.isInvalid())
       return std::nullopt;
-
+    // We might have offsets in the main file that don't correspond to any
+    // spelled tokens.
     const auto *Tok = TB.spelledTokenAt(Loc);
-    assert(Tok);
-
+    if (!Tok)
+      return std::nullopt;
     return halfOpenToRange(SourceMgr,
                            Tok->range(SourceMgr).toCharRange(SourceMgr));
   }

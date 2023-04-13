@@ -8,13 +8,13 @@
 
 #include "llvm/ExecutionEngine/Orc/IndirectionUtils.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/ExecutionEngine/JITLink/x86_64.h"
 #include "llvm/ExecutionEngine/Orc/OrcABISupport.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/Support/Format.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include <sstream>
 
@@ -40,7 +40,7 @@ public:
 private:
   void materialize(std::unique_ptr<MaterializationResponsibility> R) override {
     SymbolMap Result;
-    Result[Name] = JITEvaluatedSymbol(Compile(), JITSymbolFlags::Exported);
+    Result[Name] = {Compile(), JITSymbolFlags::Exported};
     // No dependencies, so these calls cannot fail.
     cantFail(R->notifyResolved(Result));
     cantFail(R->notifyEmitted());
@@ -62,7 +62,7 @@ namespace orc {
 TrampolinePool::~TrampolinePool() = default;
 void IndirectStubsManager::anchor() {}
 
-Expected<JITTargetAddress>
+Expected<ExecutorAddr>
 JITCompileCallbackManager::getCompileCallback(CompileFunction Compile) {
   if (auto TrampolineAddr = TP->getTrampoline()) {
     auto CallbackName =
@@ -78,8 +78,8 @@ JITCompileCallbackManager::getCompileCallback(CompileFunction Compile) {
     return TrampolineAddr.takeError();
 }
 
-JITTargetAddress JITCompileCallbackManager::executeCompileCallback(
-    JITTargetAddress TrampolineAddr) {
+ExecutorAddr
+JITCompileCallbackManager::executeCompileCallback(ExecutorAddr TrampolineAddr) {
   SymbolStringPtr Name;
 
   {
@@ -91,14 +91,10 @@ JITTargetAddress JITCompileCallbackManager::executeCompileCallback(
     // callee.
     if (I == AddrToSymbol.end()) {
       Lock.unlock();
-      std::string ErrMsg;
-      {
-        raw_string_ostream ErrMsgStream(ErrMsg);
-        ErrMsgStream << "No compile callback for trampoline at "
-                     << format("0x%016" PRIx64, TrampolineAddr);
-      }
       ES.reportError(
-          make_error<StringError>(std::move(ErrMsg), inconvertibleErrorCode()));
+          make_error<StringError>("No compile callback for trampoline at " +
+                                      formatv("{0:x}", TrampolineAddr),
+                                  inconvertibleErrorCode()));
       return ErrorHandlerAddress;
     } else
       Name = I->second;
@@ -120,7 +116,7 @@ JITTargetAddress JITCompileCallbackManager::executeCompileCallback(
 
 Expected<std::unique_ptr<JITCompileCallbackManager>>
 createLocalCompileCallbackManager(const Triple &T, ExecutionSession &ES,
-                                  JITTargetAddress ErrorHandlerAddress) {
+                                  ExecutorAddr ErrorHandlerAddress) {
   switch (T.getArch()) {
   default:
     return make_error<StringError>(
@@ -244,9 +240,9 @@ createLocalIndirectStubsManagerBuilder(const Triple &T) {
   }
 }
 
-Constant* createIRTypedAddress(FunctionType &FT, JITTargetAddress Addr) {
+Constant* createIRTypedAddress(FunctionType &FT, ExecutorAddr Addr) {
   Constant *AddrIntVal =
-    ConstantInt::get(Type::getInt64Ty(FT.getContext()), Addr);
+    ConstantInt::get(Type::getInt64Ty(FT.getContext()), Addr.getValue());
   Constant *AddrPtrVal =
     ConstantExpr::getCast(Instruction::IntToPtr, AddrIntVal,
                           PointerType::get(&FT, 0));

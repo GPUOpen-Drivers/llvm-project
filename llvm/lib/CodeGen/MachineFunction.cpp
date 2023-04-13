@@ -427,8 +427,7 @@ void MachineFunction::deleteMachineInstr(MachineInstr *MI) {
   // be triggered during the implementation of support for the
   // call site info of a new architecture. If the assertion is triggered,
   // back trace will tell where to insert a call to updateCallSiteInfo().
-  assert((!MI->isCandidateForCallSiteEntry() ||
-          CallSitesInfo.find(MI) == CallSitesInfo.end()) &&
+  assert((!MI->isCandidateForCallSiteEntry() || !CallSitesInfo.contains(MI)) &&
          "Call site info was not updated!");
   // Strip it for parts. The operand array and the MI object itself are
   // independently recyclable.
@@ -1086,8 +1085,7 @@ auto MachineFunction::salvageCopySSAImpl(MachineInstr &MI)
     for (auto &MO : Inst->operands()) {
       if (!MO.isReg() || !MO.isDef() || MO.getReg() != State.first)
         continue;
-      return ApplySubregisters(
-          {Inst->getDebugInstrNum(), Inst->getOperandNo(&MO)});
+      return ApplySubregisters({Inst->getDebugInstrNum(), MO.getOperandNo()});
     }
 
     llvm_unreachable("Vreg def with no corresponding operand?");
@@ -1109,7 +1107,7 @@ auto MachineFunction::salvageCopySSAImpl(MachineInstr &MI)
         continue;
 
       return ApplySubregisters(
-          {ToExamine.getDebugInstrNum(), ToExamine.getOperandNo(&MO)});
+          {ToExamine.getDebugInstrNum(), MO.getOperandNo()});
     }
   }
 

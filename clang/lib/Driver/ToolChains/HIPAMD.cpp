@@ -21,7 +21,7 @@
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/TargetParser.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 using namespace clang::driver;
 using namespace clang::driver::toolchains;
@@ -152,8 +152,10 @@ void AMDGCN::Linker::constructLldCommand(Compilation &C, const JobAction &JA,
 
   addLinkerCompressDebugSectionsOption(TC, Args, LldArgs);
 
-  for (auto *Arg : Args.filtered(options::OPT_Xoffload_linker))
+  for (auto *Arg : Args.filtered(options::OPT_Xoffload_linker)) {
     LldArgs.push_back(Arg->getValue(1));
+    Arg->claim();
+  }
 
   LldArgs.append({"-o", Output.getFilename()});
   for (auto Input : Inputs)

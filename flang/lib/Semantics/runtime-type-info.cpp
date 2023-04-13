@@ -67,11 +67,16 @@ private:
   SomeExpr PackageIntValueExpr(const SomeExpr &genre, std::int64_t = 0) const;
   std::vector<evaluate::StructureConstructor> DescribeBindings(
       const Scope &dtScope, Scope &);
-  void DescribeGeneric(const GenericDetails &,
-      std::map<int, evaluate::StructureConstructor> &, const DerivedTypeSpec *);
+  std::map<int, evaluate::StructureConstructor> DescribeSpecialGenerics(
+      const Scope &dtScope, const Scope &thisScope,
+      const DerivedTypeSpec *) const;
+  void DescribeSpecialGeneric(const GenericDetails &,
+      std::map<int, evaluate::StructureConstructor> &, const Scope &,
+      const DerivedTypeSpec *) const;
   void DescribeSpecialProc(std::map<int, evaluate::StructureConstructor> &,
       const Symbol &specificOrBinding, bool isAssignment, bool isFinal,
-      std::optional<GenericKind::DefinedIo>, const DerivedTypeSpec *);
+      std::optional<GenericKind::DefinedIo>, const Scope *,
+      const DerivedTypeSpec *) const;
   void IncorporateDefinedIoGenericInterfaces(
       std::map<int, evaluate::StructureConstructor> &, GenericKind::DefinedIo,
       const Scope *, const DerivedTypeSpec *);
@@ -146,7 +151,8 @@ RuntimeTableBuilder::RuntimeTableBuilder(
     : context_{c}, tables_{t}, derivedTypeSchema_{GetSchema("derivedtype")},
       componentSchema_{GetSchema("component")}, procPtrSchema_{GetSchema(
                                                     "procptrcomponent")},
-      valueSchema_{GetSchema("value")}, bindingSchema_{GetSchema("binding")},
+      valueSchema_{GetSchema("value")}, bindingSchema_{GetSchema(
+                                            bindingDescCompName)},
       specialSchema_{GetSchema("specialbinding")}, deferredEnum_{GetEnumValue(
                                                        "deferred")},
       explicitEnum_{GetEnumValue("explicit")}, lenParameterEnum_{GetEnumValue(
@@ -498,7 +504,6 @@ const Symbol *RuntimeTableBuilder::DescribeType(Scope &dtScope) {
   if (!isPDTdefinitionWithKindParameters) {
     std::vector<const Symbol *> dataComponentSymbols;
     std::vector<evaluate::StructureConstructor> procPtrComponents;
-    std::map<int, evaluate::StructureConstructor> specials;
     for (const auto &pair : dtScope) {
       const Symbol &symbol{*pair.second};
       auto locationRestorer{common::ScopedSet(location_, symbol.name())};
@@ -518,8 +523,7 @@ const Symbol *RuntimeTableBuilder::DescribeType(Scope &dtScope) {
               },
               [&](const ProcBindingDetails &) { // handled in a later pass
               },
-              [&](const GenericDetails &generic) {
-                DescribeGeneric(generic, specials, derivedTypeSpec);
+              [&](const GenericDetails &) { // ditto
               },
               [&](const auto &) {
                 common::die(
@@ -559,19 +563,22 @@ const Symbol *RuntimeTableBuilder::DescribeType(Scope &dtScope) {
     if (!isAbstractType) {
       std::vector<evaluate::StructureConstructor> bindings{
           DescribeBindings(dtScope, scope)};
-      AddValue(dtValues, derivedTypeSchema_, "binding"s,
+      AddValue(dtValues, derivedTypeSchema_, bindingDescCompName,
           SaveDerivedPointerTarget(scope, SaveObjectName(".v."s + distinctName),
               std::move(bindings),
               evaluate::ConstantSubscripts{
                   static_cast<evaluate::ConstantSubscript>(bindings.size())}));
       // Describe "special" bindings to defined assignments, FINAL subroutines,
-      // and user-defined derived type I/O subroutines.
-      const DerivedTypeDetails &dtDetails{dtSymbol->get<DerivedTypeDetails>()};
-      for (const auto &pair : dtDetails.finals()) {
-        DescribeSpecialProc(specials, *pair.second, false /*!isAssignment*/,
-            true, std::nullopt, derivedTypeSpec);
-      }
+      // and user-defined derived type I/O subroutines.  Defined assignments
+      // and I/O subroutines override any parent bindings; FINAL subroutines
+      // do not (the runtime will call all of them).
+      std::map<int, evaluate::StructureConstructor> specials{
+          DescribeSpecialGenerics(dtScope, dtScope, derivedTypeSpec)};
       if (derivedTypeSpec) {
+        for (auto &ref : FinalsForDerivedTypeInstantiation(*derivedTypeSpec)) {
+          DescribeSpecialProc(specials, *ref, false /*!isAssignment*/, true,
+              std::nullopt, nullptr, derivedTypeSpec);
+        }
         IncorporateDefinedIoGenericInterfaces(specials,
             GenericKind::DefinedIo::ReadFormatted, &scope, derivedTypeSpec);
         IncorporateDefinedIoGenericInterfaces(specials,
@@ -606,8 +613,8 @@ const Symbol *RuntimeTableBuilder::DescribeType(Scope &dtScope) {
     // instances without any initialized components, analyze the type
     // and set a flag if there's nothing to do for it at run time.
     AddValue(dtValues, derivedTypeSchema_, "noinitializationneeded"s,
-        IntExpr<1>(isAbstractType ||
-            (derivedTypeSpec && !derivedTypeSpec->HasDefaultInitialization())));
+        IntExpr<1>(
+            derivedTypeSpec && !derivedTypeSpec->HasDefaultInitialization()));
     // Similarly, a flag to short-circuit destruction when not needed.
     AddValue(dtValues, derivedTypeSchema_, "nodestructionneeded"s,
         IntExpr<1>(isAbstractType ||
@@ -976,7 +983,7 @@ RuntimeTableBuilder::DescribeBindings(const Scope &dtScope, Scope &scope) {
   std::vector<evaluate::StructureConstructor> result;
   for (const SymbolRef &ref : CollectBindings(dtScope)) {
     evaluate::StructureConstructorValues values;
-    AddValue(values, bindingSchema_, "proc"s,
+    AddValue(values, bindingSchema_, procCompName,
         SomeExpr{evaluate::ProcedureDesignator{
             ref.get().get<ProcBindingDetails>().symbol()}});
     AddValue(values, bindingSchema_, "name"s,
@@ -986,15 +993,33 @@ RuntimeTableBuilder::DescribeBindings(const Scope &dtScope, Scope &scope) {
   return result;
 }
 
-void RuntimeTableBuilder::DescribeGeneric(const GenericDetails &generic,
+std::map<int, evaluate::StructureConstructor>
+RuntimeTableBuilder::DescribeSpecialGenerics(const Scope &dtScope,
+    const Scope &thisScope, const DerivedTypeSpec *derivedTypeSpec) const {
+  std::map<int, evaluate::StructureConstructor> specials;
+  if (const Scope * parentScope{dtScope.GetDerivedTypeParent()}) {
+    specials =
+        DescribeSpecialGenerics(*parentScope, thisScope, derivedTypeSpec);
+  }
+  for (auto pair : dtScope) {
+    const Symbol &symbol{*pair.second};
+    if (const auto *generic{symbol.detailsIf<GenericDetails>()}) {
+      DescribeSpecialGeneric(*generic, specials, thisScope, derivedTypeSpec);
+    }
+  }
+  return specials;
+}
+
+void RuntimeTableBuilder::DescribeSpecialGeneric(const GenericDetails &generic,
     std::map<int, evaluate::StructureConstructor> &specials,
-    const DerivedTypeSpec *derivedTypeSpec) {
+    const Scope &dtScope, const DerivedTypeSpec *derivedTypeSpec) const {
   common::visit(common::visitors{
                     [&](const GenericKind::OtherKind &k) {
                       if (k == GenericKind::OtherKind::Assignment) {
                         for (auto ref : generic.specificProcs()) {
                           DescribeSpecialProc(specials, *ref, true,
-                              false /*!final*/, std::nullopt, derivedTypeSpec);
+                              false /*!final*/, std::nullopt, &dtScope,
+                              derivedTypeSpec);
                         }
                       }
                     },
@@ -1006,7 +1031,7 @@ void RuntimeTableBuilder::DescribeGeneric(const GenericDetails &generic,
                       case GenericKind::DefinedIo::WriteUnformatted:
                         for (auto ref : generic.specificProcs()) {
                           DescribeSpecialProc(specials, *ref, false,
-                              false /*!final*/, io, derivedTypeSpec);
+                              false /*!final*/, io, &dtScope, derivedTypeSpec);
                         }
                         break;
                       }
@@ -1019,9 +1044,13 @@ void RuntimeTableBuilder::DescribeGeneric(const GenericDetails &generic,
 void RuntimeTableBuilder::DescribeSpecialProc(
     std::map<int, evaluate::StructureConstructor> &specials,
     const Symbol &specificOrBinding, bool isAssignment, bool isFinal,
-    std::optional<GenericKind::DefinedIo> io,
-    const DerivedTypeSpec *derivedTypeSpec) {
+    std::optional<GenericKind::DefinedIo> io, const Scope *dtScope,
+    const DerivedTypeSpec *derivedTypeSpec) const {
   const auto *binding{specificOrBinding.detailsIf<ProcBindingDetails>()};
+  if (binding && dtScope) { // use most recent override
+    binding = &DEREF(dtScope->FindComponent(specificOrBinding.name()))
+                   .get<ProcBindingDetails>();
+  }
   const Symbol &specific{*(binding ? &binding->symbol() : &specificOrBinding)};
   if (auto proc{evaluate::characteristics::Procedure::Characterize(
           specific, context_.foldingContext())}) {
@@ -1083,15 +1112,18 @@ void RuntimeTableBuilder::DescribeSpecialProc(
       }
     } else { // user defined derived type I/O
       CHECK(proc->dummyArguments.size() >= 4);
+      const auto *ddo{std::get_if<evaluate::characteristics::DummyDataObject>(
+          &proc->dummyArguments[0].u)};
+      if (!ddo) {
+        return;
+      }
       if (derivedTypeSpec &&
-          !std::get<evaluate::characteristics::DummyDataObject>(
-              proc->dummyArguments[0].u)
-               .type.type()
-               .IsTkCompatibleWith(evaluate::DynamicType{*derivedTypeSpec})) {
+          !ddo->type.type().IsTkCompatibleWith(
+              evaluate::DynamicType{*derivedTypeSpec})) {
         // Defined I/O specific procedure is not for this derived type.
         return;
       }
-      if (binding) {
+      if (ddo->type.type().IsPolymorphic()) {
         isArgDescriptorSet |= 1;
       }
       switch (io.value()) {
@@ -1121,11 +1153,12 @@ void RuntimeTableBuilder::DescribeSpecialProc(
         values, specialSchema_, "which"s, SomeExpr{std::move(which.value())});
     AddValue(values, specialSchema_, "isargdescriptorset"s,
         IntExpr<1>(isArgDescriptorSet));
-    AddValue(values, specialSchema_, "proc"s,
+    AddValue(values, specialSchema_, procCompName,
         SomeExpr{evaluate::ProcedureDesignator{specific}});
-    auto pair{specials.try_emplace(
-        *index, DEREF(specialSchema_.AsDerived()), std::move(values))};
-    CHECK(pair.second); // ensure not already present
+    // index might already be present in the case of an override
+    specials.emplace(*index,
+        evaluate::StructureConstructor{
+            DEREF(specialSchema_.AsDerived()), std::move(values)});
   }
 }
 
@@ -1144,7 +1177,7 @@ void RuntimeTableBuilder::IncorporateDefinedIoGenericInterfaces(
           definedIo);
       for (auto ref : genericDetails.specificProcs()) {
         DescribeSpecialProc(
-            specials, *ref, false, false, definedIo, derivedTypeSpec);
+            specials, *ref, false, false, definedIo, nullptr, derivedTypeSpec);
       }
     }
   }
