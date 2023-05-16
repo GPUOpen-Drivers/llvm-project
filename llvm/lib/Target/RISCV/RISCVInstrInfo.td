@@ -55,13 +55,11 @@ def callseq_end   : SDNode<"ISD::CALLSEQ_END", SDT_CallSeqEnd,
 def riscv_call      : SDNode<"RISCVISD::CALL", SDT_RISCVCall,
                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                               SDNPVariadic]>;
-def riscv_ret_flag  : SDNode<"RISCVISD::RET_FLAG", SDTNone,
+def riscv_ret_glue  : SDNode<"RISCVISD::RET_GLUE", SDTNone,
                              [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
-def riscv_uret_flag : SDNode<"RISCVISD::URET_FLAG", SDTNone,
+def riscv_sret_glue : SDNode<"RISCVISD::SRET_GLUE", SDTNone,
                              [SDNPHasChain, SDNPOptInGlue]>;
-def riscv_sret_flag : SDNode<"RISCVISD::SRET_FLAG", SDTNone,
-                             [SDNPHasChain, SDNPOptInGlue]>;
-def riscv_mret_flag : SDNode<"RISCVISD::MRET_FLAG", SDTNone,
+def riscv_mret_glue : SDNode<"RISCVISD::MRET_GLUE", SDTNone,
                              [SDNPHasChain, SDNPOptInGlue]>;
 def riscv_selectcc  : SDNode<"RISCVISD::SELECT_CC", SDT_RISCVSelectCC>;
 def riscv_brcc      : SDNode<"RISCVISD::BR_CC", SDT_RISCVBrCC,
@@ -188,6 +186,13 @@ def uimmlog2xlen : Operand<XLenVT>, ImmLeaf<XLenVT, [{
     return isUInt<5>(Imm);
   }];
   let OperandType = "OPERAND_UIMMLOG2XLEN";
+  let OperandNamespace = "RISCVOp";
+}
+
+def uimm1 : Operand<XLenVT>, ImmLeaf<XLenVT, [{return isUInt<1>(Imm);}]> {
+  let ParserMatchClass = UImmAsmOperand<1>;
+  let DecoderMethod = "decodeUImmOperand<1>";
+  let OperandType = "OPERAND_UIMM1";
   let OperandNamespace = "RISCVOp";
 }
 
@@ -815,12 +820,6 @@ def SRAW  : ALUW_rr<0b0100000, 0b101, "sraw">,
 //===----------------------------------------------------------------------===//
 
 let isBarrier = 1, isReturn = 1, isTerminator = 1 in {
-def URET : Priv<"uret", 0b0000000>, Sched<[]> {
-  let rd = 0;
-  let rs1 = 0;
-  let rs2 = 0b00010;
-}
-
 def SRET : Priv<"sret", 0b0001000>, Sched<[]> {
   let rd = 0;
   let rs1 = 0;
@@ -1247,8 +1246,7 @@ def mul_oneuse : binop_oneuse<mul>;
 def mul_const_oneuse : PatFrag<(ops node:$A, node:$B),
                                (mul node:$A, node:$B), [{
   if (auto *N1C = dyn_cast<ConstantSDNode>(N->getOperand(1)))
-    if (N1C->hasOneUse())
-      return true;
+    return N1C->hasOneUse();
   return false;
 }]>;
 
@@ -1440,7 +1438,7 @@ def PseudoCCSUBW : Pseudo<(outs GPR:$dst),
                    Sched<[WriteSFB, ReadSFB, ReadSFB, ReadSFB, ReadSFB, ReadSFB]>;
 }
 
-multiclass SelectCC_GPR_rrirr<RegisterClass valty> {
+multiclass SelectCC_GPR_rrirr<DAGOperand valty> {
   let usesCustomInserter = 1 in
   def _Using_CC_GPR : Pseudo<(outs valty:$dst),
                              (ins GPR:$lhs, GPR:$rhs, ixlenimm:$cc,
@@ -1556,9 +1554,8 @@ def PseudoCALL : Pseudo<(outs), (ins call_symbol:$func), []>,
 def : Pat<(riscv_call tglobaladdr:$func), (PseudoCALL tglobaladdr:$func)>;
 def : Pat<(riscv_call texternalsym:$func), (PseudoCALL texternalsym:$func)>;
 
-def : Pat<(riscv_uret_flag), (URET X0, X0)>;
-def : Pat<(riscv_sret_flag), (SRET X0, X0)>;
-def : Pat<(riscv_mret_flag), (MRET X0, X0)>;
+def : Pat<(riscv_sret_glue), (SRET X0, X0)>;
+def : Pat<(riscv_mret_glue), (MRET X0, X0)>;
 
 let isCall = 1, Defs = [X1] in
 def PseudoCALLIndirect : Pseudo<(outs), (ins GPRJALR:$rs1),
@@ -1566,7 +1563,7 @@ def PseudoCALLIndirect : Pseudo<(outs), (ins GPRJALR:$rs1),
                          PseudoInstExpansion<(JALR X1, GPR:$rs1, 0)>;
 
 let isBarrier = 1, isReturn = 1, isTerminator = 1 in
-def PseudoRET : Pseudo<(outs), (ins), [(riscv_ret_flag)]>,
+def PseudoRET : Pseudo<(outs), (ins), [(riscv_ret_glue)]>,
                 PseudoInstExpansion<(JALR X0, X1, 0)>;
 
 // PseudoTAIL is a pseudo instruction similar to PseudoCALL and will eventually
@@ -1913,6 +1910,7 @@ include "RISCVInstrInfoV.td"
 include "RISCVInstrInfoZfa.td"
 include "RISCVInstrInfoZfh.td"
 include "RISCVInstrInfoZicbo.td"
+include "RISCVInstrInfoZicond.td"
 
 //===----------------------------------------------------------------------===//
 // Vendor extensions
@@ -1920,3 +1918,4 @@ include "RISCVInstrInfoZicbo.td"
 
 include "RISCVInstrInfoXVentana.td"
 include "RISCVInstrInfoXTHead.td"
+include "RISCVInstrInfoXSf.td"

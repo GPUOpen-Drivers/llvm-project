@@ -21,7 +21,7 @@ if(NOT (CMAKE_CXX_COMPILER_ID MATCHES "[Cc]lang" AND
         ${CMAKE_CXX_COMPILER_VERSION} VERSION_EQUAL "${req_ver}"))
   message(FATAL_ERROR "Cannot build libc for GPU. CMake compiler "
                       "'${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}' "
-                      " is not `Clang ${req_ver}.")
+                      " is not 'Clang ${req_ver}'.")
 endif()
 if(NOT LLVM_LIBC_FULL_BUILD)
   message(FATAL_ERROR "LLVM_LIBC_FULL_BUILD must be enabled to build libc for "
@@ -44,11 +44,12 @@ foreach(arch_tool ${LIBC_NVPTX_ARCH} ${LIBC_AMDGPU_ARCH})
   if(arch_tool)
     execute_process(COMMAND ${arch_tool}
                     OUTPUT_VARIABLE arch_tool_output
-                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+                    ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
     string(REPLACE "\n" ";" arch_list "${arch_tool_output}")
     list(APPEND detected_gpu_architectures "${arch_list}")
   endif()
 endforeach()
+list(REMOVE_DUPLICATES detected_gpu_architectures)
 
 if(LIBC_GPU_ARCHITECTURES STREQUAL "all")
   set(LIBC_GPU_ARCHITECTURES ${all_gpu_architectures})
@@ -97,4 +98,11 @@ elseif("${gpu_test_architecture}" IN_LIST all_nvptx_architectures)
   set(LIBC_GPU_TARGET_ARCHITECTURE "${gpu_test_architecture}")
 else()
   message(FATAL_ERROR "Unknown GPU architecture '${gpu_test_architecture}'")
+endif()
+
+if(LIBC_GPU_TARGET_ARCHITECTURE_IS_NVPTX)
+  find_package(CUDAToolkit QUIET)
+  if(CUDAToolkit_FOUND)
+    get_filename_component(LIBC_CUDA_ROOT "${CUDAToolkit_BIN_DIR}" DIRECTORY ABSOLUTE)
+  endif()
 endif()

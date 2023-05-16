@@ -1000,7 +1000,7 @@ Error JITDylib::resolve(MaterializationResponsibility &MR,
 
           // Resolved symbols can not be weak: discard the weak flag.
           JITSymbolFlags ResolvedFlags = ResolvedSym.getFlags();
-          SymI->second.setAddress(ExecutorAddr(ResolvedSym.getAddress()));
+          SymI->second.setAddress(ResolvedSym.getAddress());
           SymI->second.setFlags(ResolvedFlags);
           SymI->second.setState(SymbolState::Resolved);
 
@@ -1326,6 +1326,18 @@ void JITDylib::setLinkOrder(JITDylibSearchOrder NewLinkOrder,
       llvm::append_range(LinkOrder, NewLinkOrder);
     } else
       LinkOrder = std::move(NewLinkOrder);
+  });
+}
+
+void JITDylib::addToLinkOrder(const JITDylibSearchOrder &NewLinks) {
+  ES.runSessionLocked([&]() {
+    for (auto &KV : NewLinks) {
+      // Skip elements of NewLinks that are already in the link order.
+      if (llvm::find(LinkOrder, KV) != LinkOrder.end())
+        continue;
+
+      LinkOrder.push_back(std::move(KV));
+    }
   });
 }
 

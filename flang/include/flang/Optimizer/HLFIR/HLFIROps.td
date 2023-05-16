@@ -763,4 +763,203 @@ def hlfir_CopyOutOp : hlfir_Op<"copy_out", []> {
   }];
 }
 
+def hlfir_ShapeOfOp : hlfir_Op<"shape_of", [Pure]> {
+  let summary = "Get the shape of a hlfir.expr";
+  let description = [{
+    Gets the runtime shape of a hlfir.expr. In lowering to FIR, the
+    hlfir.shape_of operation will be replaced by an fir.shape.
+    It is not valid to request the shape of a hlfir.expr which has no shape.
+  }];
+
+  let arguments = (ins hlfir_ExprType:$expr);
+
+  let results = (outs fir_ShapeType);
+
+  let hasVerifier = 1;
+
+  // If all extents are known at compile time, the hlfir.shape_of can be
+  // immediately folded into a fir.shape operation. This makes information
+  // available sooner to inform bufferization decisions
+  let hasCanonicalizeMethod = 1;
+
+  let extraClassDeclaration = [{
+    std::size_t getRank();
+  }];
+
+  let assemblyFormat = [{
+    $expr attr-dict `:` functional-type(operands, results)
+  }];
+
+  let builders = [OpBuilder<(ins "mlir::Value":$expr)>];
+}
+
+def hlfir_GetExtentOp : hlfir_Op<"get_extent", [Pure]> {
+  let summary = "Get an extent value from a fir.shape";
+  let description = [{
+    Gets an extent value from a fir.shape. The dimension argument uses C style
+    indexing and so should be between 0 and 1 less than the rank of the shape
+  }];
+
+  let arguments = (ins fir_ShapeType:$shape,
+                       IndexAttr:$dim);
+
+  let results = (outs Index);
+
+  let hasVerifier = 1;
+
+  let assemblyFormat = [{
+    $shape attr-dict `:` functional-type(operands, results)
+  }];
+
+  let builders = [OpBuilder<(ins "mlir::Value":$shape, "unsigned":$dim)>];
+}
+
+def hlfir_RegionAssignOp : hlfir_Op<"region_assign", []> {
+  let summary = "represent a Fortran assignment using regions for the LHS and RHS evaluation";
+  let description = [{
+    This operation can represent Forall and Where assignment when inside an
+    hlfir.forall or hlfir.where "ordered assignment tree". It can
+    also represent user defined assignments and assignment to vector
+    subscripted entities without requiring the materialization of the
+    right-hand side temporary copy that may be needed to implement Fortran
+    assignment semantic.
+
+    The right-hand side and left-hand side evaluations are held in their
+    own regions terminated with hlfir.yield operations (or hlfir.elemental_addr
+    for a left-hand side with vector subscript).
+
+    An optional region may be added to implement user defined assignment.
+    This region provides two block arguments with the same type as the
+    yielded rhs and lhs entities (in that order), or the element type if this
+    is an elemental user defined assignment.
+
+    If this optional region is not provided, intrinsic assignment is performed.
+
+    Example: "X = Y",  where "=" is a user defined elemental assignment "foo"
+    taking Y by value.
+    ```
+    hlfir.region_assign {
+      hlfir.yield %y : !fir.box<!fir.array<?x!f32>>
+    } to {
+      hlfir.yield %x : !fir.box<!fir.array<?x!fir.type<t>>>
+    } user_defined_assignment (%rhs_elt: !fir.ref<f32>) to (%lhs_elt: !fir.ref<!fir.type<t>>) {
+      %0 = fir.load %rhs_elt : !fir.ref<f32>
+      fir.call @foo(%lhs_elt, %0) : (!fir.ref<!fir.type<t>>, f32) -> ()
+    }
+    ```
+
+    TODO: add optional "realloc" semantics like for hlfir.assign.
+  }];
+
+  let regions = (region  SizedRegion<1>:$rhs_region,
+                         SizedRegion<1>:$lhs_region,
+                         MaxSizedRegion<1>:$user_defined_assignment);
+
+  let extraClassDeclaration = [{
+    mlir::Value getUserAssignmentRhs() {
+      return getUserDefinedAssignment().getArguments()[0];
+    }
+    mlir::Value getUserAssignmentLhs() {
+      return getUserDefinedAssignment().getArguments()[1];
+    }
+  }];
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+def hlfir_YieldOp : hlfir_Op<"yield", [Terminator, ParentOneOf<["RegionAssignOp", "ElementalAddrOp"]>,
+    SingleBlockImplicitTerminator<"fir::FirEndOp">]> {
+
+  let summary = "Yield a value or variable inside a forall, where or region assignment";
+
+  let description = [{
+    Terminator operation that yields an HLFIR value or variable that was computed in
+    a region and hold the yielded entity cleanup, if any, into its own region.
+    This allows representing any Fortran expression evaluation in its own region so
+    that the evaluation can easily be scheduled/moved around in a pass.
+
+    Example: "foo(x)" where foo returns an allocatable array.
+    ```
+    {
+      // In some region.
+      %0 = fir.call @foo(x) (!fir.ref<f32>) -> !fir.box<fir.heap<!fir.array<?xf32>>>
+      hlfir.yield %0 : !fir.box<!fir.heap<!fir.array<?xf32>>> cleanup {
+        %1 = fir.box_addr %0 : !fir.box<!fir.heap<!fir.array<?xf32>>> -> !fir.heap<!fir.array<?xf32>>
+        %fir.freemem %1 : !fir.heap<!fir.array<?xf32>>
+      }
+    }
+    ```
+  }];
+
+  let arguments = (ins AnyFortranEntity:$entity);
+  let regions = (region  MaxSizedRegion<1>:$cleanup);
+
+  let assemblyFormat = "$entity attr-dict `:` type($entity) custom<YieldOpCleanup>($cleanup)";
+}
+
+def hlfir_ElementalAddrOp : hlfir_Op<"elemental_addr", [Terminator, HasParent<"RegionAssignOp">, RecursiveMemoryEffects, RecursivelySpeculatable]> {
+  let summary = "Yield the address of a vector subscripted variable inside an hlfir.region_assign";
+  let description = [{
+    Special terminator node for the left-hand side region of an hlfir.region_assign
+    to a vector subscripted entity.
+
+    It represents how the address of an element of such entity is computed given
+    one based indices.
+
+    It is very similar to hlfir.elemental, except that it does not produce an SSA
+    value because there is no hlfir type to describe a vector subscripted entity
+    (the codegen of such type would be problematic). Hence, it is tightly linked
+    to an hlfir.region_assign by its terminator property.
+
+    An optional cleanup region may be provided if any of the subscript expressions
+    of the designator require a cleanup.
+    This allows documenting cleanups that cannot be generated after the vector
+    subscripted designator usage (that has not been materizaled yet). The cleanups
+    will be evaluated after the assignment once the related
+    hlfir.region_assign is lowered.
+
+    Example: "X(VECTOR) = Y"
+
+    ```
+    hlfir.region_assign {
+      hlfir.yield %y : !fir.ref<!fir.array<20xf32>>
+    } to {
+      hlfir.elemental_addr %vector_shape  : !fir.shape<1> {
+        ^bb0(%i: index):
+        %0 = hlfir.designate %vector (%i)  : (!fir.ref<!fir.array<20xi32>>, index) -> !fir.ref<i32>
+        %1 = fir.load %0 : !fir.ref<i32>
+        %x_element_addr = hlfir.designate %x (%1)  : (!fir.ref<!fir.array<100xf32>>, i32) -> !fir.ref<f32>
+        hlfir.yield %x_element_addr : !fir.ref<f32>
+      }
+    }
+    ```
+  }];
+
+  let arguments = (ins
+    fir_ShapeType:$shape,
+    Variadic<AnyIntegerType>:$typeparams);
+
+  let regions = (region  SizedRegion<1>:$body,
+                         MaxSizedRegion<1>:$cleanup);
+
+  let builders = [
+    OpBuilder<(ins "mlir::Value":$shape)>
+  ];
+
+  let assemblyFormat = [{
+    $shape (`typeparams` $typeparams^)?
+    attr-dict `:` type(operands) $body
+    custom<YieldOpCleanup>($cleanup)}];
+
+  let extraClassDeclaration = [{
+    mlir::Region::BlockArgListType getIndices() {
+      return getBody().getArguments();
+    }
+  }];
+
+  let hasVerifier = 1;
+}
+
+
 #endif // FORTRAN_DIALECT_HLFIR_OPS

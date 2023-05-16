@@ -78,8 +78,8 @@ struct DumpVisitor {
   }
 
   void printStr(const char *S) { fprintf(stderr, "%s", S); }
-  void print(StringView SV) {
-    fprintf(stderr, "\"%.*s\"", (int)SV.size(), SV.begin());
+  void print(std::string_view SV) {
+    fprintf(stderr, "\"%.*s\"", (int)SV.size(), &*SV.begin());
   }
   void print(const Node *N) {
     if (N)
@@ -365,9 +365,8 @@ public:
 
 using Demangler = itanium_demangle::ManglingParser<DefaultAllocator>;
 
-char *llvm::itaniumDemangle(const char *MangledName, char *Buf,
-                            size_t *N, int *Status) {
-  if (MangledName == nullptr || (Buf != nullptr && N == nullptr)) {
+char *llvm::itaniumDemangle(const char *MangledName, int *Status) {
+  if (MangledName == nullptr) {
     if (Status)
       *Status = demangle_invalid_args;
     return nullptr;
@@ -377,15 +376,14 @@ char *llvm::itaniumDemangle(const char *MangledName, char *Buf,
   Demangler Parser(MangledName, MangledName + std::strlen(MangledName));
   Node *AST = Parser.parse();
 
+  char *Buf;
   if (AST == nullptr)
     InternalStatus = demangle_invalid_mangled_name;
   else {
-    OutputBuffer OB(Buf, N);
+    OutputBuffer OB;
     assert(Parser.ForwardTemplateRefs.empty());
     AST->print(OB);
     OB += '\0';
-    if (N != nullptr)
-      *N = OB.getCurrentPosition();
     Buf = OB.getBuffer();
   }
 

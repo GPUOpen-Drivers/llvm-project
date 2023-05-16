@@ -49,17 +49,23 @@ public:
   /// section.
   virtual bool hasValidRelocs() = 0;
 
-  /// Checks that the specified variable \p DIE references live code section.
-  /// Allowed kind of input die: DW_TAG_variable, DW_TAG_constant.
-  /// \returns true and sets Info.InDebugMap if it is the case.
-  virtual bool isLiveVariable(const DWARFDie &DIE,
-                              CompileUnit::DIEInfo &Info) = 0;
+  /// Checks that the specified variable \p DIE references the live code
+  /// section and returns the relocation adjustment value (to get the linked
+  /// address this value might be added to the source variable address).
+  /// Allowed kinds of input DIE: DW_TAG_variable, DW_TAG_constant.
+  /// \returns relocation adjustment value or std::nullopt if there is no
+  /// corresponding live address.
+  virtual std::optional<int64_t>
+  getVariableRelocAdjustment(const DWARFDie &DIE) = 0;
 
-  /// Checks that the specified subprogram \p DIE references live code section.
-  /// Allowed kind of input die: DW_TAG_subprogram, DW_TAG_label.
-  /// \returns true and sets Info.InDebugMap if it is the case.
-  virtual bool isLiveSubprogram(const DWARFDie &DIE,
-                                CompileUnit::DIEInfo &Info) = 0;
+  /// Checks that the specified subprogram \p DIE references the live code
+  /// section and returns the relocation adjustment value (to get the linked
+  /// address this value might be added to the source subprogram address).
+  /// Allowed kinds of input DIE: DW_TAG_subprogram, DW_TAG_label.
+  /// \returns relocation adjustment value or std::nullopt if there is no
+  /// corresponding live address.
+  virtual std::optional<int64_t>
+  getSubprogramRelocAdjustment(const DWARFDie &DIE) = 0;
 
   /// Apply the valid relocations to the buffer \p Data, taking into
   /// account that Data is at \p BaseOffset in the .debug_info section.
@@ -244,6 +250,7 @@ public:
 typedef std::function<void(const Twine &Warning, StringRef Context,
                            const DWARFDie *DIE)>
     messageHandler;
+typedef std::function<void(const DWARFFile &File)> inputVerificationHandler;
 typedef std::function<ErrorOr<DWARFFile &>(StringRef ContainerName,
                                            StringRef Path)>
     objFileLoader;
@@ -345,6 +352,12 @@ public:
     Options.ErrorHandler = Handler;
   }
 
+  /// Set verification handler which would be used to report verification
+  /// errors.
+  void setInputVerificationHandler(inputVerificationHandler Handler) {
+    Options.InputVerificationHandler = Handler;
+  }
+
   /// Set map for Swift interfaces.
   void setSwiftInterfacesMap(swiftInterfacesMap *Map) {
     Options.ParseableSwiftInterfaces = Map;
@@ -424,7 +437,7 @@ private:
   };
 
   /// Verify the given DWARF file.
-  bool verify(const DWARFFile &File);
+  void verifyInput(const DWARFFile &File);
 
   /// returns true if we need to translate strings.
   bool needToTranslateStrings() { return StringsTranslator != nullptr; }
@@ -855,6 +868,9 @@ private:
 
     // error handler
     messageHandler ErrorHandler = nullptr;
+
+    // input verification handler
+    inputVerificationHandler InputVerificationHandler = nullptr;
 
     /// A list of all .swiftinterface files referenced by the debug
     /// info, mapping Module name to path on disk. The entries need to

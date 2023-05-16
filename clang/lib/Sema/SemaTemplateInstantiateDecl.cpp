@@ -2293,7 +2293,7 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(
     // Filter out previous declarations that don't match the scope. The only
     // effect this has is to remove declarations found in inline namespaces
     // for friend declarations with unqualified names.
-    if (isFriend && !QualifierLoc && !FunctionTemplate) {
+    if (isFriend && !QualifierLoc) {
       SemaRef.FilterLookupForScope(Previous, DC, /*Scope=*/ nullptr,
                                    /*ConsiderLinkage=*/ true,
                                    QualifierLoc.hasQualifier());
@@ -3008,8 +3008,10 @@ Decl *TemplateDeclInstantiator::VisitNonTypeTemplateParmDecl(
 
   if (AutoTypeLoc AutoLoc = DI->getTypeLoc().getContainedAutoTypeLoc())
     if (AutoLoc.isConstrained())
+      // Note: We attach the uninstantiated constriant here, so that it can be
+      // instantiated relative to the top level, like all our other constraints.
       if (SemaRef.AttachTypeConstraint(
-              AutoLoc, Param,
+              AutoLoc, Param, D,
               IsExpandedParameterPack
                 ? DI->getTypeLoc().getAs<PackExpansionTypeLoc>()
                     .getEllipsisLoc()
@@ -4660,11 +4662,7 @@ TemplateDeclInstantiator::InitFunctionInstantiation(FunctionDecl *New,
   ActiveInstType &ActiveInst = SemaRef.CodeSynthesisContexts.back();
   if (ActiveInst.Kind == ActiveInstType::ExplicitTemplateArgumentSubstitution ||
       ActiveInst.Kind == ActiveInstType::DeducedTemplateArgumentSubstitution) {
-    if (FunctionTemplateDecl *FunTmpl
-          = dyn_cast<FunctionTemplateDecl>(ActiveInst.Entity)) {
-      assert(FunTmpl->getTemplatedDecl() == Tmpl &&
-             "Deduction from the wrong function template?");
-      (void) FunTmpl;
+    if (isa<FunctionTemplateDecl>(ActiveInst.Entity)) {
       SemaRef.InstantiatingSpecializations.erase(
           {ActiveInst.Entity->getCanonicalDecl(), ActiveInst.Kind});
       atTemplateEnd(SemaRef.TemplateInstCallbacks, SemaRef, ActiveInst);

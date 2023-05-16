@@ -35,6 +35,7 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/RuntimeLibcalls.h"
 #include "llvm/CodeGen/SelectionDAGAddressAnalysis.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
@@ -61,7 +62,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
-#include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/raw_ostream.h"
@@ -3637,7 +3637,7 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
     break;
   case ISD::USUBO:
   case ISD::SSUBO:
-  case ISD::SUBCARRY:
+  case ISD::USUBO_CARRY:
   case ISD::SSUBO_CARRY:
     if (Op.getResNo() == 1) {
       // If we know the result of a setcc has the top bits zero, use this info.
@@ -3654,7 +3654,7 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
            "We only compute knownbits for the difference here.");
 
     // TODO: Compute influence of the carry operand.
-    if (Opcode == ISD::SUBCARRY || Opcode == ISD::SSUBO_CARRY)
+    if (Opcode == ISD::USUBO_CARRY || Opcode == ISD::SSUBO_CARRY)
       break;
 
     Known = computeKnownBits(Op.getOperand(0), DemandedElts, Depth + 1);
@@ -3665,7 +3665,7 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
   }
   case ISD::UADDO:
   case ISD::SADDO:
-  case ISD::ADDCARRY:
+  case ISD::UADDO_CARRY:
   case ISD::SADDO_CARRY:
     if (Op.getResNo() == 1) {
       // If we know the result of a setcc has the top bits zero, use this info.
@@ -3681,12 +3681,12 @@ KnownBits SelectionDAG::computeKnownBits(SDValue Op, const APInt &DemandedElts,
   case ISD::ADDE: {
     assert(Op.getResNo() == 0 && "We only compute knownbits for the sum here.");
 
-    // With ADDE and ADDCARRY, a carry bit may be added in.
+    // With ADDE and UADDO_CARRY, a carry bit may be added in.
     KnownBits Carry(1);
     if (Opcode == ISD::ADDE)
       // Can't track carry from glue, set carry to unknown.
       Carry.resetAll();
-    else if (Opcode == ISD::ADDCARRY || Opcode == ISD::SADDO_CARRY)
+    else if (Opcode == ISD::UADDO_CARRY || Opcode == ISD::SADDO_CARRY)
       // TODO: Compute known bits for the carry operand. Not sure if it is worth
       // the trouble (how often will we find a known carry bit). And I haven't
       // tested this very much yet, but something like this might work:
@@ -4022,10 +4022,7 @@ bool SelectionDAG::isKnownToBeAPowerOfTwo(SDValue Val) const {
 
   // More could be done here, though the above checks are enough
   // to handle some common cases.
-
-  // Fall back to computeKnownBits to catch other known cases.
-  KnownBits Known = computeKnownBits(Val);
-  return (Known.countMaxPopulation() == 1) && (Known.countMinPopulation() == 1);
+  return false;
 }
 
 unsigned SelectionDAG::ComputeNumSignBits(SDValue Op, unsigned Depth) const {
@@ -4272,11 +4269,11 @@ unsigned SelectionDAG::ComputeNumSignBits(SDValue Op, const APInt &DemandedElts,
   case ISD::SADDO:
   case ISD::UADDO:
   case ISD::SADDO_CARRY:
-  case ISD::ADDCARRY:
+  case ISD::UADDO_CARRY:
   case ISD::SSUBO:
   case ISD::USUBO:
   case ISD::SSUBO_CARRY:
-  case ISD::SUBCARRY:
+  case ISD::USUBO_CARRY:
   case ISD::SMULO:
   case ISD::UMULO:
     if (Op.getResNo() != 1)
@@ -4820,6 +4817,13 @@ bool SelectionDAG::canCreateUndefOrPoison(SDValue Op, const APInt &DemandedElts,
     return ConsiderFlags && (Op->getFlags().hasNoSignedWrap() ||
                              Op->getFlags().hasNoUnsignedWrap());
 
+  case ISD::INSERT_VECTOR_ELT:{
+    // Ensure that the element index is in bounds.
+    EVT VecVT = Op.getOperand(0).getValueType();
+    KnownBits KnownIdx = computeKnownBits(Op.getOperand(2), Depth + 1);
+    return KnownIdx.getMaxValue().uge(VecVT.getVectorMinNumElements());
+  }
+
   default:
     // Allow the target to implement this method for its nodes.
     if (Opcode >= ISD::BUILTIN_OP_END || Opcode == ISD::INTRINSIC_WO_CHAIN ||
@@ -5047,6 +5051,10 @@ static bool haveNoCommonBitsSetCommutative(SDValue A, SDValue B) {
                                       SDValue Other) {
     if (SDValue NotOperand =
             getBitwiseNotOperand(Not, Mask, /* AllowUndefs */ true)) {
+      if (NotOperand->getOpcode() == ISD::ZERO_EXTEND ||
+          NotOperand->getOpcode() == ISD::TRUNCATE)
+        NotOperand = NotOperand->getOperand(0);
+
       if (Other == NotOperand)
         return true;
       if (Other->getOpcode() == ISD::AND)
@@ -5055,6 +5063,13 @@ static bool haveNoCommonBitsSetCommutative(SDValue A, SDValue B) {
     }
     return false;
   };
+
+  if (A->getOpcode() == ISD::ZERO_EXTEND || A->getOpcode() == ISD::TRUNCATE)
+    A = A->getOperand(0);
+
+  if (B->getOpcode() == ISD::ZERO_EXTEND || B->getOpcode() == ISD::TRUNCATE)
+    B = B->getOperand(0);
+
   if (A->getOpcode() == ISD::AND)
     return MatchNoCommonBitsPattern(A->getOperand(0), A->getOperand(1), B) ||
            MatchNoCommonBitsPattern(A->getOperand(1), A->getOperand(0), B);
@@ -7107,7 +7122,7 @@ static SDValue getMemcpyLoadsAndStores(SelectionDAG &DAG, const SDLoc &dl,
   AAMDNodes NewAAInfo = AAInfo;
   NewAAInfo.TBAA = NewAAInfo.TBAAStruct = nullptr;
 
-  const Value *SrcVal = SrcPtrInfo.V.dyn_cast<const Value *>();
+  const Value *SrcVal = dyn_cast_if_present<const Value *>(SrcPtrInfo.V);
   bool isConstant =
       AA && SrcVal &&
       AA->pointsToConstantMemory(MemoryLocation(SrcVal, Size, AAInfo));
@@ -7934,7 +7949,7 @@ SDValue SelectionDAG::getMemIntrinsicNode(unsigned Opcode, const SDLoc &dl,
   assert((Opcode == ISD::INTRINSIC_VOID ||
           Opcode == ISD::INTRINSIC_W_CHAIN ||
           Opcode == ISD::PREFETCH ||
-          ((int)Opcode <= std::numeric_limits<int>::max() &&
+          (Opcode <= (unsigned)std::numeric_limits<int>::max() &&
            (int)Opcode >= ISD::FIRST_TARGET_MEMORY_OPCODE)) &&
          "Opcode is not a memory-accessing opcode!");
 
@@ -8371,7 +8386,7 @@ SDValue SelectionDAG::getLoadVP(ISD::MemIndexedMode AM,
   SDValue Ops[] = {Chain, Ptr, Offset, Mask, EVL};
   FoldingSetNodeID ID;
   AddNodeIDNode(ID, ISD::VP_LOAD, VTs, Ops);
-  ID.AddInteger(VT.getRawBits());
+  ID.AddInteger(MemVT.getRawBits());
   ID.AddInteger(getSyntheticNodeSubclassData<VPLoadSDNode>(
       dl.getIROrder(), VTs, AM, ExtType, IsExpanding, MemVT, MMO));
   ID.AddInteger(MMO->getPointerInfo().getAddrSpace());
@@ -9433,8 +9448,8 @@ SDValue SelectionDAG::getNode(unsigned Opcode, const SDLoc &DL, SDVTList VTList,
            "STRICT_FP_ROUND result type should be vector iff the operand "
            "type is vector!");
     assert((!VTList.VTs[0].isVector() ||
-            VTList.VTs[0].getVectorNumElements() ==
-            Ops[1].getValueType().getVectorNumElements()) &&
+            VTList.VTs[0].getVectorElementCount() ==
+                Ops[1].getValueType().getVectorElementCount()) &&
            "Vector element count mismatch!");
     assert(VTList.VTs[0].isFloatingPoint() &&
            Ops[1].getValueType().isFloatingPoint() &&
@@ -11641,6 +11656,21 @@ MaybeAlign SelectionDAG::InferPtrAlign(SDValue Ptr) const {
   }
 
   return std::nullopt;
+}
+
+/// Split the scalar node with EXTRACT_ELEMENT using the provided
+/// VTs and return the low/high part.
+std::pair<SDValue, SDValue> SelectionDAG::SplitScalar(const SDValue &N,
+                                                      const SDLoc &DL,
+                                                      const EVT &LoVT,
+                                                      const EVT &HiVT) {
+  assert(!LoVT.isVector() && !HiVT.isVector() && !N.getValueType().isVector() &&
+         "Split node must be a scalar type");
+  SDValue Lo =
+      getNode(ISD::EXTRACT_ELEMENT, DL, LoVT, N, getIntPtrConstant(0, DL));
+  SDValue Hi =
+      getNode(ISD::EXTRACT_ELEMENT, DL, HiVT, N, getIntPtrConstant(1, DL));
+  return std::make_pair(Lo, Hi);
 }
 
 /// GetSplitDestVTs - Compute the VTs needed for the low/hi parts of a type

@@ -207,47 +207,6 @@ ELFNixPlatform::standardPlatformAliases(ExecutionSession &ES,
   SymbolAliasMap Aliases;
   addAliases(ES, Aliases, requiredCXXAliases());
   addAliases(ES, Aliases, standardRuntimeUtilityAliases());
-
-  // Determine whether or not the libunwind extended-API function for
-  // dynamically registering an entire .eh_frame section is available.
-  // If it is not, we assume that libgcc_s is being used, and alias to
-  // its __register_frame with the same functionality.
-  auto RTRegisterFrame = ES.intern("__orc_rt_register_eh_frame_section");
-  auto LibUnwindRegisterFrame = ES.intern("__unw_add_dynamic_eh_frame_section");
-  auto RTDeregisterFrame = ES.intern("__orc_rt_deregister_eh_frame_section");
-  auto LibUnwindDeregisterFrame =
-      ES.intern("__unw_remove_dynamic_eh_frame_section");
-  auto SM = ES.lookup(makeJITDylibSearchOrder(&PlatformJD),
-                      SymbolLookupSet()
-                          .add(LibUnwindRegisterFrame,
-                               SymbolLookupFlags::WeaklyReferencedSymbol)
-                          .add(LibUnwindDeregisterFrame,
-                               SymbolLookupFlags::WeaklyReferencedSymbol));
-  if (!SM) { // Weak-ref means no "missing symbol" errors, so this must be
-             // something more serious that we should report.
-    return SM.takeError();
-  } else if (SM->size() == 2) {
-    LLVM_DEBUG({
-      dbgs() << "Using libunwind " << LibUnwindRegisterFrame
-             << " for unwind info registration\n";
-    });
-    Aliases[std::move(RTRegisterFrame)] = {LibUnwindRegisterFrame,
-                                           JITSymbolFlags::Exported};
-    Aliases[std::move(RTDeregisterFrame)] = {LibUnwindDeregisterFrame,
-                                             JITSymbolFlags::Exported};
-  } else {
-    // Since LLVM libunwind is not present, we assume that unwinding
-    // is provided by libgcc
-    LLVM_DEBUG({
-      dbgs() << "Using libgcc __register_frame"
-             << " for unwind info registration\n";
-    });
-    Aliases[std::move(RTRegisterFrame)] = {ES.intern("__register_frame"),
-                                           JITSymbolFlags::Exported};
-    Aliases[std::move(RTDeregisterFrame)] = {ES.intern("__deregister_frame"),
-                                             JITSymbolFlags::Exported};
-  }
-
   return Aliases;
 }
 
@@ -429,8 +388,7 @@ void ELFNixPlatform::rt_getInitializers(SendInitializerSequenceFn SendResult,
 void ELFNixPlatform::rt_getDeinitializers(
     SendDeinitializerSequenceFn SendResult, ExecutorAddr Handle) {
   LLVM_DEBUG({
-    dbgs() << "ELFNixPlatform::rt_getDeinitializers(\""
-           << formatv("{0:x}", Handle.getValue()) << "\")\n";
+    dbgs() << "ELFNixPlatform::rt_getDeinitializers(\"" << Handle << "\")\n";
   });
 
   JITDylib *JD = nullptr;
@@ -443,12 +401,9 @@ void ELFNixPlatform::rt_getDeinitializers(
   }
 
   if (!JD) {
-    LLVM_DEBUG({
-      dbgs() << "  No JITDylib for handle "
-             << formatv("{0:x}", Handle.getValue()) << "\n";
-    });
+    LLVM_DEBUG(dbgs() << "  No JITDylib for handle " << Handle << "\n");
     SendResult(make_error<StringError>("No JITDylib associated with handle " +
-                                           formatv("{0:x}", Handle.getValue()),
+                                           formatv("{0:x}", Handle),
                                        inconvertibleErrorCode()));
     return;
   }
@@ -460,8 +415,7 @@ void ELFNixPlatform::rt_lookupSymbol(SendSymbolAddressFn SendResult,
                                      ExecutorAddr Handle,
                                      StringRef SymbolName) {
   LLVM_DEBUG({
-    dbgs() << "ELFNixPlatform::rt_lookupSymbol(\""
-           << formatv("{0:x}", Handle.getValue()) << "\")\n";
+    dbgs() << "ELFNixPlatform::rt_lookupSymbol(\"" << Handle << "\")\n";
   });
 
   JITDylib *JD = nullptr;
@@ -474,12 +428,9 @@ void ELFNixPlatform::rt_lookupSymbol(SendSymbolAddressFn SendResult,
   }
 
   if (!JD) {
-    LLVM_DEBUG({
-      dbgs() << "  No JITDylib for handle "
-             << formatv("{0:x}", Handle.getValue()) << "\n";
-    });
+    LLVM_DEBUG(dbgs() << "  No JITDylib for handle " << Handle << "\n");
     SendResult(make_error<StringError>("No JITDylib associated with handle " +
-                                           formatv("{0:x}", Handle.getValue()),
+                                           formatv("{0:x}", Handle),
                                        inconvertibleErrorCode()));
     return;
   }
@@ -593,8 +544,7 @@ Error ELFNixPlatform::registerInitInfo(
   for (auto *Sec : InitSections) {
     // FIXME: Avoid copy here.
     jitlink::SectionRange R(*Sec);
-    InitSeq->InitSections[Sec->getName()].push_back(
-        {ExecutorAddr(R.getStart()), ExecutorAddr(R.getEnd())});
+    InitSeq->InitSections[Sec->getName()].push_back(R.getRange());
   }
 
   return Error::success();
@@ -724,8 +674,7 @@ void ELFNixPlatform::ELFNixPlatformPlugin::addEHAndTLVSupportPasses(
     if (auto *EHFrameSection = G.findSectionByName(ELFEHFrameSectionName)) {
       jitlink::SectionRange R(*EHFrameSection);
       if (!R.empty())
-        POSR.EHFrameSection = {ExecutorAddr(R.getStart()),
-                               ExecutorAddr(R.getEnd())};
+        POSR.EHFrameSection = R.getRange();
     }
 
     // Get a pointer to the thread data section if there is one. It will be used
@@ -749,8 +698,7 @@ void ELFNixPlatform::ELFNixPlatformPlugin::addEHAndTLVSupportPasses(
     if (ThreadDataSection) {
       jitlink::SectionRange R(*ThreadDataSection);
       if (!R.empty())
-        POSR.ThreadDataSection = {ExecutorAddr(R.getStart()),
-                                  ExecutorAddr(R.getEnd())};
+        POSR.ThreadDataSection = R.getRange();
     }
 
     if (POSR.EHFrameSection.Start || POSR.ThreadDataSection.Start) {
@@ -813,7 +761,7 @@ Error ELFNixPlatform::ELFNixPlatformPlugin::registerInitSections(
 
   SmallVector<jitlink::Section *> InitSections;
 
-  LLVM_DEBUG({ dbgs() << "ELFNixPlatform::registerInitSections\n"; });
+  LLVM_DEBUG(dbgs() << "ELFNixPlatform::registerInitSections\n");
 
   for (auto &Sec : G.sections()) {
     if (isELFInitializerSection(Sec.getName())) {
@@ -826,8 +774,7 @@ Error ELFNixPlatform::ELFNixPlatformPlugin::registerInitSections(
     dbgs() << "ELFNixPlatform: Scraped " << G.getName() << " init sections:\n";
     for (auto *Sec : InitSections) {
       jitlink::SectionRange R(*Sec);
-      dbgs() << "  " << Sec->getName() << ": "
-             << formatv("[ {0:x} -- {1:x} ]", R.getStart(), R.getEnd()) << "\n";
+      dbgs() << "  " << Sec->getName() << ": " << R.getRange() << "\n";
     }
   });
 

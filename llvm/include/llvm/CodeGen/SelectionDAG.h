@@ -29,6 +29,7 @@
 #include "llvm/CodeGen/ISDOpcodes.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/DebugLoc.h"
@@ -37,7 +38,6 @@
 #include "llvm/Support/ArrayRecycler.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/RecyclingAllocator.h"
 #include <cassert>
 #include <cstdint>
@@ -2183,6 +2183,11 @@ public:
   /// Infer alignment of a load / store address. Return std::nullopt if it
   /// cannot be inferred.
   MaybeAlign InferPtrAlign(SDValue Ptr) const;
+
+  /// Split the scalar node with EXTRACT_ELEMENT using the provided VTs and
+  /// return the low/high part.
+  std::pair<SDValue, SDValue> SplitScalar(const SDValue &N, const SDLoc &DL,
+                                          const EVT &LoVT, const EVT &HiVT);
 
   /// Compute the VTs needed for the low/hi parts of a type
   /// which is split (or expanded) into two not necessarily identical pieces.

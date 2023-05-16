@@ -439,9 +439,16 @@ unsigned DWARFLinker::shouldKeepVariableDIE(AddressesMap &RelocMgr,
   // if the variable has a valid relocation, so that the DIEInfo is filled.
   // However, we don't want a static variable in a function to force us to keep
   // the enclosing function, unless requested explicitly.
-  const bool HasLiveMemoryLocation = RelocMgr.isLiveVariable(DIE, MyInfo);
-  if (!HasLiveMemoryLocation || ((Flags & TF_InFunctionScope) &&
-                                 !LLVM_UNLIKELY(Options.KeepFunctionForStatic)))
+  std::optional<int64_t> RelocAdjustment =
+      RelocMgr.getVariableRelocAdjustment(DIE);
+
+  if (RelocAdjustment) {
+    MyInfo.AddrAdjust = *RelocAdjustment;
+    MyInfo.InDebugMap = true;
+  }
+
+  if (!RelocAdjustment || ((Flags & TF_InFunctionScope) &&
+                           !LLVM_UNLIKELY(Options.KeepFunctionForStatic)))
     return Flags;
 
   if (Options.Verbose) {
@@ -468,8 +475,13 @@ unsigned DWARFLinker::shouldKeepSubprogramDIE(
     return Flags;
 
   assert(LowPc && "low_pc attribute is not an address.");
-  if (!RelocMgr.isLiveSubprogram(DIE, MyInfo))
+  std::optional<int64_t> RelocAdjustment =
+      RelocMgr.getSubprogramRelocAdjustment(DIE);
+  if (!RelocAdjustment)
     return Flags;
+
+  MyInfo.AddrAdjust = *RelocAdjustment;
+  MyInfo.InDebugMap = true;
 
   if (Options.Verbose) {
     outs() << "Keeping subprogram DIE:";
@@ -2577,7 +2589,7 @@ Error DWARFLinker::link() {
       continue;
 
     if (Options.VerifyInputDWARF)
-      verify(OptContext.File);
+      verifyInput(OptContext.File);
 
     // Look for relocations that correspond to address map entries.
 
@@ -2888,15 +2900,15 @@ Error DWARFLinker::cloneModuleUnit(LinkContext &Context, RefModuleUnit &Unit,
   return Error::success();
 }
 
-bool DWARFLinker::verify(const DWARFFile &File) {
+void DWARFLinker::verifyInput(const DWARFFile &File) {
   assert(File.Dwarf);
 
+  raw_ostream &os = Options.Verbose ? errs() : nulls();
   DIDumpOptions DumpOpts;
-  if (!File.Dwarf->verify(llvm::outs(), DumpOpts.noImplicitRecursion())) {
-    reportWarning("input verification failed", File);
-    return false;
+  if (!File.Dwarf->verify(os, DumpOpts.noImplicitRecursion())) {
+    if (Options.InputVerificationHandler)
+      Options.InputVerificationHandler(File);
   }
-  return true;
 }
 
 } // namespace llvm

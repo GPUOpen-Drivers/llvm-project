@@ -367,6 +367,7 @@ enum NodeType : unsigned {
   // Function call.
   CALL,
   TC_RETURN,
+  TC_RETURN_GFX,
   TRAP,
 
   // Masked control flow nodes.
@@ -381,7 +382,7 @@ enum NodeType : unsigned {
   RETURN_TO_EPILOG,
 
   // Return with values from a non-entry function.
-  RET_FLAG,
+  RET_GLUE,
 
   DWORDADDR,
   FRACT,
