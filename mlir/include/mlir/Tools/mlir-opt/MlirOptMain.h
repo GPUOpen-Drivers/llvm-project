@@ -116,6 +116,16 @@ public:
     return success();
   }
 
+  /// Enable running the reproducer information stored in resources (if
+  /// present).
+  MlirOptMainConfig &runReproducer(bool enableReproducer) {
+    runReproducerFlag = enableReproducer;
+    return *this;
+  };
+
+  /// Return true if the reproducer should be run.
+  bool shouldRunReproducer() const { return runReproducerFlag; }
+
   /// Show the registered dialects before trying to load the input file.
   MlirOptMainConfig &showDialects(bool show) {
     showDialectsFlag = show;
@@ -153,6 +163,13 @@ public:
   }
   bool shouldVerifyPasses() const { return verifyPassesFlag; }
 
+  /// Set whether to run the verifier after each transformation pass.
+  MlirOptMainConfig &verifyRoundtrip(bool verify) {
+    verifyRoundtripFlag = verify;
+    return *this;
+  }
+  bool shouldVerifyRoundtrip() const { return verifyRoundtripFlag; }
+
 protected:
   /// Allow operation with no registered dialects.
   /// This option is for convenience during testing only and discouraged in
@@ -183,6 +200,9 @@ protected:
   /// The callback to populate the pass manager.
   std::function<LogicalResult(PassManager &)> passPipelineCallback;
 
+  /// Enable running the reproducer.
+  bool runReproducerFlag = false;
+
   /// Show the registered dialects before trying to load the input file.
   bool showDialectsFlag = false;
 
@@ -199,6 +219,9 @@ protected:
 
   /// Run the verifier after each transformation pass.
   bool verifyPassesFlag = true;
+
+  /// Verify that the input IR round-trips perfectly.
+  bool verifyRoundtripFlag = false;
 };
 
 /// This defines the function type used to setup the pass manager. This can be

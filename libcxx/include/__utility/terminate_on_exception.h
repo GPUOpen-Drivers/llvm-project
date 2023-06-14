@@ -10,7 +10,7 @@
 #define _LIBCPP___UTILITY_TERMINATE_ON_EXCEPTION_H
 
 #include <__config>
-#include <exception>
+#include <__exception/terminate.h>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #  pragma GCC system_header
@@ -31,7 +31,7 @@ _LIBCPP_HIDE_FROM_ABI auto __terminate_on_exception(_Func __func) {
   }
 }
 
-#  else  // _LIBCPP_HAS_NO_EXCEPTIONS
+#  else // _LIBCPP_HAS_NO_EXCEPTIONS
 
 template <class _Func>
 _LIBCPP_HIDE_FROM_ABI auto __terminate_on_exception(_Func __func) {

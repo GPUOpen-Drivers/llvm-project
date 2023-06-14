@@ -355,12 +355,16 @@ public:
   /// \brief Mark \p UniVal as a value that is always uniform.
   void addUniformOverride(const InstructionT &Instr);
 
-  /// \brief Mark \p DivVal as a value that is always divergent.
+  /// \brief Examine \p I for divergent outputs and add to the worklist.
+  void markDivergent(const InstructionT &I);
+
+  /// \brief Mark \p DivVal as a divergent value.
   /// \returns Whether the tracked divergence state of \p DivVal changed.
-  bool markDivergent(const InstructionT &I);
   bool markDivergent(ConstValueRefT DivVal);
-  bool markDefsDivergent(const InstructionT &Instr,
-                         bool AllDefsDivergent = true);
+
+  /// \brief Mark outputs of \p Instr as divergent.
+  /// \returns Whether the tracked divergence state of any output has changed.
+  bool markDefsDivergent(const InstructionT &Instr);
 
   /// \brief Propagate divergence to all instructions in the region.
   /// Divergence is seeded by calls to \p markDivergent.
@@ -451,17 +455,18 @@ private:
   void propagateCycleExitDivergence(const BlockT &DivExit,
                                     const CycleT &DivCycle);
 
-  /// \brief Internal implementation function for propagateCycleExitDivergence.
-  void analyzeCycleExitDivergence(const CycleT &OuterDivCycle);
+  /// Mark as divergent all external uses of values defined in \p DefCycle.
+  void analyzeCycleExitDivergence(const CycleT &DefCycle);
 
-  /// \brief Mark all instruction as divergent that use a value defined in \p
-  /// OuterDivCycle. Push their users on the worklist.
+  /// \brief Mark as divergent all uses of \p I that are outside \p DefCycle.
   void propagateTemporalDivergence(const InstructionT &I,
-                                   const CycleT &OuterDivCycle);
+                                   const CycleT &DefCycle);
 
   /// \brief Push all users of \p Val (in the region) to the worklist.
   void pushUsers(const InstructionT &I);
   void pushUsers(ConstValueRefT V);
+
+  bool usesValueFromCycle(const InstructionT &I, const CycleT &DefCycle) const;
 
   /// \brief Whether \p Def is divergent when read in \p ObservingBlock.
   bool isTemporalDivergent(const BlockT &ObservingBlock,
@@ -774,21 +779,23 @@ auto llvm::GenericSyncDependenceAnalysis<ContextT>::getJoinBlocks(
 }
 
 template <typename ContextT>
-bool GenericUniformityAnalysisImpl<ContextT>::markDivergent(
+void GenericUniformityAnalysisImpl<ContextT>::markDivergent(
     const InstructionT &I) {
+  if (isAlwaysUniform(I))
+    return;
+  bool Marked = false;
   if (I.isTerminator()) {
-    if (DivergentTermBlocks.insert(I.getParent()).second) {
+    Marked = DivergentTermBlocks.insert(I.getParent()).second;
+    if (Marked) {
       LLVM_DEBUG(dbgs() << "marked divergent term block: "
                         << Context.print(I.getParent()) << "\n");
-      return true;
     }
-    return false;
+  } else {
+    Marked = markDefsDivergent(I);
   }
 
-  if (isAlwaysUniform(I))
-    return false;
-
-  return markDefsDivergent(I);
+  if (Marked)
+    Worklist.push_back(&I);
 }
 
 template <typename ContextT>
@@ -807,23 +814,38 @@ void GenericUniformityAnalysisImpl<ContextT>::addUniformOverride(
   UniformOverrides.insert(&Instr);
 }
 
-// Mark all external users of values defined inside \param
-// OuterDivCycle as divergent.
+// Mark as divergent all external uses of values defined in \p DefCycle.
 //
-// This follows all live out edges wherever they may lead. Potential
-// users of values defined inside DivCycle could be anywhere in the
-// dominance region of DivCycle (including its fringes for phi nodes).
-// A cycle C dominates a block B iff every path from the entry block
-// to B must pass through a block contained in C. If C is a reducible
-// cycle (or natural loop), C dominates B iff the header of C
-// dominates B. But in general, we iteratively examine cycle cycle
-// exits and their successors.
+// A value V defined by a block B inside \p DefCycle may be used outside the
+// cycle only if the use is a PHI in some exit block, or B dominates some exit
+// block. Thus, we check uses as follows:
+//
+// - Check all PHIs in all exit blocks for inputs defined inside \p DefCycle.
+// - For every block B inside \p DefCycle that dominates at least one exit
+//   block, check all uses outside \p DefCycle.
+//
+// FIXME: This function does not distinguish between divergent and uniform
+// exits. For each divergent exit, only the values that are live at that exit
+// need to be propagated as divergent at their use outside the cycle.
 template <typename ContextT>
 void GenericUniformityAnalysisImpl<ContextT>::analyzeCycleExitDivergence(
-    const CycleT &OuterDivCycle) {
-  for (auto *BB : OuterDivCycle.blocks()) {
+    const CycleT &DefCycle) {
+  SmallVector<BlockT *> Exits;
+  DefCycle.getExitBlocks(Exits);
+  for (auto *Exit : Exits) {
+    for (auto &Phi : Exit->phis()) {
+      if (usesValueFromCycle(Phi, DefCycle)) {
+        markDivergent(Phi);
+      }
+    }
+  }
+
+  for (auto *BB : DefCycle.blocks()) {
+    if (!llvm::any_of(Exits,
+                     [&](BlockT *Exit) { return DT.dominates(BB, Exit); }))
+      continue;
     for (auto &II : *BB) {
-      propagateTemporalDivergence(II, OuterDivCycle);
+      propagateTemporalDivergence(II, DefCycle);
     }
   }
 }
@@ -873,8 +895,7 @@ void GenericUniformityAnalysisImpl<ContextT>::taintAndPushAllDefs(
     if (I.isTerminator())
       break;
 
-    if (markDivergent(I))
-      Worklist.push_back(&I);
+    markDivergent(I);
   }
 }
 
@@ -894,8 +915,7 @@ void GenericUniformityAnalysisImpl<ContextT>::taintAndPushPhiNodes(
     // https://reviews.llvm.org/D19013
     if (ContextT::isConstantOrUndefValuePhi(Phi))
       continue;
-    if (markDivergent(Phi))
-      Worklist.push_back(&Phi);
+    markDivergent(Phi);
   }
 }
 
@@ -1127,9 +1147,11 @@ template <typename ContextT>
 void GenericUniformityAnalysisImpl<ContextT>::print(raw_ostream &OS) const {
   bool haveDivergentArgs = false;
 
-  if (DivergentValues.empty()) {
-    assert(DivergentTermBlocks.empty());
-    assert(DivergentExitCycles.empty());
+  // Control flow instructions may be divergent even if their inputs are
+  // uniform. Thus, although exceedingly rare, it is possible to have a program
+  // with no divergent values but with divergent control structures.
+  if (DivergentValues.empty() && DivergentTermBlocks.empty() &&
+      DivergentExitCycles.empty()) {
     OS << "ALL VALUES UNIFORM\n";
     return;
   }
