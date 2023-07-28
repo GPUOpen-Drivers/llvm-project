@@ -893,7 +893,7 @@ bool FastISel::selectPatchpoint(const CallInst *I) {
 
 bool FastISel::selectXRayCustomEvent(const CallInst *I) {
   const auto &Triple = TM.getTargetTriple();
-  if (Triple.getArch() != Triple::x86_64 || !Triple.isOSLinux())
+  if (Triple.isAArch64(64) && Triple.getArch() != Triple::x86_64)
     return true; // don't do anything to this instruction.
   SmallVector<MachineOperand, 8> Ops;
   Ops.push_back(MachineOperand::CreateReg(getRegForValue(I->getArgOperand(0)),
@@ -912,7 +912,7 @@ bool FastISel::selectXRayCustomEvent(const CallInst *I) {
 
 bool FastISel::selectXRayTypedEvent(const CallInst *I) {
   const auto &Triple = TM.getTargetTriple();
-  if (Triple.getArch() != Triple::x86_64 || !Triple.isOSLinux())
+  if (Triple.isAArch64(64) && Triple.getArch() != Triple::x86_64)
     return true; // don't do anything to this instruction.
   SmallVector<MachineOperand, 8> Ops;
   Ops.push_back(MachineOperand::CreateReg(getRegForValue(I->getArgOperand(0)),
@@ -1307,6 +1307,24 @@ bool FastISel::selectIntrinsicCall(const IntrinsicInst *II) {
           .addImm(0U)
           .addMetadata(Var)
           .addMetadata(Expr);
+      return true;
+    }
+    if (const auto *Arg = dyn_cast<Argument>(V);
+        Arg && Expr && Expr->isEntryValue()) {
+      // As per the Verifier, this case is only valid for swift async Args.
+      assert(Arg->hasAttribute(Attribute::AttrKind::SwiftAsync));
+
+      Register Reg = getRegForValue(Arg);
+      for (auto [PhysReg, VirtReg] : FuncInfo.RegInfo->liveins())
+        if (Reg == VirtReg || Reg == PhysReg) {
+          BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, MIMD.getDL(), II,
+                  false /*IsIndirect*/, PhysReg, Var, Expr);
+          return true;
+        }
+
+      LLVM_DEBUG(dbgs() << "Dropping dbg.value: expression is entry_value but "
+                           "couldn't find a physical register\n"
+                        << *DI << "\n");
       return true;
     }
     if (Register Reg = lookUpRegForValue(V)) {

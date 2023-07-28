@@ -19,6 +19,7 @@
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <cstdint>
@@ -301,7 +302,7 @@ uint32_t GenericKernelTy::getNumThreads(GenericDeviceTy &GenericDevice,
 uint64_t GenericKernelTy::getNumBlocks(GenericDeviceTy &GenericDevice,
                                        uint32_t NumTeamsClause[3],
                                        uint64_t LoopTripCount,
-                                       uint32_t NumThreads) const {
+                                       uint32_t &NumThreads) const {
   assert(NumTeamsClause[1] == 0 && NumTeamsClause[2] == 0 &&
          "Multi dimensional launch not supported yet.");
 
@@ -312,14 +313,50 @@ uint64_t GenericKernelTy::getNumBlocks(GenericDeviceTy &GenericDevice,
     return std::min(NumTeamsClause[0], GenericDevice.getBlockLimit());
   }
 
+  uint64_t DefaultNumBlocks = getDefaultNumBlocks(GenericDevice);
   uint64_t TripCountNumBlocks = std::numeric_limits<uint64_t>::max();
   if (LoopTripCount > 0) {
     if (isSPMDMode()) {
       // We have a combined construct, i.e. `target teams distribute
       // parallel for [simd]`. We launch so many teams so that each thread
-      // will execute one iteration of the loop. round up to the nearest
-      // integer
-      TripCountNumBlocks = ((LoopTripCount - 1) / NumThreads) + 1;
+      // will execute one iteration of the loop; rounded up to the nearest
+      // integer. However, if that results in too few teams, we artificially
+      // reduce the thread count per team to increase the outer parallelism.
+      auto MinThreads = GenericDevice.getMinThreadsForLowTripCountLoop();
+      MinThreads = std::min(MinThreads, NumThreads);
+
+      // Honor the thread_limit clause; only lower the number of threads.
+      auto OldNumThreads = NumThreads;
+      if (LoopTripCount >= DefaultNumBlocks * NumThreads) {
+        // Enough parallelism for teams and threads.
+        TripCountNumBlocks = ((LoopTripCount - 1) / NumThreads) + 1;
+        assert(TripCountNumBlocks >= DefaultNumBlocks &&
+               "Expected sufficient outer parallelism.");
+      } else if (LoopTripCount >= DefaultNumBlocks * MinThreads) {
+        // Enough parallelism for teams, limit threads.
+
+        // This case is hard; for now, we force "full warps":
+        // First, compute a thread count assuming DefaultNumBlocks.
+        auto NumThreadsDefaultBlocks =
+            (LoopTripCount + DefaultNumBlocks - 1) / DefaultNumBlocks;
+        // Now get a power of two that is larger or equal.
+        auto NumThreadsDefaultBlocksP2 =
+            llvm::PowerOf2Ceil(NumThreadsDefaultBlocks);
+        // Do not increase a thread limit given be the user.
+        NumThreads = std::min(NumThreads, uint32_t(NumThreadsDefaultBlocksP2));
+        assert(NumThreads >= MinThreads &&
+               "Expected sufficient inner parallelism.");
+        TripCountNumBlocks = ((LoopTripCount - 1) / NumThreads) + 1;
+      } else {
+        // Not enough parallelism for teams and threads, limit both.
+        NumThreads = std::min(NumThreads, MinThreads);
+        TripCountNumBlocks = ((LoopTripCount - 1) / NumThreads) + 1;
+      }
+
+      assert(NumThreads * TripCountNumBlocks >= LoopTripCount &&
+             "Expected sufficient parallelism");
+      assert(OldNumThreads >= NumThreads &&
+             "Number of threads cannot be increased!");
     } else {
       assert((isGenericMode() || isGenericSPMDMode()) &&
              "Unexpected execution mode!");
@@ -339,8 +376,7 @@ uint64_t GenericKernelTy::getNumBlocks(GenericDeviceTy &GenericDevice,
     }
   }
   // If the loops are long running we rather reuse blocks than spawn too many.
-  uint32_t PreferredNumBlocks = std::min(uint32_t(TripCountNumBlocks),
-                                         getDefaultNumBlocks(GenericDevice));
+  uint32_t PreferredNumBlocks = std::min(TripCountNumBlocks, DefaultNumBlocks);
   return std::min(PreferredNumBlocks, GenericDevice.getBlockLimit());
 }
 
@@ -360,7 +396,7 @@ GenericDeviceTy::GenericDeviceTy(int32_t DeviceId, int32_t NumDevices,
       OMPX_InitialNumEvents("LIBOMPTARGET_NUM_INITIAL_EVENTS", 32),
       DeviceId(DeviceId), GridValues(OMPGridValues),
       PeerAccesses(NumDevices, PeerAccessState::PENDING), PeerAccessesLock(),
-      PinnedAllocs(*this) {}
+      PinnedAllocs(*this), RPCHandle(nullptr) {}
 
 Error GenericDeviceTy::init(GenericPluginTy &Plugin) {
   if (auto Err = initImpl(Plugin))
@@ -417,6 +453,10 @@ Error GenericDeviceTy::deinit() {
   if (RecordReplay.isRecordingOrReplaying())
     RecordReplay.deinit();
 
+  if (RPCHandle)
+    if (auto Err = RPCHandle->deinitDevice())
+      return Err;
+
   return deinitImpl();
 }
 
@@ -457,6 +497,9 @@ GenericDeviceTy::loadBinary(GenericPluginTy &Plugin,
   if (auto Err = registerOffloadEntries(*Image))
     return std::move(Err);
 
+  if (auto Err = setupRPCServer(Plugin, *Image))
+    return std::move(Err);
+
   // Return the pointer to the table of entries.
   return Image->getOffloadEntryTable();
 }
@@ -473,6 +516,7 @@ Error GenericDeviceTy::setupDeviceEnvironment(GenericPluginTy &Plugin,
   // TODO: The device ID used here is not the real device ID used by OpenMP.
   DeviceEnvironment.DeviceNum = DeviceId;
   DeviceEnvironment.DynamicMemSize = OMPX_SharedMemorySize;
+  DeviceEnvironment.ClockFrequency = getClockFrequency();
 
   // Create the metainfo of the device environment global.
   GlobalTy DevEnvGlobal("__omp_rtl_device_environment",
@@ -485,6 +529,33 @@ Error GenericDeviceTy::setupDeviceEnvironment(GenericPluginTy &Plugin,
        DevEnvGlobal.getName().data());
     consumeError(std::move(Err));
   }
+  return Plugin::success();
+}
+
+Error GenericDeviceTy::setupRPCServer(GenericPluginTy &Plugin,
+                                      DeviceImageTy &Image) {
+  // The plugin either does not need an RPC server or it is unavailible.
+  if (!shouldSetupRPCServer())
+    return Plugin::success();
+
+  // Check if this device needs to run an RPC server.
+  RPCServerTy &Server = Plugin.getRPCServer();
+  auto UsingOrErr =
+      Server.isDeviceUsingRPC(*this, Plugin.getGlobalHandler(), Image);
+  if (!UsingOrErr)
+    return UsingOrErr.takeError();
+
+  if (!UsingOrErr.get())
+    return Plugin::success();
+
+  if (auto Err = Server.initDevice(*this, Plugin.getGlobalHandler(), Image))
+    return Err;
+
+  auto DeviceOrErr = Server.getDevice(*this);
+  if (!DeviceOrErr)
+    return DeviceOrErr.takeError();
+  RPCHandle = *DeviceOrErr;
+  DP("Running an RPC server on device %d\n", getDeviceId());
   return Plugin::success();
 }
 
@@ -1051,6 +1122,9 @@ Error GenericPluginTy::init() {
   GlobalHandler = Plugin::createGlobalHandler();
   assert(GlobalHandler && "Invalid global handler");
 
+  RPCServer = new RPCServerTy(NumDevices);
+  assert(RPCServer && "Invalid RPC server");
+
   return Plugin::success();
 }
 
@@ -1067,6 +1141,9 @@ Error GenericPluginTy::deinit() {
     }
     assert(!Devices[DeviceId] && "Device was not deinitialized");
   }
+
+  if (RPCServer)
+    delete RPCServer;
 
   // Perform last deinitializations on the plugin.
   return deinitImpl();
@@ -1100,6 +1177,14 @@ Error GenericPluginTy::deinitDevice(int32_t DeviceId) {
   Devices[DeviceId] = nullptr;
 
   return Plugin::success();
+}
+
+const bool llvm::omp::target::plugin::libomptargetSupportsRPC() {
+#ifdef LIBOMPTARGET_RPC_SUPPORT
+  return true;
+#else
+  return false;
+#endif
 }
 
 /// Exposed library API function, basically wrappers around the GenericDeviceTy

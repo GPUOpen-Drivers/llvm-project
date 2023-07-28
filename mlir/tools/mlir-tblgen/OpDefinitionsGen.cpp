@@ -1103,16 +1103,31 @@ void OpEmitter::genPropertiesSupport() {
                   "getDiag"))
           ->body();
 
+  auto &readPropertiesMethod =
+      opClass
+          .addStaticMethod(
+              "::mlir::LogicalResult", "readProperties",
+              MethodParameter("::mlir::DialectBytecodeReader &", "reader"),
+              MethodParameter("::mlir::OperationState &", "state"))
+          ->body();
+
+  auto &writePropertiesMethod =
+      opClass
+          .addMethod(
+              "void", "writeProperties",
+              MethodParameter("::mlir::DialectBytecodeWriter &", "writer"))
+          ->body();
+
   opClass.declare<UsingDeclaration>("Properties", "FoldAdaptor::Properties");
 
   // Convert the property to the attribute form.
 
   setPropMethod << R"decl(
-  ::mlir::DictionaryAttr dict = dyn_cast<::mlir::DictionaryAttr>(attr);
+  ::mlir::DictionaryAttr dict = ::llvm::dyn_cast<::mlir::DictionaryAttr>(attr);
   if (!dict) {
     if (diag)
       *diag << "expected DictionaryAttr to set properties";
-    return failure();
+    return ::mlir::failure();
   }
     )decl";
   // TODO: properties might be optional as well.
@@ -1127,9 +1142,10 @@ void OpEmitter::genPropertiesSupport() {
         if (diag)
           *diag << "expected key entry for {1} in DictionaryAttr to set "
                    "Properties.";
-        return failure();
+        return ::mlir::failure();
       }
-      if (failed(setFromAttr(prop.{1}, attr, diag))) return ::mlir::failure();
+      if (::mlir::failed(setFromAttr(prop.{1}, attr, diag)))
+        return ::mlir::failure();
     }
 )decl";
   for (const auto &attrOrProp : attrOrProperties) {
@@ -1156,15 +1172,15 @@ void OpEmitter::genPropertiesSupport() {
         if (diag)
           *diag << "expected key entry for {0} in DictionaryAttr to set "
                    "Properties.";
-        return failure();
+        return ::mlir::failure();
       }
-      auto convertedAttr = dyn_cast<std::remove_reference_t<decltype(propStorage)>>(attr);
+      auto convertedAttr = ::llvm::dyn_cast<std::remove_reference_t<decltype(propStorage)>>(attr);
       if (convertedAttr) {{
         propStorage = convertedAttr;
       } else {{
         if (diag)
           *diag << "Invalid attribute `{0}` in property conversion: " << attr;
-        return failure();
+        return ::mlir::failure();
       }
     }
   }
@@ -1304,6 +1320,66 @@ void OpEmitter::genPropertiesSupport() {
     }
   }
   verifyInherentAttrsMethod << "    return ::mlir::success();";
+
+  // Populate bytecode serialization logic.
+  readPropertiesMethod
+      << "  auto &prop = state.getOrAddProperties<Properties>(); (void)prop;";
+  writePropertiesMethod << "  auto &prop = getProperties(); (void)prop;\n";
+  for (const auto &attrOrProp : attrOrProperties) {
+    if (const auto *namedProperty =
+            attrOrProp.dyn_cast<const NamedProperty *>()) {
+      StringRef name = namedProperty->name;
+      FmtContext fctx;
+      fctx.addSubst("_reader", "reader")
+          .addSubst("_writer", "writer")
+          .addSubst("_storage", propertyStorage);
+      readPropertiesMethod << formatv(
+          R"(
+  {{
+    auto &propStorage = prop.{0};
+    auto readProp = [&]() {
+      {1};
+      return ::mlir::success();
+    };
+    if (::mlir::failed(readProp()))
+      return ::mlir::failure();
+  }
+)",
+          name,
+          tgfmt(namedProperty->prop.getReadFromMlirBytecodeCall(), &fctx));
+      writePropertiesMethod << formatv(
+          R"(
+  {{
+    auto &propStorage = prop.{0};
+    {1};
+  }
+)",
+          name, tgfmt(namedProperty->prop.getWriteToMlirBytecodeCall(), &fctx));
+      continue;
+    }
+    const auto *namedAttr = attrOrProp.dyn_cast<const AttributeMetadata *>();
+    StringRef name = namedAttr->attrName;
+    if (namedAttr->isRequired) {
+      readPropertiesMethod << formatv(R"(
+  if (::mlir::failed(reader.readAttribute(prop.{0})))
+    return ::mlir::failure();
+)",
+                                      name);
+      writePropertiesMethod
+          << formatv("  writer.writeAttribute(prop.{0});\n", name);
+    } else {
+      readPropertiesMethod << formatv(R"(
+  if (::mlir::failed(reader.readOptionalAttribute(prop.{0})))
+    return ::mlir::failure();
+)",
+                                      name);
+      writePropertiesMethod << formatv(R"(
+  writer.writeOptionalAttribute(prop.{0});
+)",
+                                       name);
+    }
+  }
+  readPropertiesMethod << "  return ::mlir::success();";
 }
 
 void OpEmitter::genAttrGetters() {
@@ -3302,6 +3378,9 @@ void OpEmitter::genTraits() {
   // OpInvariants wrapps the verifyInvariants which needs to be run before
   // native/interface traits and after all the traits with `StructuralOpTrait`.
   opClass.addTrait("::mlir::OpTrait::OpInvariants");
+
+  if (emitHelper.hasProperties())
+    opClass.addTrait("::mlir::BytecodeOpInterface::Trait");
 
   // Add the native and interface traits.
   for (const auto &trait : op.getTraits()) {

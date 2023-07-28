@@ -17,6 +17,7 @@ class ValueAPITestCase(TestBase):
         # Find the line number to of function 'c'.
         self.line = line_number("main.c", "// Break at this line")
 
+    @expectedFailureAll(oslist=["windows"], bugnumber="llvm.org/pr24772")
     def test(self):
         """Exercise some SBValue APIs."""
         d = {"EXE": self.exe_name}
@@ -144,6 +145,19 @@ class ValueAPITestCase(TestBase):
         )
         self.assertTrue(val_s.GetChildMemberWithName("a").AddressOf(), VALID_VARIABLE)
         self.assertTrue(val_a.Cast(val_i.GetType()).AddressOf(), VALID_VARIABLE)
+
+        # Test some other cases of the Cast API.  We allow casts from one struct type
+        # to another, which is a little weird, but we don't support casting from a
+        # smaller type to a larger as we often wouldn't know how to get the extra data:
+        val_f = target.EvaluateExpression("f")
+        bad_cast = val_s.Cast(val_f.GetType())
+        self.assertFailure(bad_cast.GetError(),
+                           "Can only cast to a type that is equal to or smaller than the orignal type.")
+        weird_cast = val_f.Cast(val_s.GetType())
+        self.assertSuccess(weird_cast.GetError(),
+                        "Can cast from a larger to a smaller")
+        self.assertEqual(weird_cast.GetChildMemberWithName("a").GetValueAsSigned(0), 33,
+                         "Got the right value")
 
         # Check that lldb.value implements truth testing.
         self.assertFalse(lldb.value(frame0.FindVariable("bogus")))
