@@ -845,6 +845,9 @@ Expected<SimplifyCFGOptions> parseSimplifyCFGOptions(StringRef Params) {
 
 Expected<InstCombineOptions> parseInstCombineOptions(StringRef Params) {
   InstCombineOptions Result;
+  // When specifying "instcombine" in -passes enable fix-point verification by
+  // default, as this is what most tests should use.
+  Result.setVerifyFixpoint(true);
   while (!Params.empty()) {
     StringRef ParamName;
     std::tie(ParamName, Params) = Params.split(';');
@@ -852,6 +855,8 @@ Expected<InstCombineOptions> parseInstCombineOptions(StringRef Params) {
     bool Enable = !ParamName.consume_front("no-");
     if (ParamName == "use-loop-info") {
       Result.setUseLoopInfo(Enable);
+    } else if (ParamName == "verify-fixpoint") {
+      Result.setVerifyFixpoint(Enable);
     } else if (Enable && ParamName.consume_front("max-iterations=")) {
       APInt MaxIterations;
       if (ParamName.getAsInteger(0, MaxIterations))
@@ -1069,6 +1074,23 @@ parseFunctionSimplificationPipelineOptions(StringRef Params) {
 Expected<bool> parseMemorySSAPrinterPassOptions(StringRef Params) {
   return parseSinglePassOption(Params, "no-ensure-optimized-uses",
                                "MemorySSAPrinterPass");
+}
+
+Expected<std::string> parseMemProfUsePassOptions(StringRef Params) {
+  std::string Result;
+  while (!Params.empty()) {
+    StringRef ParamName;
+    std::tie(ParamName, Params) = Params.split(';');
+
+    if (ParamName.consume_front("profile-filename=")) {
+      Result = ParamName.str();
+    } else {
+      return make_error<StringError>(
+          formatv("invalid MemProfUse pass parameter '{0}' ", ParamName).str(),
+          inconvertibleErrorCode());
+    }
+  }
+  return Result;
 }
 
 } // namespace

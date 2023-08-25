@@ -1751,27 +1751,22 @@ example:
     computing edge weights, basic blocks post-dominated by a cold
     function call are also considered to be cold; and, thus, given low
     weight.
+
+.. _attr_convergent:
+
 ``convergent``
-    In some parallel execution models, there exist operations that cannot be
-    made control-dependent on any additional values.  We call such operations
-    ``convergent``, and mark them with this attribute.
+    This attribute indicates that this function is convergent.
+    When it appears on a call/invoke, the convergent attribute
+    indicates that we should treat the call as though we’re calling a
+    convergent function. This is particularly useful on indirect
+    calls; without this we may treat such calls as though the target
+    is non-convergent.
 
-    The ``convergent`` attribute may appear on functions or call/invoke
-    instructions.  When it appears on a function, it indicates that calls to
-    this function should not be made control-dependent on additional values.
-    For example, the intrinsic ``llvm.nvvm.barrier0`` is ``convergent``, so
-    calls to this intrinsic cannot be made control-dependent on additional
-    values.
+    See :doc:`ConvergentOperations` for further details.
 
-    When it appears on a call/invoke, the ``convergent`` attribute indicates
-    that we should treat the call as though we're calling a convergent
-    function.  This is particularly useful on indirect calls; without this we
-    may treat such calls as though the target is non-convergent.
-
-    The optimizer may remove the ``convergent`` attribute on functions when it
-    can prove that the function does not execute any convergent operations.
-    Similarly, the optimizer may remove ``convergent`` on calls/invokes when it
-    can prove that the call/invoke cannot call a convergent function.
+    It is an error to call :ref:`llvm.experimental.convergence.entry
+    <llvm.experimental.convergence.entry>` from a function that
+    does not have this attribute.
 ``disable_sanitizer_instrumentation``
     When instrumenting code with sanitizers, it can be important to skip certain
     functions to ensure no instrumentation is applied to them.
@@ -1999,10 +1994,14 @@ example:
     (synchronize) with another thread through memory or other well-defined means.
     Synchronization is considered possible in the presence of `atomic` accesses
     that enforce an order, thus not "unordered" and "monotonic", `volatile` accesses,
-    as well as `convergent` function calls. Note that through `convergent` function calls
-    non-memory communication, e.g., cross-lane operations, are possible and are also
-    considered synchronization. However `convergent` does not contradict `nosync`.
-    If an annotated function does ever synchronize with another thread,
+    as well as `convergent` function calls.
+
+    Note that `convergent` operations can involve communication that is
+    considered to be not through memory and does not necessarily imply an
+    ordering between threads for the purposes of the memory model. Therefore,
+    an operation can be both `convergent` and `nosync`.
+
+    If a `nosync` function does ever synchronize with another thread,
     the behavior is undefined.
 ``nounwind``
     This function attribute indicates that the function never raises an
@@ -2332,11 +2331,12 @@ example:
     than `UINT_MAX`.  It's unspecified which threshold will be used when
     duplicate definitions are linked together with differing values.
 ``vscale_range(<min>[, <max>])``
-    This attribute indicates the minimum and maximum vscale value for the given
-    function. The min must be greater than 0. A maximum value of 0 means
-    unbounded. If the optional max value is omitted then max is set to the
-    value of min. If the attribute is not present, no assumptions are made
-    about the range of vscale.
+    This function attribute indicates `vscale` is a power-of-two within a
+    specified range. `min` must be a power-of-two that is greater than 0. When
+    specified, `max` must be a power-of-two greater-than-or-equal to `min` or 0
+    to signify an unbounded maximum. The syntax `vscale_range(<val>)` can be
+    used to set both `min` and `max` to the same value. Functions that don't
+    include this attribute make no assumptions about the value of `vscale`.
 ``"nooutline"``
     This attribute indicates that outlining passes should not modify the
     function.
@@ -2782,6 +2782,15 @@ bundle attribute. For example:
 
 Clang emits KCFI operand bundles and the necessary metadata with
 ``-fsanitize=kcfi``.
+
+.. _convergencectrl:
+
+Convergence Control Operand Bundles
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A "convergencectrl" operand bundle is only valid on a ``convergent`` operation.
+When present, the operand bundle must contain exactly one value of token type.
+See the :doc:`ConvergentOperations` document for details.
 
 .. _moduleasm:
 
@@ -3848,8 +3857,8 @@ The same example for little endian:
 
       ; In memory the content will be (8-bit addressing):
       ;
-      ;    [%ptr + 0]: 01010011  (0x53)
-      ;    [%ptr + 1]: 00100001  (0x21)
+      ;    [%ptr + 0]: 00100001  (0x21)
+      ;    [%ptr + 1]: 01010011  (0x53)
 
 When ``<N*M>`` isn't evenly divisible by the byte size the exact memory layout
 is unspecified (just like it is for an integral type of the same size). This
@@ -18649,6 +18658,13 @@ Example:
       %b = call i8 @llvm.fptosi.sat.i8.f32(float -130.8)             ; yields i8: -128
       %c = call i8 @llvm.fptosi.sat.i8.f32(float 999.0)              ; yields i8:  127
       %d = call i8 @llvm.fptosi.sat.i8.f32(float 0xFFF8000000000000) ; yields i8:    0
+
+Convergence Intrinsics
+----------------------
+
+The LLVM convergence intrinsics for controlling the semantics of ``convergent``
+operations, which all start with the ``llvm.experimental.convergence.``
+prefix, are described in the :doc:`ConvergentOperations` document.
 
 .. _dbg_intrinsics:
 

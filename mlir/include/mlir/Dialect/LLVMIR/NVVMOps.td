@@ -14,6 +14,7 @@
 #define NVVMIR_OPS
 
 include "mlir/IR/EnumAttr.td"
+include "mlir/Dialect/GPU/IR/CompilationAttrInterfaces.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
@@ -121,7 +122,7 @@ def BasicPtxBuilderOpInterface : OpInterface<"BasicPtxBuilderInterface"> {
       Results<(outs LLVM_Type:$res)>, Arguments<(ins LLVM_i64ptr_any:$addr, I32:$txcount)> {
       ...
       let extraClassDefinition = [{
-        const char* $cppClass::getPtx() { return \"mbarrier.arrive.expect_tx.b64 %0, [%1], %2;\"; }
+        std::string $cppClass::getPtx() { return std::string(\"mbarrier.arrive.expect_tx.b64 %0, [%1], %2;\"); }
       }\];
     }
     ```
@@ -160,7 +161,7 @@ def BasicPtxBuilderOpInterface : OpInterface<"BasicPtxBuilderInterface"> {
       >,
     InterfaceMethod<
         /*desc=*/[{ Returns PTX code. }],
-        /*retType=*/"const char*",
+        /*retType=*/"std::string",
         /*methodName=*/"getPtx"
       >,
     InterfaceMethod<
@@ -372,74 +373,81 @@ def NVVM_MBarrierArriveNocompleteSharedOp : NVVM_Op<"mbarrier.arrive.nocomplete.
 }
 
 def NVVM_MBarrierArriveExpectTxOp : NVVM_Op<"mbarrier.arrive.expect_tx",
-                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,
-  Results<(outs LLVM_Type:$res)>,
+                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,  
   Arguments<(ins LLVM_i64ptr_any:$addr, I32:$txcount)> {
-  let assemblyFormat = "$addr `,` $txcount attr-dict `:` type(operands) `->` type($res)";
+  let assemblyFormat = "$addr `,` $txcount attr-dict `:` type(operands)";
   let extraClassDefinition = [{
-    const char* $cppClass::getPtx() { return "mbarrier.arrive.expect_tx.b64 %0, [%1], %2;"; }
+    std::string $cppClass::getPtx() { return std::string("mbarrier.arrive.expect_tx.b64 _, [%0], %1;"); }
   }];
 }
 
 def NVVM_MBarrierArriveExpectTxSharedOp : NVVM_Op<"mbarrier.arrive.expect_tx.shared", 
-                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,
-  Results<(outs LLVM_Type:$res)>,
+                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,  
   Arguments<(ins LLVM_i64ptr_shared:$addr, I32:$txcount)> {    
-  let assemblyFormat = "$addr `,` $txcount attr-dict `:` type(operands) `->` type($res)";
+  let assemblyFormat = "$addr `,` $txcount attr-dict `:` type(operands)";
   let extraClassDefinition = [{
-    const char* $cppClass::getPtx() { return "mbarrier.arrive.expect_tx.shared.b64 %0, [%1], %2;"; }
+    std::string $cppClass::getPtx() { return std::string("mbarrier.arrive.expect_tx.shared.b64 _, [%0], %1;"); }
   }];
 }
 
 def NVVM_MBarrierTryWaitParityOp : NVVM_Op<"mbarrier.try_wait.parity", 
-                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,
-  Results<(outs LLVM_Type:$res)>,
-  Arguments<(ins LLVM_i64ptr_any:$addr, LLVM_Type:$token)> {
-  let assemblyFormat = "$addr `,` $token attr-dict `:` type(operands) `->` type($res)";
+                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,  
+  Arguments<(ins LLVM_i64ptr_any:$addr, I32:$phase, I32:$ticks)> {  
+  let assemblyFormat = "$addr `,` $phase `,` $ticks attr-dict `:` type(operands)";
   let extraClassDefinition = [{
-    const char* $cppClass::getPtx() {
-      return "{\n\t"
-              ".reg .pred P1; \n\t"
-              "mbarrier.try_wait.parity.b64 P1, [%1], %2; \n\t"
-              "selp.b32 %0, 1, 0, P1; \n\t"
-              "}"; 
+    std::string $cppClass::getPtx() {
+      return std::string(
+        "{\n\t"
+        ".reg .pred       P1; \n\t"
+        "LAB_WAIT: \n\t"
+        "mbarrier.try_wait.parity.b64 P1, [%0], %1, %2; \n\t"
+        "@P1 bra.uni DONE; \n\t"
+        "bra.uni     LAB_WAIT; \n\t"
+        "DONE: \n\t"
+        "}"
+      ); 
     }
   }];
 }
 
 def NVVM_MBarrierTryWaitParitySharedOp : NVVM_Op<"mbarrier.try_wait.parity.shared", 
-                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,
-  Results<(outs LLVM_Type:$res)>,
-  Arguments<(ins LLVM_i64ptr_shared:$addr, LLVM_Type:$token)> {  
-  let assemblyFormat = "$addr `,` $token attr-dict `:` type(operands) `->` type($res)";
+                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,  
+  Arguments<(ins LLVM_i64ptr_shared:$addr, I32:$phase, I32:$ticks)> {  
+  let assemblyFormat = "$addr `,` $phase `,` $ticks attr-dict `:` type(operands)";
   let extraClassDefinition = [{
-    const char* $cppClass::getPtx() {
-      return "{\n\t"
-              ".reg .pred P1; \n\t"
-              "mbarrier.try_wait.parity.shared.b64 P1, [%1], %2; \n\t"
-              "selp.b32 %0, 1, 0, P1; \n\t"
-              "}"; 
+    std::string $cppClass::getPtx() {
+      return std::string(
+        "{\n\t"
+        ".reg .pred       P1; \n\t"
+        "LAB_WAIT: \n\t"
+        "mbarrier.try_wait.parity.shared.b64 P1, [%0], %1, %2; \n\t"
+        "@P1 bra.uni DONE; \n\t"
+        "bra.uni     LAB_WAIT; \n\t"
+        "DONE: \n\t"
+        "}"
+      ); 
     }
   }];
 }
 
 def NVVM_MBarrierTestWaitOp : NVVM_Op<"mbarrier.test.wait">,
   Results<(outs LLVM_Type:$res)>,
-  Arguments<(ins LLVM_i64ptr_any:$addr, LLVM_Type:$token)> {
+  Arguments<(ins LLVM_i64ptr_any:$addr, LLVM_Type:$state)> {
   string llvmBuilder = [{
-      $res = createIntrinsicCall(builder, llvm::Intrinsic::nvvm_mbarrier_test_wait, {$addr, $token});
+      $res = createIntrinsicCall(builder, llvm::Intrinsic::nvvm_mbarrier_test_wait, {$addr, $state});
   }];
-  let assemblyFormat = "$addr `,` $token attr-dict `:` type(operands) `->` type($res)";
+  let assemblyFormat = "$addr `,` $state attr-dict `:` type(operands) `->` type($res)";
 }
 
 def NVVM_MBarrierTestWaitSharedOp : NVVM_Op<"mbarrier.test.wait.shared">,
   Results<(outs LLVM_Type:$res)>,
-  Arguments<(ins LLVM_i64ptr_shared:$addr, LLVM_Type:$token)> {
+  Arguments<(ins LLVM_i64ptr_shared:$addr, LLVM_Type:$state)> {
   string llvmBuilder = [{
-      $res = createIntrinsicCall(builder, llvm::Intrinsic::nvvm_mbarrier_test_wait_shared, {$addr, $token});
+      $res = createIntrinsicCall(builder, llvm::Intrinsic::nvvm_mbarrier_test_wait_shared, {$addr, $state});
   }];
-  let assemblyFormat = "$addr `,` $token attr-dict `:` type(operands) `->` type($res)";
+  let assemblyFormat = "$addr `,` $state attr-dict `:` type(operands) `->` type($res)";
 }
+
 //===----------------------------------------------------------------------===//
 // NVVM synchronization op definitions
 //===----------------------------------------------------------------------===//
@@ -566,11 +574,11 @@ def NVVM_CpAsyncOp : NVVM_Op<"cp.async.shared.global", [DeclareOpInterfaceMethod
     }        
   }];
   let extraClassDefinition = [{        
-    const char* $cppClass::getPtx() { 
+    std::string $cppClass::getPtx() { 
       if(getModifier() == NVVM::LoadCacheModifierKind::CG)
-        return "cp.async.cg.shared.global [%0], [%1], %2, %3;\n"; 
+        return std::string("cp.async.cg.shared.global [%0], [%1], %2, %3;\n");
       if(getModifier() == NVVM::LoadCacheModifierKind::CA)
-        return "cp.async.ca.shared.global [%0], [%1], %2, %3;\n";        
+        return std::string("cp.async.ca.shared.global [%0], [%1], %2, %3;\n");
       llvm_unreachable("unsupported cache modifier");      
     }
   }];
@@ -1389,6 +1397,148 @@ def NVVM_MmaOp : NVVM_Op<"mma.sync", [AttrSizedOperandSegments]> {
 
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// NVVM TMA Ops
+//===----------------------------------------------------------------------===//
+
+def NVVM_CpAsyncBulkTensorGlobalToSharedClusterOp : NVVM_Op<"cp.async.bulk.tensor.shared.cluster.global", [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,
+  Arguments<(ins  LLVM_i64ptr_shared:$dstMem,
+                  LLVM_i64ptr_any:$tmaDescriptor,
+                  LLVM_i64ptr_shared:$mbar,
+                  Variadic<I32>:$coordinates)> {
+  let assemblyFormat = "$dstMem `,` $tmaDescriptor `,` $mbar `,` `box` `[`$coordinates `]` attr-dict  `:` type(operands)";
+  let extraClassDefinition = [{
+    std::string $cppClass::getPtx() {
+      int dim = getCoordinates().size();
+      std::string ptx = "cp.async.bulk.tensor.";
+      ptx += std::to_string(dim) + "d.";
+      ptx += "shared::cluster.global.mbarrier::complete_tx::bytes";
+      if(dim == 1) ptx += " [%0], [%1, {%3} ], [%2];";
+      if(dim == 2) ptx += " [%0], [%1, {%3, %4} ], [%2];";
+      if(dim == 3) ptx += " [%0], [%1, {%3, %4, %5} ], [%2];";
+      if(dim == 4) ptx += " [%0], [%1, {%3, %4, %5, %6} ], [%2];";
+      if(dim == 5) ptx += " [%0], [%1, {%3, %4, %5, %6, %7} ], [%2];";
+      return ptx;
+    }
+  }];
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// NVVM Wgmma Ops
+//===----------------------------------------------------------------------===//
+
+def NVVM_WgmmaFenceAlignedOp : NVVM_Op<"wgmma.fence.aligned", 
+                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]> {
+  let arguments = (ins);
+  let description = [{
+    Enforce an ordering of register accesses between warpgroup level matrix 
+    multiplication and other operations. 
+    See for more information:
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-instructions-wgmma-fence
+  }];
+  let assemblyFormat = "attr-dict";
+  let extraClassDefinition = [{
+    std::string $cppClass::getPtx() { return std::string("wgmma.fence.sync.aligned;"); }
+  }];
+}
+
+def NVVM_WgmmaGroupSyncAlignedOp : NVVM_Op<"wgmma.commit.group.sync.aligned", 
+                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>,
+  Arguments<(ins )> {
+  let assemblyFormat = "attr-dict";
+  let description = [{
+    Commits all prior uncommitted warpgroup level matrix multiplication operations.
+    See for more information:
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-instructions-wgmma-commit-group
+  }];
+  let extraClassDefinition = [{
+    std::string $cppClass::getPtx() { return std::string("wgmma.commit_group.sync.aligned;"); }
+  }];
+}
+
+def NVVM_WgmmaWaitGroupSyncOp : NVVM_Op<"wgmma.wait.group.sync.aligned", 
+                    [DeclareOpInterfaceMethods<BasicPtxBuilderOpInterface>]>{
+  let arguments = (ins I32Attr:$group);
+  let assemblyFormat = "attr-dict $group";
+  let description = [{
+    Signal the completion of a preceding warpgroup operation.
+    See for more information:
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-instructions-wgmma-wait-group
+  }];
+  let extraClassDefinition = [{
+    std::string $cppClass::getPtx() { return std::string("wgmma.wait_group.sync.aligned %0;"); }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// NVVM target attribute.
+//===----------------------------------------------------------------------===//
+
+def NVVM_TargettAttr : NVVM_Attr<"NVVMTarget", "target"> {
+  let description = [{
+    GPU target attribute for controlling compilation of NVIDIA targets. All
+    parameters decay into default values if not present.
+
+    Examples:
+
+    1. Target with default values.
+    ```
+      gpu.module @mymodule [#nvvm.target] attributes {...} {
+        ...
+      }
+    ```
+
+    2. Target with `sm_90` chip and fast math.
+    ```
+      gpu.module @mymodule [#nvvm.target<chip = "sm_90", flags = {fast}>] {
+        ...
+      }
+    ```
+  }];
+  let parameters = (ins
+    DefaultValuedParameter<"int", "2", "Optimization level to apply.">:$O,
+    StringRefParameter<"Target triple.", "\"nvptx64-nvidia-cuda\"">:$triple,
+    StringRefParameter<"Target chip.", "\"sm_50\"">:$chip,
+    StringRefParameter<"Target chip features.", "\"+ptx60\"">:$features,
+    OptionalParameter<"DictionaryAttr", "Target specific flags.">:$flags,
+    OptionalParameter<"ArrayAttr", "Files to link to the LLVM module.">:$link
+  );
+  let assemblyFormat = [{
+    (`<` struct($O, $triple, $chip, $features, $flags, $link)^ `>`)?
+  }];
+  let builders = [
+    AttrBuilder<(ins CArg<"int", "2">:$optLevel,
+                     CArg<"StringRef", "\"nvptx64-nvidia-cuda\"">:$triple,
+                     CArg<"StringRef", "\"sm_50\"">:$chip,
+                     CArg<"StringRef", "\"+ptx60\"">:$features,
+                     CArg<"DictionaryAttr", "nullptr">:$targetFlags,
+                     CArg<"ArrayAttr", "nullptr">:$linkFiles), [{
+      return Base::get($_ctxt, optLevel, triple, chip, features, targetFlags, linkFiles);
+    }]>
+  ];
+  let skipDefaultBuilders = 1;
+  let genVerifyDecl = 1;
+  let extraClassDeclaration = [{
+    bool hasFlag(StringRef flag) const;
+    bool hasFastMath() const;
+    bool hasFtz() const;
+  }];
+  let extraClassDefinition = [{
+    bool $cppClass::hasFlag(StringRef flag) const {
+      if (DictionaryAttr flags = getFlags())
+        return flags.get(flag) != nullptr;
+      return false;
+    }
+    bool $cppClass::hasFastMath() const {
+      return hasFlag("fast");
+    }
+    bool $cppClass::hasFtz() const {
+      return hasFlag("ftz");
+    }
+  }];
 }
 
 #endif // NVVMIR_OPS

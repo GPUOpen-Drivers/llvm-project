@@ -16,6 +16,8 @@
 
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 
+#include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -24,6 +26,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Attributes.h"
@@ -32,6 +35,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/SourceMgr.h"
 #include <optional>
+#include <string>
 
 using namespace mlir;
 using namespace NVVM;
@@ -66,6 +70,12 @@ ParseResult VoteBallotOp::parse(OpAsmParser &parser, OperationState &result) {
 }
 
 void VoteBallotOp::print(OpAsmPrinter &p) { printNVVMIntrinsicOp(p, *this); }
+
+LogicalResult CpAsyncBulkTensorGlobalToSharedClusterOp::verify() {
+  if (getCoordinates().size() > 5)
+    return emitError("Maximum 5 coordinates and dimension is supported.");
+  return success();
+}
 
 LogicalResult CpAsyncOp::verify() {
   if (getModifier() != LoadCacheModifierKind::CG &&
@@ -713,6 +723,8 @@ void NVVMDialect::initialize() {
   // Support unknown operations because not all NVVM operations are
   // registered.
   allowUnknownOperations();
+  declarePromisedInterface<ConvertToLLVMPatternInterface>();
+  declarePromisedInterface<gpu::TargetAttrInterface>();
 }
 
 LogicalResult NVVMDialect::verifyOperationAttribute(Operation *op,
@@ -748,6 +760,35 @@ LogicalResult NVVMDialect::verifyOperationAttribute(Operation *op,
              << "'" << attrName << "' attribute must be integer constant";
   }
 
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// NVVM target attribute.
+//===----------------------------------------------------------------------===//
+LogicalResult
+NVVMTargetAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                       int optLevel, StringRef triple, StringRef chip,
+                       StringRef features, DictionaryAttr flags,
+                       ArrayAttr files) {
+  if (optLevel < 0 || optLevel > 3) {
+    emitError() << "The optimization level must be a number between 0 and 3.";
+    return failure();
+  }
+  if (triple.empty()) {
+    emitError() << "The target triple cannot be empty.";
+    return failure();
+  }
+  if (chip.empty()) {
+    emitError() << "The target chip cannot be empty.";
+    return failure();
+  }
+  if (files && !llvm::all_of(files, [](::mlir::Attribute attr) {
+        return attr && mlir::isa<StringAttr>(attr);
+      })) {
+    emitError() << "All the elements in the `link` array must be strings.";
+    return failure();
+  }
   return success();
 }
 

@@ -18,6 +18,7 @@
 #include "GCNSubtarget.h"
 #include "SIMachineFunctionInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -119,12 +120,13 @@ bool SIInstrInfo::isReallyTriviallyReMaterializable(
     // There is difference to generic method which does not allow
     // rematerialization if there are virtual register uses. We allow this,
     // therefore this method includes SOP instructions as well.
-    return !MI.hasImplicitDef() &&
-           MI.getNumImplicitOperands() == MI.getDesc().implicit_uses().size() &&
-           !MI.mayRaiseFPException();
+    if (!MI.hasImplicitDef() &&
+        MI.getNumImplicitOperands() == MI.getDesc().implicit_uses().size() &&
+        !MI.mayRaiseFPException())
+      return true;
   }
 
-  return false;
+  return TargetInstrInfo::isReallyTriviallyReMaterializable(MI);
 }
 
 bool SIInstrInfo::isIgnorableUse(const MachineOperand &MO) const {
@@ -3689,13 +3691,7 @@ bool SIInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
 }
 
 bool SIInstrInfo::isAlwaysGDS(uint16_t Opcode) const {
-  return Opcode == AMDGPU::DS_ORDERED_COUNT ||
-         Opcode == AMDGPU::DS_GWS_INIT ||
-         Opcode == AMDGPU::DS_GWS_SEMA_V ||
-         Opcode == AMDGPU::DS_GWS_SEMA_BR ||
-         Opcode == AMDGPU::DS_GWS_SEMA_P ||
-         Opcode == AMDGPU::DS_GWS_SEMA_RELEASE_ALL ||
-         Opcode == AMDGPU::DS_GWS_BARRIER;
+  return Opcode == AMDGPU::DS_ORDERED_COUNT || isGWS(Opcode);
 }
 
 bool SIInstrInfo::modifiesModeRegister(const MachineInstr &MI) {
@@ -8198,23 +8194,7 @@ SIInstrInfo::splitFlatOffset(int64_t COffsetVal, unsigned AddrSpace,
   return {ImmField, RemainderOffset};
 }
 
-// This must be kept in sync with the SIEncodingFamily class in SIInstrInfo.td
-// and the columns of the getMCOpcodeGen table.
-enum SIEncodingFamily {
-  SI = 0,
-  VI = 1,
-  SDWA = 2,
-  SDWA9 = 3,
-  GFX80 = 4,
-  GFX9 = 5,
-  GFX10 = 6,
-  SDWA10 = 7,
-  GFX90A = 8,
-  GFX940 = 9,
-  GFX11 = 10,
-};
-
-static SIEncodingFamily subtargetEncodingFamily(const GCNSubtarget &ST) {
+static unsigned subtargetEncodingFamily(const GCNSubtarget &ST) {
   switch (ST.getGeneration()) {
   default:
     break;
@@ -8253,7 +8233,7 @@ bool SIInstrInfo::isAsmOnlyOpcode(int MCOp) const {
 }
 
 int SIInstrInfo::pseudoToMCOpcode(int Opcode) const {
-  SIEncodingFamily Gen = subtargetEncodingFamily(ST);
+  unsigned Gen = subtargetEncodingFamily(ST);
 
   if ((get(Opcode).TSFlags & SIInstrFlags::renamedInGFX9) != 0 &&
     ST.getGeneration() == AMDGPUSubtarget::GFX9)
@@ -8577,9 +8557,8 @@ unsigned SIInstrInfo::getInstrLatency(const InstrItineraryData *ItinData,
 InstructionUniformity
 SIInstrInfo::getGenericInstructionUniformity(const MachineInstr &MI) const {
   unsigned opcode = MI.getOpcode();
-  if (opcode == AMDGPU::G_INTRINSIC ||
-      opcode == AMDGPU::G_INTRINSIC_W_SIDE_EFFECTS) {
-    auto IID = static_cast<Intrinsic::ID>(MI.getIntrinsicID());
+  if (auto *GI = dyn_cast<GIntrinsic>(&MI)) {
+    auto IID = GI->getIntrinsicID();
     if (AMDGPU::isIntrinsicSourceOfDivergence(IID))
       return InstructionUniformity::NeverUniform;
     if (AMDGPU::isIntrinsicAlwaysUniform(IID))

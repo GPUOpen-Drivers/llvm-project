@@ -210,3 +210,72 @@ module {
     }
   }
 }
+
+// -----
+
+// CHECK-LABEL: func @canonicalization_and_cse(
+//   CHECK-NOT:   memref.subview
+//   CHECK-NOT:   memref.copy
+func.func @canonicalization_and_cse(%m: memref<5xf32>) {
+  %c2 = arith.constant 2 : index
+  %s0 = memref.subview %m[1] [2] [1] : memref<5xf32> to memref<2xf32, strided<[1], offset: 1>>
+  %s1 = memref.subview %m[1] [%c2] [1] : memref<5xf32> to memref<?xf32, strided<[1], offset: 1>>
+  memref.copy %s0, %s1 : memref<2xf32, strided<[1], offset: 1>> to memref<?xf32, strided<[1], offset: 1>>
+  return
+}
+
+transform.sequence failures(propagate) {
+^bb1(%arg1: !transform.any_op):
+  %1 = transform.structured.match ops{["func.func"]} in %arg1 : (!transform.any_op) -> !transform.any_op
+  transform.apply_patterns to %1 {
+    transform.apply_patterns.canonicalization
+  } {apply_cse} : !transform.any_op
+}
+
+// -----
+
+// CHECK-LABEL: func @full_dialect_conversion
+//  CHECK-NEXT:   %[[m:.*]] = "test.new_op"() : () -> memref<5xf32>
+//  CHECK-NEXT:   %[[cast:.*]] = builtin.unrealized_conversion_cast %0 : memref<5xf32> to tensor<5xf32>
+//  CHECK-NEXT:   return %[[cast]]
+func.func @full_dialect_conversion() -> tensor<5xf32> {
+  %0 = "test.foo"() {replace_with_new_op = "test.bar"} : () -> (tensor<5xf32>)
+  return %0 : tensor<5xf32>
+}
+
+transform.sequence failures(propagate) {
+^bb1(%arg1: !transform.any_op):
+  %0 = transform.structured.match ops{["func.func"]} in %arg1 : (!transform.any_op) -> !transform.any_op
+  transform.apply_conversion_patterns to %0 {
+    transform.apply_conversion_patterns.transform.test_conversion_patterns
+  }, {
+    transform.apply_conversion_patterns.transform.test_type_converter
+  } {illegal_ops = ["test.foo"],
+     legal_ops = ["func.func", "func.return", "test.new_op"]}
+      : !transform.any_op
+}
+
+// -----
+
+transform.sequence failures(propagate) {
+^bb1(%arg1: !transform.any_op):
+  %0 = transform.structured.match ops{["func.func"]} in %arg1 : (!transform.any_op) -> !transform.any_op
+  // expected-error @below{{conversion target is not specified}}
+  transform.apply_conversion_patterns to %0 {
+    transform.apply_conversion_patterns.transform.test_conversion_patterns
+  }, {
+    transform.apply_conversion_patterns.transform.test_type_converter
+  } : !transform.any_op
+}
+
+// -----
+
+transform.sequence failures(propagate) {
+^bb1(%arg1: !transform.any_op):
+  %0 = transform.structured.match ops{["func.func"]} in %arg1 : (!transform.any_op) -> !transform.any_op
+  // expected-error @below{{pattern descriptor does not specify type converter and apply_conversion_patterns op has no default type converter}}
+  transform.apply_conversion_patterns to %0 {
+    // expected-note @below{{pattern descriptor op}}
+    transform.apply_conversion_patterns.transform.test_conversion_patterns
+  } {illegal_ops = ["test.foo"]} : !transform.any_op
+}

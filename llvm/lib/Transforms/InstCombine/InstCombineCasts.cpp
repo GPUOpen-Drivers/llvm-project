@@ -140,31 +140,6 @@ InstCombinerImpl::isEliminableCastPair(const CastInst *CI1,
       (Res == Instruction::PtrToInt && DstTy != SrcIntPtrTy))
     Res = 0;
 
-  // Don't combine a inttoptr followed by a bitcast to another pointer type if
-  // the intermediate pointer has multiple uses. Such combine is very unfriendly
-  // to later passes like ScalarEvolutionAnalysis and LoadStoreVectorizer. For
-  // example, this may change the IR from:
-  //
-  // %p1 = inttoptr %addr to i32*
-  // %i  = load i32, i32* %p1
-  // %p2 = bitcast i32* %p1 to float*
-  // %p3 = getelementptr float, float* %p2, i64 1
-  // %f  = load float, float* %p3
-  //
-  // into:
-  //
-  // %p1 = inttoptr %addr to i32*
-  // %p2 = inttoptr %addr to float*
-  // %i  = load i32, i32* %p1
-  // %p3 = getelementptr float, float* %p2, i64 1
-  // %f  = load float, float* %p3
-  //
-  // This causes above mentioned passes fail to reason that the two pointers
-  // are consecutive, thus fail to vectorize the two loads.
-  if (firstOp == Instruction::IntToPtr && Res == Instruction::IntToPtr &&
-      !CI1->hasOneUse())
-    Res = 0;
-
   return Instruction::CastOps(Res);
 }
 
@@ -760,13 +735,12 @@ Instruction *InstCombinerImpl::visitTrunc(TruncInst &Trunc) {
       Value *And = Builder.CreateAnd(X, MaskC);
       return new ICmpInst(ICmpInst::ICMP_NE, And, Zero);
     }
-    if (match(Src, m_OneUse(m_c_Or(m_LShr(m_Value(X), m_Constant(C)),
+    if (match(Src, m_OneUse(m_c_Or(m_LShr(m_Value(X), m_ImmConstant(C)),
                                    m_Deferred(X))))) {
       // trunc (or (lshr X, C), X) to i1 --> icmp ne (and X, C'), 0
       Constant *One = ConstantInt::get(SrcTy, APInt(SrcWidth, 1));
       Constant *MaskC = ConstantExpr::getShl(One, C);
-      MaskC = ConstantExpr::getOr(MaskC, One);
-      Value *And = Builder.CreateAnd(X, MaskC);
+      Value *And = Builder.CreateAnd(X, Builder.CreateOr(MaskC, One));
       return new ICmpInst(ICmpInst::ICMP_NE, And, Zero);
     }
   }

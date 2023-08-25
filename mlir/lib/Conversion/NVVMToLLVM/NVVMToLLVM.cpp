@@ -13,6 +13,7 @@
 
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 
+#include "mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -33,6 +34,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
+#include <regex>
 #include <string>
 
 #define DEBUG_TYPE "nvvm-to-llvm"
@@ -53,7 +55,7 @@ namespace {
 class PtxBuilder {
   Operation *op;
   PatternRewriter &rewriter;
-  const char *asmStr;
+  std::string asmStr;
   SmallVector<Value> asmVals;
   std::string asmConstraints;
   bool sideEffects;
@@ -85,9 +87,10 @@ class PtxBuilder {
   }
 
 public:
-  PtxBuilder(Operation *op, PatternRewriter &rewriter, const char *ptxAsm,
+  PtxBuilder(Operation *op, PatternRewriter &rewriter, std::string ptxAsm,
              bool sideEffects = false)
-      : op(op), rewriter(rewriter), asmStr(ptxAsm), sideEffects(sideEffects) {}
+      : op(op), rewriter(rewriter), asmStr(std::move(ptxAsm)),
+        sideEffects(sideEffects) {}
 
   void insertValue(Value v, PTXRegisterMod itype = PTXRegisterMod::Read) {
     llvm::raw_string_ostream ss(asmConstraints);
@@ -112,13 +115,17 @@ public:
                                 : LLVM::LLVMVoidType::get(op->getContext());
 
     // Remove the last comma from the constraints string.
-    if (asmConstraints[asmConstraints.size() - 1] == ',')
+    if (!asmConstraints.empty() &&
+        asmConstraints[asmConstraints.size() - 1] == ',')
       asmConstraints.pop_back();
+
+    // asm keywords expects %, but inline assembly uses $. Replace all % with $
+    std::replace(asmStr.begin(), asmStr.end(), '%', '$');
 
     return rewriter.create<LLVM::InlineAsmOp>(
         op->getLoc(), resultType,
         /*operands=*/asmVals,
-        /*asm_string=*/asmStr,
+        /*asm_string=*/llvm::StringRef(asmStr),
         /*constraints=*/asmConstraints.data(),
         /*has_side_effects=*/sideEffects,
         /*is_align_stack=*/false,
@@ -177,11 +184,36 @@ struct ConvertNVVMToLLVMPass
     ConversionTarget target(getContext());
     target.addLegalDialect<::mlir::LLVM::LLVMDialect>();
     RewritePatternSet pattern(&getContext());
-    pattern.add<PtxLowering>(pattern.getContext());
+    mlir::populateNVVMToLLVMConversionPatterns(pattern);
     if (failed(
             applyPartialConversion(getOperation(), target, std::move(pattern))))
       signalPassFailure();
   }
 };
 
+/// Implement the interface to convert NNVM to LLVM.
+struct NVVMToLLVMDialectInterface : public ConvertToLLVMPatternInterface {
+  using ConvertToLLVMPatternInterface::ConvertToLLVMPatternInterface;
+  void loadDependentDialects(MLIRContext *context) const final {
+    context->loadDialect<NVVMDialect>();
+  }
+
+  /// Hook for derived dialect interface to provide conversion patterns
+  /// and mark dialect legal for the conversion target.
+  void populateConvertToLLVMConversionPatterns(
+      ConversionTarget &target, RewritePatternSet &patterns) const final {
+    populateNVVMToLLVMConversionPatterns(patterns);
+  }
+};
+
 } // namespace
+
+void mlir::populateNVVMToLLVMConversionPatterns(RewritePatternSet &patterns) {
+  patterns.add<PtxLowering>(patterns.getContext());
+}
+
+void mlir::registerConvertNVVMToLLVMInterface(DialectRegistry &registry) {
+  registry.addExtension(+[](MLIRContext *ctx, NVVMDialect *dialect) {
+    dialect->addInterfaces<NVVMToLLVMDialectInterface>();
+  });
+}

@@ -588,12 +588,7 @@ void WaitcntBrackets::updateByEvent(const SIInstrInfo *TII,
                                                  AMDGPU::OpName::data1),
                       CurrScore);
         }
-      } else if (SIInstrInfo::isAtomicRet(Inst) &&
-                 Inst.getOpcode() != AMDGPU::DS_GWS_INIT &&
-                 Inst.getOpcode() != AMDGPU::DS_GWS_SEMA_V &&
-                 Inst.getOpcode() != AMDGPU::DS_GWS_SEMA_BR &&
-                 Inst.getOpcode() != AMDGPU::DS_GWS_SEMA_P &&
-                 Inst.getOpcode() != AMDGPU::DS_GWS_BARRIER &&
+      } else if (SIInstrInfo::isAtomicRet(Inst) && !SIInstrInfo::isGWS(Inst) &&
                  Inst.getOpcode() != AMDGPU::DS_APPEND &&
                  Inst.getOpcode() != AMDGPU::DS_CONSUME &&
                  Inst.getOpcode() != AMDGPU::DS_ORDERED_COUNT) {
@@ -1967,6 +1962,10 @@ bool SIInsertWaitcnts::runOnMachineFunction(MachineFunction &MF) {
   // Insert DEALLOC_VGPR messages before previously identified S_ENDPGM
   // instructions.
   for (MachineInstr *MI : ReleaseVGPRInsts) {
+    if (ST->requiresNopBeforeDeallocVGPRs()) {
+      BuildMI(*MI->getParent(), MI, DebugLoc(), TII->get(AMDGPU::S_NOP))
+          .addImm(0);
+    }
     BuildMI(*MI->getParent(), MI, DebugLoc(), TII->get(AMDGPU::S_SENDMSG))
         .addImm(AMDGPU::SendMsg::ID_DEALLOC_VGPRS_GFX11Plus);
     Modified = true;

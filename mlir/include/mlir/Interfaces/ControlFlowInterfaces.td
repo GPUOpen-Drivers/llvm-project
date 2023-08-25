@@ -154,8 +154,9 @@ def RegionBranchOpInterface : OpInterface<"RegionBranchOpInterface"> {
         either correspond to a constant value for each operand of this
         operation, or null if that operand is not a constant. If `index` is
         valid, `operands` corresponds to the entry values of the region at
-        `index`. Only a region, i.e. a valid `index`, may use the parent
-        operation as a successor. This method allows for describing which
+        `index`. The parent operation, i.e. a null `index`, may specify itself
+        as successor, which indicates that the control flow may not enter any
+        region at all. This method allows for describing which
         regions may be executed when entering an operation, and which regions
         are executed after having executed another region of the parent op. The
         successor region must be non-empty.
@@ -271,6 +272,19 @@ def RegionBranchTerminatorOpInterface :
 //===----------------------------------------------------------------------===//
 
 // Op is "return-like".
-def ReturnLike : NativeOpTrait<"ReturnLike">;
+def ReturnLike : TraitList<[
+    DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>,
+    NativeOpTrait<
+        /*name=*/"ReturnLike",
+        /*traits=*/[],
+        /*extraOpDeclaration=*/"",
+        /*extraOpDefinition=*/[{
+          ::mlir::MutableOperandRange $cppClass::getMutableSuccessorOperands(
+            ::std::optional<unsigned> index) {
+            return ::mlir::MutableOperandRange(*this);
+          }
+        }]
+    >
+]>;
 
 #endif // MLIR_INTERFACES_CONTROLFLOWINTERFACES

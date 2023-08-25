@@ -16,6 +16,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
 namespace transform {
@@ -438,7 +439,7 @@ private:
       }
     }
 #endif // NDEBUG
-    return *it->second.get();
+    return *it->second;
   }
 
   /// Returns the mappings frame for the region in which the operation resides.
@@ -465,7 +466,7 @@ private:
       }
     }
 #endif // NDEBUG
-    return *it->second.get();
+    return *it->second;
   }
 
   /// Updates the state to include the associations between op results and the

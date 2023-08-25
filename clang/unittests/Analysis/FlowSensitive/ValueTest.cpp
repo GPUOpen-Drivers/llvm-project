@@ -19,16 +19,14 @@ using namespace clang;
 using namespace dataflow;
 
 TEST(ValueTest, EquivalenceReflexive) {
-  StructValue V;
+  IntegerValue V;
   EXPECT_TRUE(areEquivalentValues(V, V));
 }
 
-TEST(ValueTest, AliasedReferencesEquivalent) {
-  auto L = ScalarStorageLocation(QualType());
-  ReferenceValue V1(L);
-  ReferenceValue V2(L);
-  EXPECT_TRUE(areEquivalentValues(V1, V2));
-  EXPECT_TRUE(areEquivalentValues(V2, V1));
+TEST(ValueTest, DifferentIntegerValuesNotEquivalent) {
+  IntegerValue V1;
+  IntegerValue V2;
+  EXPECT_FALSE(areEquivalentValues(V1, V2));
 }
 
 TEST(ValueTest, AliasedPointersEquivalent) {
@@ -62,17 +60,8 @@ TEST(ValueTest, EquivalentValuesWithDifferentPropsEquivalent) {
 TEST(ValueTest, DifferentKindsNotEquivalent) {
   Arena A;
   auto L = ScalarStorageLocation(QualType());
-  ReferenceValue V1(L);
+  PointerValue V1(L);
   TopBoolValue V2(A.makeAtomRef(Atom(0)));
-  EXPECT_FALSE(areEquivalentValues(V1, V2));
-  EXPECT_FALSE(areEquivalentValues(V2, V1));
-}
-
-TEST(ValueTest, NotAliasedReferencesNotEquivalent) {
-  auto L1 = ScalarStorageLocation(QualType());
-  ReferenceValue V1(L1);
-  auto L2 = ScalarStorageLocation(QualType());
-  ReferenceValue V2(L2);
   EXPECT_FALSE(areEquivalentValues(V1, V2));
   EXPECT_FALSE(areEquivalentValues(V2, V1));
 }

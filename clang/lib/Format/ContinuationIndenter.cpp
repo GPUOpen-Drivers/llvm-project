@@ -617,10 +617,10 @@ unsigned ContinuationIndenter::addTokenToState(LineState &State, bool Newline,
   assert(!State.Stack.empty());
   State.NoContinuation = false;
 
-  if ((Current.is(TT_ImplicitStringLiteral) &&
-       (!Previous.Tok.getIdentifierInfo() ||
-        Previous.Tok.getIdentifierInfo()->getPPKeywordID() ==
-            tok::pp_not_keyword))) {
+  if (Current.is(TT_ImplicitStringLiteral) &&
+      (!Previous.Tok.getIdentifierInfo() ||
+       Previous.Tok.getIdentifierInfo()->getPPKeywordID() ==
+           tok::pp_not_keyword)) {
     unsigned EndColumn =
         SourceMgr.getSpellingColumnNumber(Current.WhitespaceRange.getEnd());
     if (Current.LastNewlineOffset != 0) {
@@ -1437,6 +1437,7 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
     if (Style.PackConstructorInitializers > FormatStyle::PCIS_BinPack) {
       CurrentState.AvoidBinPacking = true;
       CurrentState.BreakBeforeParameter =
+          Style.ColumnLimit > 0 &&
           Style.PackConstructorInitializers != FormatStyle::PCIS_NextLine &&
           Style.PackConstructorInitializers != FormatStyle::PCIS_NextLineOnly;
     } else {

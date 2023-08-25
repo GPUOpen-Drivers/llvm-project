@@ -11,13 +11,17 @@
 #include <memory>
 
 namespace mlir {
-
+class DialectRegistry;
 class LLVMTypeConverter;
 class RewritePatternSet;
 class Pass;
 
 #define GEN_PASS_DECL_CONVERTNVVMTOLLVMPASS
 #include "mlir/Conversion/Passes.h.inc"
+
+void populateNVVMToLLVMConversionPatterns(RewritePatternSet &patterns);
+
+void registerConvertNVVMToLLVMInterface(DialectRegistry &registry);
 
 } // namespace mlir
 

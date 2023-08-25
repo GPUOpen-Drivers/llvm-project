@@ -58,7 +58,6 @@ atomic cstdint
 atomic cstdlib
 atomic cstring
 atomic ctime
-atomic iosfwd
 atomic limits
 atomic ratio
 atomic type_traits
@@ -69,7 +68,6 @@ barrier cstddef
 barrier cstdint
 barrier cstring
 barrier ctime
-barrier iosfwd
 barrier iterator
 barrier limits
 barrier memory
@@ -91,12 +89,14 @@ bitset cstddef
 bitset cstdint
 bitset cstdlib
 bitset cstring
+bitset cwchar
 bitset initializer_list
 bitset iosfwd
 bitset limits
 bitset new
 bitset stdexcept
 bitset string
+bitset string_view
 bitset type_traits
 bitset version
 ccomplex complex
@@ -117,7 +117,6 @@ chrono compare
 chrono concepts
 chrono cstddef
 chrono cstdint
-chrono cstdlib
 chrono cstring
 chrono ctime
 chrono limits
@@ -128,6 +127,7 @@ chrono tuple
 chrono type_traits
 chrono version
 cinttypes cstdint
+cmath limits
 cmath type_traits
 cmath version
 codecvt atomic
@@ -173,7 +173,6 @@ condition_variable cstdlib
 condition_variable cstring
 condition_variable ctime
 condition_variable initializer_list
-condition_variable iosfwd
 condition_variable limits
 condition_variable new
 condition_variable ratio
@@ -304,7 +303,6 @@ format array
 format cmath
 format cstddef
 format cstdint
-format cstdlib
 format initializer_list
 format limits
 format locale
@@ -455,7 +453,6 @@ latch cstddef
 latch cstdint
 latch cstring
 latch ctime
-latch iosfwd
 latch limits
 latch ratio
 latch type_traits
@@ -592,7 +589,6 @@ numeric ctime
 numeric execution
 numeric functional
 numeric initializer_list
-numeric iosfwd
 numeric iterator
 numeric limits
 numeric new
@@ -641,6 +637,22 @@ ostream string
 ostream type_traits
 ostream typeinfo
 ostream version
+print array
+print cerrno
+print cmath
+print cstddef
+print cstdint
+print cstdio
+print initializer_list
+print limits
+print locale
+print new
+print optional
+print stdexcept
+print string
+print string_view
+print tuple
+print version
 queue compare
 queue concepts
 queue cstddef
@@ -730,7 +742,6 @@ semaphore cstddef
 semaphore cstdint
 semaphore cstring
 semaphore ctime
-semaphore iosfwd
 semaphore limits
 semaphore ratio
 semaphore type_traits
@@ -752,7 +763,6 @@ set version
 shared_mutex cerrno
 shared_mutex cstddef
 shared_mutex ctime
-shared_mutex iosfwd
 shared_mutex limits
 shared_mutex ratio
 shared_mutex stdexcept
@@ -858,7 +868,6 @@ thread chrono
 thread compare
 thread cstddef
 thread cstdint
-thread cstdlib
 thread cstring
 thread ctime
 thread functional
@@ -867,6 +876,7 @@ thread limits
 thread locale
 thread new
 thread ratio
+thread sstream
 thread stdexcept
 thread string
 thread string_view

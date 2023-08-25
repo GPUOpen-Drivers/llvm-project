@@ -323,7 +323,8 @@ AMDGPUTargetLowering::AMDGPUTargetLowering(const TargetMachine &TM,
 
   setOperationAction({ISD::BR_JT, ISD::BRIND}, MVT::Other, Expand);
 
-  // This is totally unsupported, just custom lower to produce an error.
+  // For R600, this is totally unsupported, just custom lower to produce an
+  // error.
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Custom);
 
   // Library functions.  These default to Expand, but we have instructions
@@ -1898,7 +1899,8 @@ SDValue AMDGPUTargetLowering::LowerDIVREM24(SDValue Op, SelectionDAG &DAG,
   bool UseFmadFtz = false;
   if (Subtarget->isGCN()) {
     const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
-    UseFmadFtz = MFI->getMode().allFP32Denormals();
+    UseFmadFtz =
+        MFI->getMode().FP32Denormals != DenormalMode::getPreserveSign();
   }
 
   // float fr = mad(fqneg, fb, fa);
@@ -1990,11 +1992,11 @@ void AMDGPUTargetLowering::LowerUDIVREM64(SDValue Op,
     const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
 
     // Compute denominator reciprocal.
-    unsigned FMAD = !Subtarget->hasMadMacF32Insts() ?
-                    (unsigned)ISD::FMA :
-                    !MFI->getMode().allFP32Denormals() ?
-                    (unsigned)ISD::FMAD :
-                    (unsigned)AMDGPUISD::FMAD_FTZ;
+    unsigned FMAD =
+        !Subtarget->hasMadMacF32Insts() ? (unsigned)ISD::FMA
+        : MFI->getMode().FP32Denormals == DenormalMode::getPreserveSign()
+            ? (unsigned)ISD::FMAD
+            : (unsigned)AMDGPUISD::FMAD_FTZ;
 
     SDValue Cvt_Lo = DAG.getNode(ISD::UINT_TO_FP, DL, MVT::f32, RHS_Lo);
     SDValue Cvt_Hi = DAG.getNode(ISD::UINT_TO_FP, DL, MVT::f32, RHS_Hi);
@@ -2842,6 +2844,8 @@ SDValue AMDGPUTargetLowering::lowerFEXP(SDValue Op, SelectionDAG &DAG) const {
   //    q = r + (r^2)/2! + (r^3)/3! + (r^4)/4! + (r^5)/5!
   //
   //    e^x = (2^m) * ( (2^(j/64)) + q*(2^(j/64)) )
+  SDNodeFlags FlagsNoContract = Flags;
+  FlagsNoContract.setAllowContract(false);
 
   SDValue PH, PL;
   if (Subtarget->hasFastFMAF32()) {
@@ -2881,7 +2885,10 @@ SDValue AMDGPUTargetLowering::lowerFEXP(SDValue Op, SelectionDAG &DAG) const {
   }
 
   SDValue E = DAG.getNode(ISD::FRINT, SL, VT, PH, Flags);
-  SDValue PHSubE = DAG.getNode(ISD::FSUB, SL, VT, PH, E, Flags);
+
+  // It is unsafe to contract this fsub into the PH multiply.
+  SDValue PHSubE = DAG.getNode(ISD::FSUB, SL, VT, PH, E, FlagsNoContract);
+
   SDValue A = DAG.getNode(ISD::FADD, SL, VT, PHSubE, PL, Flags);
   SDValue IntE = DAG.getNode(ISD::FP_TO_SINT, SL, MVT::i32, E);
   SDValue Exp2 = DAG.getNode(AMDGPUISD::EXP, SL, VT, A, Flags);

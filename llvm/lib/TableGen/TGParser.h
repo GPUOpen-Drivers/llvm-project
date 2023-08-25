@@ -244,13 +244,13 @@ private: // Semantic analysis methods.
 
   using ArgValueHandler = std::function<void(Init *, Init *)>;
   bool resolveArguments(
-      Record *Rec, ArrayRef<Init *> ArgValues, SMLoc Loc,
+      Record *Rec, ArrayRef<ArgumentInit *> ArgValues, SMLoc Loc,
       ArgValueHandler ArgValueHandler = [](Init *, Init *) {});
   bool resolveArgumentsOfClass(MapResolver &R, Record *Rec,
-                               ArrayRef<Init *> ArgValues, SMLoc Loc);
+                               ArrayRef<ArgumentInit *> ArgValues, SMLoc Loc);
   bool resolveArgumentsOfMultiClass(SubstStack &Substs, MultiClass *MC,
-                                    ArrayRef<Init *> ArgValues, Init *DefmName,
-                                    SMLoc Loc);
+                                    ArrayRef<ArgumentInit *> ArgValues,
+                                    Init *DefmName, SMLoc Loc);
 
 private:  // Parser methods.
   bool consume(tgtok::TokKind K);
@@ -288,8 +288,9 @@ private:  // Parser methods.
                    IDParseMode Mode = ParseValueMode);
   void ParseValueList(SmallVectorImpl<llvm::Init*> &Result,
                       Record *CurRec, RecTy *ItemType = nullptr);
-  bool ParseTemplateArgValueList(SmallVectorImpl<llvm::Init *> &Result,
-                                 Record *CurRec, Record *ArgsRec);
+  bool ParseTemplateArgValueList(SmallVectorImpl<llvm::ArgumentInit *> &Result,
+                                 Record *CurRec, Record *ArgsRec,
+                                 bool IsDefm = false);
   void ParseDagArgList(
       SmallVectorImpl<std::pair<llvm::Init*, StringInit*>> &Result,
       Record *CurRec);
@@ -312,7 +313,7 @@ private:  // Parser methods.
   MultiClass *ParseMultiClassID();
   bool ApplyLetStack(Record *CurRec);
   bool ApplyLetStack(RecordsEntry &Entry);
-  bool CheckTemplateArgValues(SmallVectorImpl<llvm::Init *> &Values,
+  bool CheckTemplateArgValues(SmallVectorImpl<llvm::ArgumentInit *> &Values,
                               SMLoc Loc, Record *ArgsRec);
 };
 

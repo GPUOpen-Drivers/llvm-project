@@ -46,6 +46,19 @@ std::optional<vector::CombiningKind> getCombinerOpKind(Operation *combinerOp);
 // Bufferization-related transforms.
 //===----------------------------------------------------------------------===//
 
+struct BufferizeToAllocationOptions {
+  enum class AllocOp { MemrefAlloc = 0, MemrefAlloca = 1 };
+  AllocOp allocOp = AllocOp::MemrefAlloc;
+
+  enum class MemcpyOp { MemrefTensorStore = 0, MemrefCopy = 1, LinalgCopy = 2 };
+  MemcpyOp memcpyOp = MemcpyOp::MemrefTensorStore;
+
+  /// If set to "true", only the destination tensor operands are bufferized to
+  /// a new allocation (and wrapped in "bufferization.to_tensor"), but not the
+  /// targeted op itself.
+  bool bufferizeDestinationOnly = false;
+};
+
 /// Materialize a buffer allocation for the given tensor.pad op and lower the
 /// op to linalg.fill/linalg.generic + memref.tensor_store. E.g.:
 ///
@@ -62,8 +75,9 @@ std::optional<vector::CombiningKind> getCombinerOpKind(Operation *combinerOp);
 /// In addition to rewriting the IR as shown above, this function returns the
 /// newly allocated buffer. The `insertionPoint` parameter can be used to
 /// specify a custom insertion point for the buffer allocation.
-Value bufferizeToAllocation(RewriterBase &rewriter, tensor::PadOp padOp,
-                            Attribute memorySpace = {},
+Value bufferizeToAllocation(RewriterBase &rewriter,
+                            const BufferizeToAllocationOptions &options,
+                            tensor::PadOp padOp, Attribute memorySpace = {},
                             Operation *insertionPoint = nullptr);
 
 /// Materialize a buffer allocation for the given vector.mask op and bufferize
@@ -85,8 +99,9 @@ Value bufferizeToAllocation(RewriterBase &rewriter, tensor::PadOp padOp,
 /// In addition to rewriting the IR as shown above, this function returns the
 /// newly allocated buffer. The `insertionPoint` parameter can be used to
 /// specify a custom insertion point for the buffer allocation.
-Value bufferizeToAllocation(RewriterBase &rewriter, vector::MaskOp maskOp,
-                            Attribute memorySpace = {},
+Value bufferizeToAllocation(RewriterBase &rewriter,
+                            const BufferizeToAllocationOptions &options,
+                            vector::MaskOp maskOp, Attribute memorySpace = {},
                             Operation *insertionPoint = nullptr);
 
 /// Bufferize the given op with tensor semantics and materialize the result in
@@ -105,8 +120,9 @@ Value bufferizeToAllocation(RewriterBase &rewriter, vector::MaskOp maskOp,
 /// This function returns the newly allocated buffer. The `insertionPoint`
 /// parameter can be used to specify a custom insertion point for the buffer
 /// allocation.
-Value bufferizeToAllocation(RewriterBase &rewriter, Operation *op,
-                            Attribute memorySpace = {},
+Value bufferizeToAllocation(RewriterBase &rewriter,
+                            const BufferizeToAllocationOptions &options,
+                            Operation *op, Attribute memorySpace = {},
                             Operation *insertionPoint = nullptr);
 
 /// Try to eliminate tensor::EmptyOps inside `op` that are anchored on a
@@ -407,6 +423,25 @@ LogicalResult vectorizeOpPrecondition(Operation *op,
 //===----------------------------------------------------------------------===//
 
 using LinalgLoops = SmallVector<Operation *, 4>;
+
+/// Transformation to drop unit-extent dimensions from `linalg.generic`
+/// operations.
+struct ControlDropUnitDims {
+  enum class RankReductionStrategy { ReassociativeReshape, ExtractInsertSlice };
+
+  RankReductionStrategy rankReductionStrategy =
+      RankReductionStrategy::ReassociativeReshape;
+
+  using ControlFnTy = std::function<SmallVector<unsigned>(Operation *)>;
+  ControlFnTy controlFn = [](Operation *op) {
+    if (auto genericOp = dyn_cast_or_null<GenericOp>(op)) {
+      return llvm::to_vector(llvm::seq<unsigned>(0, genericOp.getNumLoops()));
+    }
+    return SmallVector<unsigned>{};
+  };
+};
+LogicalResult dropUnitDims(RewriterBase &rewriter, GenericOp genericOp,
+                           const ControlDropUnitDims &options);
 
 /// Fuse two `linalg.generic` operations that have a producer-consumer
 /// relationship captured through `fusedOperand`. The method expects
@@ -1388,9 +1423,6 @@ void populateConvertConv2DToImg2ColPatterns(RewritePatternSet &patterns);
 void populatePadOpVectorizationPatterns(RewritePatternSet &patterns,
                                         PatternBenefit baseBenefit = 1);
 
-void populateExtractOpVectorizationPatterns(RewritePatternSet &patterns,
-                                            PatternBenefit baseBenefit = 1);
-
 /// Populate patterns for splitting a `LinalgOp` with multiple statements within
 /// its payload into multiple `GenericOp` that have a single statement.
 /// The option `removeDeadArgsAndResults` adds patterns to remove dead arguments
@@ -1485,11 +1517,8 @@ void populateLinalgNamedOpConversionPatterns(RewritePatternSet &patterns);
 
 /// Patterns to fold unit-extent dimensions in operands/results of linalg ops on
 /// tensors via reassociative reshape ops.
-void populateFoldUnitExtentDimsViaReshapesPatterns(RewritePatternSet &patterns);
-
-/// Patterns to fold unit-extent dimensions in operands/results of linalg ops on
-/// tensors via rank-reducing slices.
-void populateFoldUnitExtentDimsViaSlicesPatterns(RewritePatternSet &patterns);
+void populateFoldUnitExtentDimsPatterns(RewritePatternSet &patterns,
+                                        ControlDropUnitDims &options);
 
 /// A pattern that converts init operands to input operands.
 void populateMoveInitOperandsToInputPattern(RewritePatternSet &patterns);

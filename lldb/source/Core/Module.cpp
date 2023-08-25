@@ -1285,7 +1285,8 @@ ObjectFile *Module::GetObjectFile() {
           // those values that overwrite unspecified unknown values.
           m_arch.MergeFrom(m_objfile_sp->GetArchitecture());
         } else {
-          ReportError("failed to load objfile for {0}",
+          ReportError("failed to load objfile for {0}\nDebugging will be "
+                      "degraded for this module.",
                       GetFileSpec().GetPath().c_str());
         }
       }
@@ -1499,7 +1500,7 @@ bool Module::IsLoadedInTarget(Target *target) {
 }
 
 bool Module::LoadScriptingResourceInTarget(Target *target, Status &error,
-                                           Stream *feedback_stream) {
+                                           Stream &feedback_stream) {
   if (!target) {
     error.SetErrorString("invalid destination Target");
     return false;
@@ -1534,17 +1535,16 @@ bool Module::LoadScriptingResourceInTarget(Target *target, Status &error,
           if (scripting_fspec &&
               FileSystem::Instance().Exists(scripting_fspec)) {
             if (should_load == eLoadScriptFromSymFileWarn) {
-              if (feedback_stream)
-                feedback_stream->Printf(
-                    "warning: '%s' contains a debug script. To run this script "
-                    "in "
-                    "this debug session:\n\n    command script import "
-                    "\"%s\"\n\n"
-                    "To run all discovered debug scripts in this session:\n\n"
-                    "    settings set target.load-script-from-symbol-file "
-                    "true\n",
-                    GetFileSpec().GetFileNameStrippingExtension().GetCString(),
-                    scripting_fspec.GetPath().c_str());
+              feedback_stream.Printf(
+                  "warning: '%s' contains a debug script. To run this script "
+                  "in "
+                  "this debug session:\n\n    command script import "
+                  "\"%s\"\n\n"
+                  "To run all discovered debug scripts in this session:\n\n"
+                  "    settings set target.load-script-from-symbol-file "
+                  "true\n",
+                  GetFileSpec().GetFileNameStrippingExtension().GetCString(),
+                  scripting_fspec.GetPath().c_str());
               return false;
             }
             StreamString scripting_stream;

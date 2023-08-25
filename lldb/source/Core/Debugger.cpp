@@ -248,7 +248,7 @@ Status Debugger::SetPropertyValue(const ExecutionContext *exe_ctx,
           eLoadScriptFromSymFileTrue) {
         std::list<Status> errors;
         StreamString feedback_stream;
-        if (!target_sp->LoadScriptingResources(errors, &feedback_stream)) {
+        if (!target_sp->LoadScriptingResources(errors, feedback_stream)) {
           Stream &s = GetErrorStream();
           for (auto error : errors) {
             s.Printf("%s\n", error.AsCString());
@@ -432,6 +432,12 @@ llvm::StringRef Debugger::GetAutosuggestionAnsiSuffix() const {
   const uint32_t idx = ePropertyShowAutosuggestionAnsiSuffix;
   return GetPropertyAtIndexAs<llvm::StringRef>(
       idx, g_debugger_properties[idx].default_cstr_value);
+}
+
+bool Debugger::GetShowDontUsePoHint() const {
+  const uint32_t idx = ePropertyShowDontUsePoHint;  
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_debugger_properties[idx].default_uint_value != 0);
 }
 
 bool Debugger::GetUseSourceCache() const {
