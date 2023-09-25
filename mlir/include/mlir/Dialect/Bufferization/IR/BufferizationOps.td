@@ -95,7 +95,7 @@ def Bufferization_AllocTensorOp : Bufferization_Op<"alloc_tensor",
     bool resultBufferizesToMemoryWrite(OpResult opResult,
                                        const AnalysisState &state);
 
-    bool bufferizesToAllocation(OpResult opResult) { return true; }
+    bool bufferizesToAllocation(Value value) { return true; }
 
     bool bufferizesToMemoryRead(OpOperand &opOperand,
                                 const AnalysisState &state);
@@ -103,12 +103,12 @@ def Bufferization_AllocTensorOp : Bufferization_Op<"alloc_tensor",
     bool bufferizesToMemoryWrite(OpOperand &opOperand,
                                  const AnalysisState &state);
 
-    AliasingOpResultList getAliasingOpResults(
+    AliasingValueList getAliasingValues(
         OpOperand &opOperand, const AnalysisState &state);
 
     FailureOr<BaseMemRefType> getBufferType(
         Value value, const BufferizationOptions &options,
-        const DenseMap<Value, BaseMemRefType> &fixedTypes);
+        SmallVector<Value> &invocationStack);
 
     RankedTensorType getType() {
       return ::llvm::cast<RankedTensorType>(getResult().getType());
@@ -167,7 +167,7 @@ def Bufferization_AllocTensorOp : Bufferization_Op<"alloc_tensor",
 
 def Bufferization_CloneOp : Bufferization_Op<"clone", [
     CopyOpInterface,
-    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+    MemoryEffectsOpInterface,
     DeclareOpInterfaceMethods<AllocationOpInterface, ["buildDealloc", "buildClone"]>
   ]> {
   let builders = [
@@ -191,8 +191,11 @@ def Bufferization_CloneOp : Bufferization_Op<"clone", [
     behavior.
   }];
 
-  let arguments = (ins Arg<AnyRankedOrUnrankedMemRef, "", []>:$input);
-  let results = (outs Arg<AnyRankedOrUnrankedMemRef, "", []>:$output);
+  let arguments = (ins Arg<AnyRankedOrUnrankedMemRef, "",
+                           [MemRead<DefaultResource>]>:$input);
+  let results = (outs Res<AnyRankedOrUnrankedMemRef, "",
+                          [MemWrite<DefaultResource>,
+                           MemAlloc<DefaultResource>]>:$output);
 
   let extraClassDeclaration = [{
     Value getSource() { return getInput(); }
@@ -234,7 +237,7 @@ def Bufferization_CopyTensorOp : Bufferization_Op<"copy_tensor",
     bool bufferizesToMemoryWrite(OpOperand &opOperand,
                                  const AnalysisState &state);
 
-    AliasingOpResultList getAliasingOpResults(
+    AliasingValueList getAliasingValues(
         OpOperand &opOperand, const AnalysisState &state);
 
     RankedTensorType getType() {
@@ -292,7 +295,7 @@ def Bufferization_DeallocTensorOp : Bufferization_Op<"dealloc_tensor",
       return false;
     }
 
-    AliasingOpResultList getAliasingOpResults(
+    AliasingValueList getAliasingValues(
         OpOperand &opOperand, const AnalysisState &state) const {
       return {};
     }
@@ -385,7 +388,7 @@ def Bufferization_ToTensorOp : Bufferization_Op<"to_tensor", [
 
     FailureOr<BaseMemRefType> getBufferType(
         Value value, const BufferizationOptions &options,
-        const DenseMap<Value, BaseMemRefType> &fixedTypes) {
+        SmallVector<Value> &invocationStack) {
       return ::llvm::cast<BaseMemRefType>(getMemref().getType());
     }
   }];
@@ -456,7 +459,7 @@ def Bufferization_ToMemrefOp : Bufferization_Op<"to_memref", [
       return !getReadOnly();
     }
 
-    AliasingOpResultList getAliasingOpResults(
+    AliasingValueList getAliasingValues(
         OpOperand &opOperand, const AnalysisState &state) const {
       return {};
     }
@@ -520,6 +523,13 @@ def Bufferization_DeallocOp : Bufferization_Op<"dealloc", [
     `%r0`, `%r1`, or `%r2` are aliases of `%a0`. `%a1` will be deallocated when
     `%cond1` is set to 'true' and none of `%r0`, %r1`, `%r2`, and `%a0` are
     aliases.
+
+    Note that this can be an expensive operation if there are many operands that
+    cannot be optimized away. The runtime cost of this operation (assuming that
+    nothing is optimized away) is `O(|memrefs|^2+|memrefs|*|retained|)`. The
+    cost in terms of memory space is `O(|memrefs|+|retained|)`. As a result, it
+    is recommended to place it carefully in the IR such that most operands can
+    be optimized away by running the `buffer-deallocation-simplification` pass.
   }];
 
   let arguments = (ins Variadic<AnyRankedOrUnrankedMemRef>:$memrefs,

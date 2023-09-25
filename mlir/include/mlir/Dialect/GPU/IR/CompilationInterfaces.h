@@ -15,8 +15,26 @@
 
 #include "mlir/IR/Attributes.h"
 
+namespace llvm {
+class IRBuilderBase;
+}
+
 namespace mlir {
+namespace LLVM {
+class ModuleTranslation;
+}
 namespace gpu {
+/// This class indicates that the attribute associated with this trait is a GPU
+/// offloading translation attribute. These kinds of attributes must implement
+/// an interface for handling the translation of GPU offloading operations like
+/// `gpu.binary` & `gpu.launch_func`.
+template <typename ConcreteType>
+class OffloadingTranslationAttrTrait
+    : public AttributeTrait::TraitBase<ConcreteType,
+                                       OffloadingTranslationAttrTrait> {
+  // TODO: Verify the attribute promises or implements the interface.
+};
+
 /// This class serves as an opaque interface for passing options to the
 /// `TargetAttrInterface` methods. Users of this class must implement the
 /// `classof` method as well as using the macros `MLIR_*_EXPLICIT_TYPE_ID` to
@@ -25,10 +43,15 @@ class TargetOptions {
 public:
   /// The target representation of the compilation process.
   typedef enum {
-    offload,  /// The process should produce an offloading representation. For
-              /// the NVVM & ROCDL targets this option produces LLVM IR.
-    assembly, /// The process should produce assembly code.
-    binary    /// The process should produce a binary.
+    offload = 1,  /// The process should produce an offloading representation.
+                  /// For the NVVM & ROCDL targets this option produces LLVM IR.
+    assembly = 2, /// The process should produce assembly code.
+    binary = 4,   /// The process should produce a binary.
+    fatbinary = 8, /// The process should produce a fat binary.
+    binOrFatbin =
+        binary |
+        fatbinary, /// The process should produce a binary or fatbinary. It's up
+                   /// to the target to decide which.
   } CompilationTarget;
 
   /// Constructor initializing the toolkit path, the list of files to link to,
@@ -36,7 +59,7 @@ public:
   /// compilation target is `binary`.
   TargetOptions(StringRef toolkitPath = {},
                 ArrayRef<std::string> linkFiles = {}, StringRef cmdOptions = {},
-                CompilationTarget compilationTarget = binary);
+                CompilationTarget compilationTarget = binOrFatbin);
 
   /// Returns the typeID.
   TypeID getTypeID() const;
@@ -62,7 +85,7 @@ protected:
   /// appropiate value: ie. `TargetOptions(TypeID::get<DerivedClass>())`.
   TargetOptions(TypeID typeID, StringRef toolkitPath = {},
                 ArrayRef<std::string> linkFiles = {}, StringRef cmdOptions = {},
-                CompilationTarget compilationTarget = binary);
+                CompilationTarget compilationTarget = binOrFatbin);
 
   /// Path to the target toolkit.
   std::string toolkitPath;
