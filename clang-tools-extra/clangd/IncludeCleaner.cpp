@@ -390,7 +390,7 @@ IncludeCleanerFindings computeIncludeCleanerFindings(ParsedAST &AST) {
   const auto &SM = AST.getSourceManager();
   include_cleaner::Includes ConvertedIncludes = convertIncludes(AST);
   const FileEntry *MainFile = SM.getFileEntryForID(SM.getMainFileID());
-  auto *PreamblePatch = PreamblePatch::getPatchEntry(AST.tuPath(), SM);
+  auto PreamblePatch = PreamblePatch::getPatchEntry(AST.tuPath(), SM);
 
   std::vector<include_cleaner::SymbolReference> Macros =
       collectMacroReferences(AST);
@@ -410,7 +410,7 @@ IncludeCleanerFindings computeIncludeCleanerFindings(ParsedAST &AST) {
         for (const auto &H : Providers) {
           if (H.kind() == include_cleaner::Header::Physical &&
               (H.physical() == MainFile || H.physical() == PreamblePatch ||
-               H.physical()->getLastRef().getDir() == ResourceDir)) {
+               H.physical().getDir() == ResourceDir)) {
             Satisfied = true;
             continue;
           }

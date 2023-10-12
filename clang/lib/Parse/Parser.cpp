@@ -615,6 +615,11 @@ bool Parser::ParseTopLevelDecl(DeclGroupPtrTy &Result,
                                Sema::ModuleImportState &ImportState) {
   DestroyTemplateIdAnnotationsRAIIObj CleanupRAII(*this);
 
+  // Skip over the EOF token, flagging end of previous input for incremental
+  // processing
+  if (PP.isIncrementalProcessingEnabled() && Tok.is(tok::eof))
+    ConsumeToken();
+
   Result = nullptr;
   switch (Tok.getKind()) {
   case tok::annot_pragma_unused:
@@ -1038,7 +1043,7 @@ Parser::ParseExternalDeclaration(ParsedAttributes &Attrs,
       ConsumeToken();
       return nullptr;
     }
-    if (PP.isIncrementalProcessingEnabled() &&
+    if (getLangOpts().IncrementalExtensions &&
         !isDeclarationStatement(/*DisambiguatingWithExpression=*/true))
       return ParseTopLevelStmtDecl();
 
@@ -2559,6 +2564,10 @@ Decl *Parser::ParseModuleImport(SourceLocation AtLoc,
     SeenError = false;
     break;
   case Sema::ModuleImportState::FirstDecl:
+    // If we found an import decl as the first declaration, we must be not in
+    // a C++20 module unit or we are in an invalid state.
+    ImportState = Sema::ModuleImportState::NotACXX20Module;
+    [[fallthrough]];
   case Sema::ModuleImportState::NotACXX20Module:
     // We can only import a partition within a module purview.
     if (IsPartition)
