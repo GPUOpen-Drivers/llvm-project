@@ -215,6 +215,8 @@ def Vector_ReductionOp :
   Vector_Op<"reduction", [Pure,
      PredOpTrait<"source operand and result have same element type",
                  TCresVTEtIsSameAsOpBase<0, 0>>,
+     OptionalTypesMatchWith<"dest and acc have the same type",
+                            "dest", "acc", "::llvm::cast<Type>($_self)">,
      DeclareOpInterfaceMethods<ArithFastMathInterface>,
      DeclareOpInterfaceMethods<MaskableOpInterface>,
      DeclareOpInterfaceMethods<VectorUnrollOpInterface, ["getShapeForUnroll"]>
@@ -263,9 +265,8 @@ def Vector_ReductionOp :
                          "::mlir::arith::FastMathFlags::none">:$fastMathFlags)>
   ];
 
-  // TODO: Migrate to assemblyFormat once `AllTypesMatch` supports optional
-  // operands.
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = "$kind `,` $vector (`,` $acc^)? (`fastmath` `` $fastmath^)?"
+                       " attr-dict `:` type($vector) `into` type($dest)";
   let hasCanonicalizer = 1;
   let hasVerifier = 1;
 }
@@ -532,11 +533,11 @@ def Vector_ExtractOp :
     Example:
 
     ```mlir
-    %1 = vector.extract %0[3]: vector<4x8x16xf32>
-    %2 = vector.extract %0[2, 1, 3]: vector<4x8x16xf32>
-    %3 = vector.extract %1[]: vector<f32>
-    %4 = vector.extract %0[%a, %b, %c]: vector<4x8x16xf32>
-    %5 = vector.extract %0[2, %b]: vector<4x8x16xf32>
+    %1 = vector.extract %0[3]: vector<8x16xf32> from vector<4x8x16xf32>
+    %2 = vector.extract %0[2, 1, 3]: f32 from vector<4x8x16xf32>
+    %3 = vector.extract %1[]: vector<f32> from vector<f32>
+    %4 = vector.extract %0[%a, %b, %c]: f32 from vector<4x8x16xf32>
+    %5 = vector.extract %0[2, %b]: vector<16xf32> from vector<4x8x16xf32>
     ```
   }];
 
@@ -579,7 +580,7 @@ def Vector_ExtractOp :
   let assemblyFormat = [{
     $vector ``
     custom<DynamicIndexList>($dynamic_position, $static_position)
-    attr-dict `:` type($vector)
+    attr-dict `:` type($result) `from` type($vector)
   }];
 
   let hasCanonicalizer = 1;

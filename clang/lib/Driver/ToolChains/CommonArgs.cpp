@@ -631,6 +631,7 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
 
   const char *PluginOptPrefix = IsOSAIX ? "-bplugin_opt:" : "-plugin-opt=";
   const char *ExtraDash = IsOSAIX ? "-" : "";
+  const char *ParallelismOpt = IsOSAIX ? "-threads=" : "jobs=";
 
   // Note, this solution is far from perfect, better to encode it into IR
   // metadata, but this may not be worth it, since it looks like aranges is on
@@ -690,8 +691,8 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
 
   StringRef Parallelism = getLTOParallelism(Args, D);
   if (!Parallelism.empty())
-    CmdArgs.push_back(
-        Args.MakeArgString(Twine(PluginOptPrefix) + "jobs=" + Parallelism));
+    CmdArgs.push_back(Args.MakeArgString(Twine(PluginOptPrefix) +
+                                         ParallelismOpt + Parallelism));
 
   // If an explicit debugger tuning argument appeared, pass it along.
   if (Arg *A =
@@ -902,11 +903,8 @@ void tools::addOpenMPRuntimeLibraryPath(const ToolChain &TC,
 
 void tools::addArchSpecificRPath(const ToolChain &TC, const ArgList &Args,
                                  ArgStringList &CmdArgs) {
-  // Enable -frtlib-add-rpath by default for the case of VE.
-  const bool IsVE = TC.getTriple().isVE();
-  bool DefaultValue = IsVE;
   if (!Args.hasFlag(options::OPT_frtlib_add_rpath,
-                    options::OPT_fno_rtlib_add_rpath, DefaultValue))
+                    options::OPT_fno_rtlib_add_rpath, false))
     return;
 
   for (const auto &CandidateRPath : TC.getArchSpecificLibPaths()) {
@@ -2297,7 +2295,7 @@ void tools::AddStaticDeviceLibs(Compilation *C, const Tool *T,
   static const StringRef HostOnlyArchives[] = {
       "omp", "cudart", "m", "gcc", "gcc_s", "pthread", "hip_hcc"};
   for (auto SDLName : DriverArgs.getAllArgValues(options::OPT_l)) {
-    if (!HostOnlyArchives->contains(SDLName)) {
+    if (!llvm::is_contained(HostOnlyArchives, SDLName)) {
       SDLNames.insert(std::string("-l") + SDLName);
     }
   }
