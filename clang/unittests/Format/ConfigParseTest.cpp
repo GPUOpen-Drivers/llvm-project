@@ -154,10 +154,12 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
   CHECK_PARSE_BOOL(AllowAllArgumentsOnNextLine);
   CHECK_PARSE_BOOL(AllowAllParametersOfDeclarationOnNextLine);
   CHECK_PARSE_BOOL(AllowShortCaseLabelsOnASingleLine);
+  CHECK_PARSE_BOOL(AllowShortCompoundRequirementOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortEnumsOnASingleLine);
   CHECK_PARSE_BOOL(AllowShortLoopsOnASingleLine);
   CHECK_PARSE_BOOL(BinPackArguments);
   CHECK_PARSE_BOOL(BinPackParameters);
+  CHECK_PARSE_BOOL(BreakAdjacentStringLiterals);
   CHECK_PARSE_BOOL(BreakAfterJavaFieldAnnotations);
   CHECK_PARSE_BOOL(BreakBeforeTernaryOperators);
   CHECK_PARSE_BOOL(BreakStringLiterals);
@@ -848,7 +850,7 @@ TEST(ConfigParseTest, ParsesConfiguration) {
               "    Priority: 2\n"
               "  - Regex: .*\n"
               "    Priority: 1\n"
-              "    CaseSensitive: true\n",
+              "    CaseSensitive: true",
               IncludeStyle.IncludeCategories, ExpectedCategories);
   CHECK_PARSE("IncludeIsMainRegex: 'abc$'", IncludeStyle.IncludeIsMainRegex,
               "abc$");

@@ -286,6 +286,12 @@ static cl::opt<bool> EnableSIModeRegisterPass(
   cl::init(true),
   cl::Hidden);
 
+// Enable GFX11.5+ s_singleuse_vdst insertion
+static cl::opt<bool>
+    EnableInsertSingleUseVDST("amdgpu-enable-single-use-vdst",
+                              cl::desc("Enable s_singleuse_vdst insertion"),
+                              cl::init(false), cl::Hidden);
+
 // Enable GFX11+ s_delay_alu insertion
 static cl::opt<bool>
     EnableInsertDelayAlu("amdgpu-enable-delay-alu",
@@ -382,7 +388,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeSILoadStoreOptimizerPass(*PR);
   initializeAMDGPUCtorDtorLoweringLegacyPass(*PR);
   initializeAMDGPUAlwaysInlinePass(*PR);
-  initializeAMDGPUAttributorPass(*PR);
+  initializeAMDGPUAttributorLegacyPass(*PR);
   initializeAMDGPUAnnotateKernelFeaturesPass(*PR);
   initializeAMDGPUAnnotateUniformValuesPass(*PR);
   initializeAMDGPUArgumentUsageInfoPass(*PR);
@@ -406,6 +412,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPURewriteUndefForPHILegacyPass(*PR);
   initializeAMDGPUUnifyMetadataPass(*PR);
   initializeSIAnnotateControlFlowPass(*PR);
+  initializeAMDGPUInsertSingleUseVDSTPass(*PR);
   initializeAMDGPUInsertDelayAluPass(*PR);
   initializeSIInsertHardClausesPass(*PR);
   initializeSIInsertWaitcntsPass(*PR);
@@ -430,6 +437,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeGCNPreRAOptimizationsPass(*PR);
   initializeGCNPreRALongBranchRegPass(*PR);
   initializeGCNRewritePartialRegUsesPass(*PR);
+  initializeGCNRegPressurePrinterPass(*PR);
 }
 
 static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
@@ -611,6 +619,10 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerPipelineParsingCallback(
       [this](StringRef PassName, ModulePassManager &PM,
              ArrayRef<PassBuilder::PipelineElement>) {
+        if (PassName == "amdgpu-attributor") {
+          PM.addPass(AMDGPUAttributorPass(*this));
+          return true;
+        }
         if (PassName == "amdgpu-unify-metadata") {
           PM.addPass(AMDGPUUnifyMetadataPass());
           return true;
@@ -1022,7 +1034,7 @@ void AMDGPUPassConfig::addIRPasses() {
   // AMDGPUAttributor infers lack of llvm.amdgcn.lds.kernel.id calls, so run
   // after their introduction
   if (TM.getOptLevel() > CodeGenOptLevel::None)
-    addPass(createAMDGPUAttributorPass());
+    addPass(createAMDGPUAttributorLegacyPass());
 
   if (TM.getOptLevel() > CodeGenOptLevel::None)
     addPass(createInferAddressSpacesPass());
@@ -1281,7 +1293,6 @@ void GCNPassConfig::addFastRegAlloc() {
   insertPass(&PHIEliminationID, &SILowerControlFlowID);
 
   insertPass(&TwoAddressInstructionPassID, &SIWholeQuadModeID);
-  insertPass(&TwoAddressInstructionPassID, &SIPreAllocateWWMRegsID);
 
   TargetPassConfig::addFastRegAlloc();
 }
@@ -1290,7 +1301,6 @@ void GCNPassConfig::addOptimizedRegAlloc() {
   // Allow the scheduler to run before SIWholeQuadMode inserts exec manipulation
   // instructions that cause scheduling barriers.
   insertPass(&MachineSchedulerID, &SIWholeQuadModeID);
-  insertPass(&MachineSchedulerID, &SIPreAllocateWWMRegsID);
 
   if (OptExecMaskPreRA)
     insertPass(&MachineSchedulerID, &SIOptimizeExecMaskingPreRAID);
@@ -1377,6 +1387,7 @@ bool GCNPassConfig::addRegAssignAndRewriteFast() {
 
   // Equivalent of PEI for SGPRs.
   addPass(&SILowerSGPRSpillsID);
+  addPass(&SIPreAllocateWWMRegsID);
 
   addPass(createVGPRAllocPass(false));
 
@@ -1400,6 +1411,7 @@ bool GCNPassConfig::addRegAssignAndRewriteOptimized() {
 
   // Equivalent of PEI for SGPRs.
   addPass(&SILowerSGPRSpillsID);
+  addPass(&SIPreAllocateWWMRegsID);
 
   addPass(createVGPRAllocPass(true));
 
@@ -1447,6 +1459,9 @@ void GCNPassConfig::addPreEmitPass() {
   // Here we add a stand-alone hazard recognizer pass which can handle all
   // cases.
   addPass(&PostRAHazardRecognizerID);
+
+  if (isPassEnabled(EnableInsertSingleUseVDST, CodeGenOptLevel::Less))
+    addPass(&AMDGPUInsertSingleUseVDSTID);
 
   if (isPassEnabled(EnableInsertDelayAlu, CodeGenOptLevel::Less))
     addPass(&AMDGPUInsertDelayAluID);
