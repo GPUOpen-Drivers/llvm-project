@@ -21,9 +21,11 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SparseTensor/IR/SparseTensor.h"
+#include "mlir/Dialect/SparseTensor/IR/SparseTensorStorageLayout.h"
 #include "mlir/Dialect/SparseTensor/IR/SparseTensorType.h"
 #include "mlir/Dialect/SparseTensor/Transforms/Passes.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
@@ -46,7 +48,7 @@ static bool isZeroValue(Value val) {
 static bool isSparseTensor(Value v) {
   auto enc = getSparseTensorEncoding(v.getType());
   return enc && !llvm::all_of(enc.getLvlTypes(),
-                              [](auto lt) { return lt == LevelType::Dense; });
+                              [](auto lt) { return lt == LevelFormat::Dense; });
 }
 static bool isSparseTensor(OpOperand *op) { return isSparseTensor(op->get()); }
 
@@ -299,8 +301,7 @@ public:
     Block &prodBlock = prod.getRegion().front();
     Block &consBlock = op.getRegion().front();
     IRMapping mapper;
-    Block *fusedBlock = new Block();
-    fusedOp.getRegion().push_back(fusedBlock);
+    Block *fusedBlock = rewriter.createBlock(&fusedOp.getRegion());
     unsigned num = prodBlock.getNumArguments();
     for (unsigned i = 0; i < num - 1; i++)
       addArg(mapper, fusedBlock, prodBlock.getArgument(i));
@@ -309,7 +310,6 @@ public:
     // Clone bodies of the producer and consumer in new evaluation order.
     auto *acc = prodBlock.getTerminator()->getOperand(0).getDefiningOp();
     auto *sampler = consBlock.getTerminator()->getOperand(0).getDefiningOp();
-    rewriter.setInsertionPointToStart(fusedBlock);
     Value last;
     for (auto &op : prodBlock.without_terminator())
       if (&op != acc) {
@@ -543,14 +543,14 @@ public:
     if (!op.hasPureTensorSemantics() || op.getNumDpsInputs() != 1 ||
         op.getNumReductionLoops() == 0 || op.getNumResults() != 1)
       return failure();
-    auto inp = op.getDpsInputOperand(0);
-    auto init = op.getDpsInitOperand(0);
+    auto *inp = op.getDpsInputOperand(0);
+    auto *init = op.getDpsInitOperand(0);
     if (!isSparseTensor(inp))
       return failure();
     // Look for direct x = x OP y for semi-ring ready reductions.
-    auto red = cast<linalg::YieldOp>(op.getRegion().front().getTerminator())
-                   .getOperand(0)
-                   .getDefiningOp();
+    auto *red = cast<linalg::YieldOp>(op.getRegion().front().getTerminator())
+                    .getOperand(0)
+                    .getDefiningOp();
     if (!isa<arith::AndIOp, arith::MulIOp, arith::MulFOp, arith::MinimumFOp,
              arith::MinSIOp, arith::MinUIOp, arith::MaximumFOp, arith::MaxSIOp,
              arith::MaxUIOp>(red))
@@ -592,11 +592,101 @@ public:
     IRMapping irMap;
     irMap.map(red->getOperand(0), region->getArgument(0));
     irMap.map(red->getOperand(1), region->getArgument(1));
-    auto cloned = rewriter.clone(*red, irMap);
+    auto *cloned = rewriter.clone(*red, irMap);
     rewriter.create<sparse_tensor::YieldOp>(loc, cloned->getResult(0));
     rewriter.setInsertionPointAfter(custom);
     rewriter.replaceOp(red, custom.getResult());
     return success();
+  }
+};
+
+/// Sparse rewriting rule for the print operator. This operation is mainly used
+/// for debugging and testing. As such, it lowers to the vector.print operation
+/// which only require very light-weight runtime support.
+struct PrintRewriter : public OpRewritePattern<PrintOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(PrintOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto tensor = op.getTensor();
+    auto stt = getSparseTensorType(tensor);
+    // Header with NSE.
+    auto nse = rewriter.create<NumberOfEntriesOp>(loc, tensor);
+    rewriter.create<vector::PrintOp>(
+        loc, rewriter.getStringAttr("---- Sparse Tensor ----\nnse = "));
+    rewriter.create<vector::PrintOp>(loc, nse);
+    // Use the "codegen" foreach loop construct to iterate over
+    // all typical sparse tensor components for printing.
+    foreachFieldAndTypeInSparseTensor(stt, [&rewriter, &loc,
+                                            &tensor](Type tp, FieldIndex,
+                                                     SparseTensorFieldKind kind,
+                                                     Level l, LevelType) {
+      switch (kind) {
+      case SparseTensorFieldKind::StorageSpec: {
+        break;
+      }
+      case SparseTensorFieldKind::PosMemRef: {
+        auto lvl = constantIndex(rewriter, loc, l);
+        rewriter.create<vector::PrintOp>(loc, rewriter.getStringAttr("pos["));
+        rewriter.create<vector::PrintOp>(
+            loc, lvl, vector::PrintPunctuation::NoPunctuation);
+        rewriter.create<vector::PrintOp>(loc, rewriter.getStringAttr("] : "));
+        auto pos = rewriter.create<ToPositionsOp>(loc, tp, tensor, l);
+        printContents(rewriter, loc, tp, pos);
+        break;
+      }
+      case SparseTensorFieldKind::CrdMemRef: {
+        auto lvl = constantIndex(rewriter, loc, l);
+        rewriter.create<vector::PrintOp>(loc, rewriter.getStringAttr("crd["));
+        rewriter.create<vector::PrintOp>(
+            loc, lvl, vector::PrintPunctuation::NoPunctuation);
+        rewriter.create<vector::PrintOp>(loc, rewriter.getStringAttr("] : "));
+        auto crd = rewriter.create<ToCoordinatesOp>(loc, tp, tensor, l);
+        printContents(rewriter, loc, tp, crd);
+        break;
+      }
+      case SparseTensorFieldKind::ValMemRef: {
+        rewriter.create<vector::PrintOp>(loc,
+                                         rewriter.getStringAttr("values : "));
+        auto val = rewriter.create<ToValuesOp>(loc, tp, tensor);
+        printContents(rewriter, loc, tp, val);
+        break;
+      }
+      }
+      return true;
+    });
+    rewriter.create<vector::PrintOp>(loc, rewriter.getStringAttr("----\n"));
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  // Helper to print contents of a single memref. Note that for the "push_back"
+  // vectors, this prints the full capacity, not just the size. This is done
+  // on purpose, so that clients see how much storage has been allocated in
+  // total. Contents of the extra capacity in the buffer may be uninitialized
+  // (unless the flag enable-buffer-initialization is set to true).
+  //
+  // Generates code to print:
+  //    ( a0, a1, ... )
+  static void printContents(PatternRewriter &rewriter, Location loc, Type tp,
+                            Value vec) {
+    // Open bracket.
+    rewriter.create<vector::PrintOp>(loc, vector::PrintPunctuation::Open);
+    // For loop over elements.
+    auto zero = constantIndex(rewriter, loc, 0);
+    auto size = rewriter.create<memref::DimOp>(loc, vec, zero);
+    auto step = constantIndex(rewriter, loc, 1);
+    auto forOp = rewriter.create<scf::ForOp>(loc, zero, size, step);
+    rewriter.setInsertionPointToStart(forOp.getBody());
+    auto idx = forOp.getInductionVar();
+    auto val = rewriter.create<memref::LoadOp>(loc, vec, idx);
+    rewriter.create<vector::PrintOp>(loc, val, vector::PrintPunctuation::Comma);
+    rewriter.setInsertionPointAfter(forOp);
+    // Close bracket and end of line.
+    rewriter.create<vector::PrintOp>(loc, vector::PrintPunctuation::Close);
+    rewriter.create<vector::PrintOp>(loc, vector::PrintPunctuation::NewLine);
   }
 };
 
@@ -1126,7 +1216,7 @@ public:
     }
 
     Value vals = loopEmitter.getValBuffer()[0];
-    Value pos = loopEmitter.getPosits()[0].back();
+    Value pos = loopEmitter.getValPosits(0);
     // Loads the value from sparse tensor using position-index;
     // loads the value from dense tensor using coords.
     Value val = enc ? rewriter.create<memref::LoadOp>(loc, vals, pos)
@@ -1148,17 +1238,17 @@ public:
     SmallVector<Value> reducValue = srcBlock->getTerminator()->getOperands();
     rewriter.eraseOp(srcBlock->getTerminator());
 
-    // Inline body.
-    if (!reducValue.empty()) {
-      rewriter.mergeBlocks(srcBlock, rewriter.getBlock(), args);
-    } else {
-      // This is annoying, since scf.for inserts a implicit yield op when
-      // there is no reduction variable upon creation, in this case we need to
-      // merge the block *before* the yield op.
-      rewriter.inlineBlockBefore(srcBlock, &*rewriter.getInsertionPoint(),
-                                 args);
+    Operation &last = rewriter.getBlock()->back();
+    if (llvm::isa<scf::YieldOp>(last)) {
+      // Because `scf.for` inserts an implicit yield op when there is no
+      // reduction variable upon creation, we reset the insertion point such
+      // that the block is inlined before *before* the yield op.
+      rewriter.setInsertionPoint(&last);
     }
 
+    rewriter.inlineBlockBefore(srcBlock, rewriter.getBlock(),
+                               rewriter.getInsertionPoint(), args);
+    rewriter.setInsertionPointToEnd(rewriter.getBlock());
     for (Level l = 0; l < lvlRank; l++) {
       // Link the reduction chain. Note that loop emitter update the reducValue
       // in place.
@@ -1180,7 +1270,7 @@ struct NewRewriter : public OpRewritePattern<NewOp> {
                                 PatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     auto stt = getSparseTensorType(op.getResult());
-    if (!stt.hasEncoding() || stt.getCOOStart() == 0)
+    if (!stt.hasEncoding() || stt.getAoSCOOStart() == 0)
       return failure();
 
     // Implement the NewOp as follows:
@@ -1286,7 +1376,8 @@ struct OutRewriter : public OpRewritePattern<OutOp> {
 
 void mlir::populatePreSparsificationRewriting(RewritePatternSet &patterns) {
   patterns.add<FoldInvariantYield, FuseSparseMultiplyOverAdd, FuseTensorCast,
-               GenSemiRingReduction, GenSemiRingSelect>(patterns.getContext());
+               GenSemiRingReduction, GenSemiRingSelect, PrintRewriter>(
+      patterns.getContext());
 }
 
 void mlir::populateLowerSparseOpsToForeachPatterns(RewritePatternSet &patterns,
