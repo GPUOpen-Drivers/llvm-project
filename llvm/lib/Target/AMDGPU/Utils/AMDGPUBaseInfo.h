@@ -9,6 +9,7 @@
 #ifndef LLVM_LIB_TARGET_AMDGPU_UTILS_AMDGPUBASEINFO_H
 #define LLVM_LIB_TARGET_AMDGPU_UTILS_AMDGPUBASEINFO_H
 
+#include "AMDGPUSubtarget.h"
 #include "SIDefines.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/InstrTypes.h"
@@ -33,10 +34,6 @@ class MCSubtargetInfo;
 class StringRef;
 class Triple;
 class raw_ostream;
-
-namespace amdhsa {
-struct kernel_descriptor_t;
-}
 
 namespace AMDGPU {
 
@@ -315,6 +312,17 @@ unsigned getMaxNumVGPRs(const MCSubtargetInfo *STI, unsigned WavesPerEU);
 unsigned getNumWavesPerEUWithNumVGPRs(const MCSubtargetInfo *STI,
                                       unsigned NumVGPRs);
 
+/// \returns Number of waves reachable for a given \p NumVGPRs usage, \p Granule
+/// size, \p MaxWaves possible, and \p TotalNumVGPRs available.
+unsigned getNumWavesPerEUWithNumVGPRs(unsigned NumVGPRs, unsigned Granule,
+                                      unsigned MaxWaves,
+                                      unsigned TotalNumVGPRs);
+
+/// \returns Occupancy for a given \p SGPRs usage, \p MaxWaves possible, and \p
+/// Gen.
+unsigned getOccupancyWithNumSGPRs(unsigned SGPRs, unsigned MaxWaves,
+                                  AMDGPUSubtarget::Generation Gen);
+
 /// \returns Number of VGPR blocks needed for given subtarget \p STI when
 /// \p NumVGPRs are used. We actually return the number of blocks -1, since
 /// that's what we encode.
@@ -524,6 +532,9 @@ bool getMUBUFHasSoffset(unsigned Opc);
 
 LLVM_READONLY
 bool getMUBUFIsBufferInv(unsigned Opc);
+
+LLVM_READONLY
+bool getMUBUFTfe(unsigned Opc);
 
 LLVM_READONLY
 bool getSMEMIsBuffer(unsigned Opc);
@@ -852,9 +863,6 @@ unsigned mapWMMA3AddrTo2AddrOpcode(unsigned Opc);
 void initDefaultAMDKernelCodeT(amd_kernel_code_t &Header,
                                const MCSubtargetInfo *STI);
 
-amdhsa::kernel_descriptor_t getDefaultAmdhsaKernelDescriptor(
-    const MCSubtargetInfo *STI);
-
 bool isGroupSegment(const GlobalValue *GV);
 bool isGlobalSegment(const GlobalValue *GV);
 bool isReadOnlySegment(const GlobalValue *GV);
@@ -1082,12 +1090,6 @@ struct HwregSize : EncodingField<15, 11, 32> {
 
 using HwregEncoding = EncodingFields<HwregId, HwregOffset, HwregSize>;
 
-LLVM_READONLY
-int64_t getHwregId(const StringRef Name, const MCSubtargetInfo &STI);
-
-LLVM_READNONE
-StringRef getHwreg(unsigned Id, const MCSubtargetInfo &STI);
-
 } // namespace Hwreg
 
 namespace DepCtr {
@@ -1176,18 +1178,6 @@ unsigned getDefaultFormatEncoding(const MCSubtargetInfo &STI);
 } // namespace MTBUFFormat
 
 namespace SendMsg {
-
-LLVM_READONLY
-int64_t getMsgId(const StringRef Name, const MCSubtargetInfo &STI);
-
-LLVM_READONLY
-int64_t getMsgOpId(int64_t MsgId, const StringRef Name);
-
-LLVM_READNONE
-StringRef getMsgName(int64_t MsgId, const MCSubtargetInfo &STI);
-
-LLVM_READNONE
-StringRef getMsgOpName(int64_t MsgId, int64_t OpId, const MCSubtargetInfo &STI);
 
 LLVM_READNONE
 bool isValidMsgId(int64_t MsgId, const MCSubtargetInfo &STI);
@@ -1280,6 +1270,7 @@ bool isGFX9_GFX10_GFX11(const MCSubtargetInfo &STI);
 bool isGFX8_GFX9_GFX10(const MCSubtargetInfo &STI);
 bool isGFX8Plus(const MCSubtargetInfo &STI);
 bool isGFX9Plus(const MCSubtargetInfo &STI);
+bool isNotGFX9Plus(const MCSubtargetInfo &STI);
 bool isGFX10(const MCSubtargetInfo &STI);
 bool isGFX10_GFX11(const MCSubtargetInfo &STI);
 bool isGFX10Plus(const MCSubtargetInfo &STI);
@@ -1304,6 +1295,7 @@ bool hasVOPD(const MCSubtargetInfo &STI);
 bool hasDPPSrc1SGPR(const MCSubtargetInfo &STI);
 int getTotalNumVGPRs(bool has90AInsts, int32_t ArgNumAGPR, int32_t ArgNumVGPR);
 unsigned hasKernargPreload(const MCSubtargetInfo &STI);
+bool hasSMRDSignedImmOffset(const MCSubtargetInfo &ST);
 
 /// Is Reg - scalar register
 bool isSGPR(unsigned Reg, const MCRegisterInfo* TRI);
@@ -1476,7 +1468,8 @@ uint64_t convertSMRDOffsetUnits(const MCSubtargetInfo &ST, uint64_t ByteOffset);
 /// S_LOAD instructions have a signed offset, on other subtargets it is
 /// unsigned. S_BUFFER has an unsigned offset for all subtargets.
 std::optional<int64_t> getSMRDEncodedOffset(const MCSubtargetInfo &ST,
-                                            int64_t ByteOffset, bool IsBuffer);
+                                            int64_t ByteOffset, bool IsBuffer,
+                                            bool HasSOffset = false);
 
 /// \return The encoding that can be used for a 32-bit literal offset in an SMRD
 /// instruction. This is only useful on CI.s
