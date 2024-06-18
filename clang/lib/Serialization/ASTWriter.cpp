@@ -1049,6 +1049,7 @@ void ASTWriter::WriteBlockInfoBlock() {
   RECORD(DECL_UNRESOLVED_USING_VALUE);
   RECORD(DECL_UNRESOLVED_USING_TYPENAME);
   RECORD(DECL_LINKAGE_SPEC);
+  RECORD(DECL_EXPORT);
   RECORD(DECL_CXX_RECORD);
   RECORD(DECL_CXX_METHOD);
   RECORD(DECL_CXX_CONSTRUCTOR);
@@ -5037,6 +5038,14 @@ void ASTWriter::PrepareWritingSpecialDecls(Sema &SemaRef) {
         continue;
     }
 
+    // If we're writing C++ named modules, don't emit declarations which are
+    // not from modules by default. They may be built in declarations (be
+    // handled above) or implcit declarations (see the implementation of
+    // `Sema::Initialize()` for example).
+    if (isWritingStdCXXNamedModules() && !D->getOwningModule() &&
+        D->isImplicit())
+      continue;
+
     GetDeclRef(D);
   }
 
@@ -6074,6 +6083,31 @@ void ASTWriter::AddTypeRef(QualType T, RecordDataImpl &Record) {
   Record.push_back(GetOrCreateTypeID(T));
 }
 
+template <typename IdxForTypeTy>
+static TypeID MakeTypeID(ASTContext &Context, QualType T,
+                         IdxForTypeTy IdxForType) {
+  if (T.isNull())
+    return PREDEF_TYPE_NULL_ID;
+
+  unsigned FastQuals = T.getLocalFastQualifiers();
+  T.removeLocalFastQualifiers();
+
+  if (T.hasLocalNonFastQualifiers())
+    return IdxForType(T).asTypeID(FastQuals);
+
+  assert(!T.hasLocalQualifiers());
+
+  if (const BuiltinType *BT = dyn_cast<BuiltinType>(T.getTypePtr()))
+    return TypeIdxFromBuiltin(BT).asTypeID(FastQuals);
+
+  if (T == Context.AutoDeductTy)
+    return TypeIdx(PREDEF_TYPE_AUTO_DEDUCT).asTypeID(FastQuals);
+  if (T == Context.AutoRRefDeductTy)
+    return TypeIdx(PREDEF_TYPE_AUTO_RREF_DEDUCT).asTypeID(FastQuals);
+
+  return IdxForType(T).asTypeID(FastQuals);
+}
+
 TypeID ASTWriter::GetOrCreateTypeID(QualType T) {
   assert(Context);
   return MakeTypeID(*Context, T, [&](QualType T) -> TypeIdx {
@@ -6094,19 +6128,6 @@ TypeID ASTWriter::GetOrCreateTypeID(QualType T) {
       DeclTypesToEmit.push(T);
     }
     return Idx;
-  });
-}
-
-TypeID ASTWriter::getTypeID(QualType T) const {
-  assert(Context);
-  return MakeTypeID(*Context, T, [&](QualType T) -> TypeIdx {
-    if (T.isNull())
-      return TypeIdx();
-    assert(!T.getLocalFastQualifiers());
-
-    TypeIdxMap::const_iterator I = TypeIdxs.find(T);
-    assert(I != TypeIdxs.end() && "Type not emitted!");
-    return I->second;
   });
 }
 
@@ -6185,8 +6206,9 @@ bool ASTWriter::wasDeclEmitted(const Decl *D) const {
     return true;
 
   bool Emitted = DeclIDs.contains(D);
-  assert((Emitted || GeneratingReducedBMI) &&
-         "The declaration can only be omitted in reduced BMI.");
+  assert((Emitted || (!D->getOwningModule() && isWritingStdCXXNamedModules()) ||
+          GeneratingReducedBMI) &&
+         "The declaration within modules can only be omitted in reduced BMI.");
   return Emitted;
 }
 
@@ -7813,7 +7835,7 @@ void ASTRecordWriter::writeOpenACCClause(const OpenACCClause *C) {
   case OpenACCClauseKind::If: {
     const auto *IC = cast<OpenACCIfClause>(C);
     writeSourceLocation(IC->getLParenLoc());
-    writeStmtRef(IC->getConditionExpr());
+    AddStmt(const_cast<Expr*>(IC->getConditionExpr()));
     return;
   }
   case OpenACCClauseKind::Self: {
@@ -7821,7 +7843,7 @@ void ASTRecordWriter::writeOpenACCClause(const OpenACCClause *C) {
     writeSourceLocation(SC->getLParenLoc());
     writeBool(SC->hasConditionExpr());
     if (SC->hasConditionExpr())
-      writeStmtRef(SC->getConditionExpr());
+      AddStmt(const_cast<Expr*>(SC->getConditionExpr()));
     return;
   }
   case OpenACCClauseKind::NumGangs: {
@@ -7835,13 +7857,13 @@ void ASTRecordWriter::writeOpenACCClause(const OpenACCClause *C) {
   case OpenACCClauseKind::NumWorkers: {
     const auto *NWC = cast<OpenACCNumWorkersClause>(C);
     writeSourceLocation(NWC->getLParenLoc());
-    writeStmtRef(NWC->getIntExpr());
+    AddStmt(const_cast<Expr*>(NWC->getIntExpr()));
     return;
   }
   case OpenACCClauseKind::VectorLength: {
     const auto *NWC = cast<OpenACCVectorLengthClause>(C);
     writeSourceLocation(NWC->getLParenLoc());
-    writeStmtRef(NWC->getIntExpr());
+    AddStmt(const_cast<Expr*>(NWC->getIntExpr()));
     return;
   }
   case OpenACCClauseKind::Private: {
@@ -7920,15 +7942,15 @@ void ASTRecordWriter::writeOpenACCClause(const OpenACCClause *C) {
     writeSourceLocation(AC->getLParenLoc());
     writeBool(AC->hasIntExpr());
     if (AC->hasIntExpr())
-      writeStmtRef(AC->getIntExpr());
+      AddStmt(const_cast<Expr*>(AC->getIntExpr()));
     return;
   }
   case OpenACCClauseKind::Wait: {
     const auto *WC = cast<OpenACCWaitClause>(C);
     writeSourceLocation(WC->getLParenLoc());
     writeBool(WC->getDevNumExpr());
-    if (const Expr *DNE = WC->getDevNumExpr())
-      writeStmtRef(DNE);
+    if (Expr *DNE = WC->getDevNumExpr())
+      AddStmt(DNE);
     writeSourceLocation(WC->getQueuesLoc());
 
     writeOpenACCIntExprList(WC->getQueueIdExprs());
@@ -7947,6 +7969,13 @@ void ASTRecordWriter::writeOpenACCClause(const OpenACCClause *C) {
     }
     return;
   }
+  case OpenACCClauseKind::Reduction: {
+    const auto *RC = cast<OpenACCReductionClause>(C);
+    writeSourceLocation(RC->getLParenLoc());
+    writeEnum(RC->getReductionOp());
+    writeOpenACCVarList(RC);
+    return;
+  }
 
   case OpenACCClauseKind::Finalize:
   case OpenACCClauseKind::IfPresent:
@@ -7963,7 +7992,6 @@ void ASTRecordWriter::writeOpenACCClause(const OpenACCClause *C) {
   case OpenACCClauseKind::DeviceResident:
   case OpenACCClauseKind::Host:
   case OpenACCClauseKind::Link:
-  case OpenACCClauseKind::Reduction:
   case OpenACCClauseKind::Collapse:
   case OpenACCClauseKind::Bind:
   case OpenACCClauseKind::DeviceNum:
