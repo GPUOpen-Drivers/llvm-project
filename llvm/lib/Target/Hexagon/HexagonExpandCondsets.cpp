@@ -154,9 +154,9 @@ namespace {
     void getAnalysisUsage(AnalysisUsage &AU) const override {
       AU.addRequired<LiveIntervals>();
       AU.addPreserved<LiveIntervals>();
-      AU.addPreserved<SlotIndexes>();
-      AU.addRequired<MachineDominatorTree>();
-      AU.addPreserved<MachineDominatorTree>();
+      AU.addPreserved<SlotIndexesWrapperPass>();
+      AU.addRequired<MachineDominatorTreeWrapperPass>();
+      AU.addPreserved<MachineDominatorTreeWrapperPass>();
       MachineFunctionPass::getAnalysisUsage(AU);
     }
 
@@ -254,8 +254,8 @@ namespace llvm {
 
 INITIALIZE_PASS_BEGIN(HexagonExpandCondsets, "expand-condsets",
   "Hexagon Expand Condsets", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
-INITIALIZE_PASS_DEPENDENCY(SlotIndexes)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(SlotIndexesWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
 INITIALIZE_PASS_END(HexagonExpandCondsets, "expand-condsets",
   "Hexagon Expand Condsets", false, false)
@@ -1277,7 +1277,7 @@ bool HexagonExpandCondsets::runOnMachineFunction(MachineFunction &MF) {
 
   HII = static_cast<const HexagonInstrInfo*>(MF.getSubtarget().getInstrInfo());
   TRI = MF.getSubtarget().getRegisterInfo();
-  MDT = &getAnalysis<MachineDominatorTree>();
+  MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
   LIS = &getAnalysis<LiveIntervals>();
   MRI = &MF.getRegInfo();
 

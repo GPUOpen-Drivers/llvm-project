@@ -518,7 +518,7 @@ namespace cwg136 { // cwg136: 3.4
   void q() {
     j(A(), A()); // ok, has default argument
   }
-  extern "C" void k(int, int, int, int); // #cwg136-k 
+  extern "C" void k(int, int, int, int); // #cwg136-k
   namespace NSA {
   struct A {
     friend void cwg136::k(int, int, int, int = 0);
@@ -615,10 +615,8 @@ namespace cwg141 { // cwg141: 3.1
     //   cxx98-note@#cwg141-S {{lookup from the current scope refers here}}
     // expected-error@#cwg141-a {{no member named 'n' in 'cwg141::A::S<int>'; did you mean '::cwg141::S<int>::n'?}}
     //   expected-note@#cwg141-S {{'::cwg141::S<int>::n' declared here}}
-    // FIXME: we issue a useful diagnostic first, then some bogus ones.
     b.f<int>();
     // expected-error@-1 {{no member named 'f' in 'cwg141::B'}}
-    // expected-error@-2 +{{}}
     (void)b.S<int>::n;
   }
   template<typename T> struct C {
@@ -628,10 +626,12 @@ namespace cwg141 { // cwg141: 3.1
       // expected-error@-1 {{use 'template' keyword to treat 'f' as a dependent template name}}
     }
     void h() {
-      (void)t.S<int>::n; // ok
+      (void)t.S<int>::n;
+      // expected-error@-1 {{use 'template' keyword to treat 'S' as a dependent template name}}
     }
     void i() {
-      (void)t.S<int>(); // ok!
+      (void)t.S<int>();
+      // expected-error@-1 {{use 'template' keyword to treat 'S' as a dependent template name}}
     }
   };
   void h() { C<B>().h(); } // ok
@@ -753,6 +753,46 @@ namespace cwg148 { // cwg148: yes
 
 // cwg149: na
 
+namespace cwg150 { // cwg150: 19
+  namespace p1 {
+    template <class T, class U = int>
+    class ARG { };
+
+    template <class X, template <class Y> class PARM>
+    void f(PARM<X>) { }
+
+    void g() {
+      ARG<int> x;
+      f(x);
+    }
+  } // namespace p1
+
+  namespace p2 {
+    template <template <class T, class U = int> class PARM>
+    class C {
+      PARM<int> pi;
+    };
+  } // namespace p2
+
+  namespace n1 {
+    struct Dense { static const unsigned int dim = 1; };
+
+    template <template <typename> class View,
+              typename Block>
+    void operator+(float, View<Block> const&);
+
+    template <typename Block,
+              unsigned int Dim = Block::dim>
+    class Lvalue_proxy { operator float() const; };
+
+    void test_1d (void) {
+      Lvalue_proxy<Dense> p;
+      float b;
+      b + p;
+    }
+  } // namespace n1
+}
+
 namespace cwg151 { // cwg151: 3.1
   struct X {};
   typedef int X::*p;
@@ -843,23 +883,21 @@ namespace cwg161 { // cwg161: 3.1
   };
 }
 
-namespace cwg162 { // cwg162: no
+namespace cwg162 { // cwg162: 19
   struct A {
     char &f(char);
     static int &f(int);
 
     void g() {
       int &a = (&A::f)(0);
-      // FIXME: expected-error@-1 {{reference to overloaded function could not be resolved; did you mean to call it?}}
       char &b = (&A::f)('0');
-      // expected-error@-1 {{reference to overloaded function could not be resolved; did you mean to call it?}}
+      // expected-error@-1 {{non-const lvalue reference to type 'char' cannot bind to a value of unrelated type 'int'}}
     }
   };
 
   int &c = (&A::f)(0);
-  // FIXME: expected-error@-1 {{reference to overloaded function could not be resolved; did you mean to call it?}}
   char &d = (&A::f)('0');
-  // expected-error@-1 {{reference to overloaded function could not be resolved; did you mean to call it?}}
+  // expected-error@-1 {{non-const lvalue reference to type 'char' cannot bind to a value of unrelated type 'int'}}
 }
 
 // cwg163: na
@@ -1048,7 +1086,7 @@ namespace cwg176 { // cwg176: 3.1
     cwg176::X *p4; // #cwg176-p4
     // cxx98-14-error@#cwg176-p4 {{use of class template 'cwg176::X' requires template arguments}}
     //  cxx98-14-note@#cwg176-X {{template is declared here}}
-    // since-cxx17-error@#cwg176-p4 {{use of class template 'X' requires template arguments; argument deduction not allowed in non-static class member}}
+    // since-cxx17-error@#cwg176-p4 {{use of class template 'cwg176::X' requires template arguments; argument deduction not allowed in non-static class member}}
     //  since-cxx17-note@#cwg176-X {{template is declared here}}
   };
 }

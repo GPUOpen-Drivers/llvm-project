@@ -159,6 +159,10 @@ protected:
   bool HasFP8Insts = false;
   bool HasFP8ConversionInsts = false;
   bool HasPkFmacF16Inst = false;
+  bool HasAtomicFMinFMaxF32GlobalInsts = false;
+  bool HasAtomicFMinFMaxF64GlobalInsts = false;
+  bool HasAtomicFMinFMaxF32FlatInsts = false;
+  bool HasAtomicFMinFMaxF64FlatInsts = false;
   bool HasAtomicDsPkAdd16Insts = false;
   bool HasAtomicFlatPkAdd16Insts = false;
   bool HasAtomicFaddRtnInsts = false;
@@ -167,6 +171,7 @@ protected:
   bool HasAtomicBufferGlobalPkAddF16Insts = false;
   bool HasAtomicCSubNoRtnInsts = false;
   bool HasAtomicGlobalPkAddBF16Inst = false;
+  bool HasAtomicBufferPkAddBF16Inst = false;
   bool HasFlatAtomicFaddF32Inst = false;
   bool HasDefaultComponentZero = false;
   bool HasDefaultComponentBroadcast = false;
@@ -822,6 +827,22 @@ public:
     return HasPkFmacF16Inst;
   }
 
+  bool hasAtomicFMinFMaxF32GlobalInsts() const {
+    return HasAtomicFMinFMaxF32GlobalInsts;
+  }
+
+  bool hasAtomicFMinFMaxF64GlobalInsts() const {
+    return HasAtomicFMinFMaxF64GlobalInsts;
+  }
+
+  bool hasAtomicFMinFMaxF32FlatInsts() const {
+    return HasAtomicFMinFMaxF32FlatInsts;
+  }
+
+  bool hasAtomicFMinFMaxF64FlatInsts() const {
+    return HasAtomicFMinFMaxF64FlatInsts;
+  }
+
   bool hasAtomicDsPkAdd16Insts() const { return HasAtomicDsPkAdd16Insts; }
 
   bool hasAtomicFlatPkAdd16Insts() const { return HasAtomicFlatPkAdd16Insts; }
@@ -844,6 +865,10 @@ public:
 
   bool hasAtomicGlobalPkAddBF16Inst() const {
     return HasAtomicGlobalPkAddBF16Inst;
+  }
+
+  bool hasAtomicBufferPkAddBF16Inst() const {
+    return HasAtomicBufferPkAddBF16Inst;
   }
 
   bool hasFlatAtomicFaddF32Inst() const { return HasFlatAtomicFaddF32Inst; }
@@ -1328,10 +1353,6 @@ public:
   // of sign-extending.
   bool hasGetPCZeroExtension() const { return GFX12Insts; }
 
-  // \returns true if the target supports signed immediate offset for SMRD
-  // instructions.
-  bool hasSignedSMRDImmOffset() const { return getGeneration() >= GFX9; }
-
   /// \returns SGPR allocation granularity supported by the subtarget.
   unsigned getSGPRAllocGranule() const {
     return AMDGPU::IsaInfo::getSGPRAllocGranule(this);
@@ -1558,6 +1579,8 @@ public:
 
   bool hasFlatScratchInit() const { return FlatScratchInit; }
 
+  bool hasPrivateSegmentSize() const { return PrivateSegmentSize; }
+
   unsigned getNumKernargPreloadSGPRs() const { return NumKernargPreloadSGPRs; }
 
   unsigned getNumUsedUserSGPRs() const { return NumUsedUserSGPRs; }
@@ -1621,6 +1644,8 @@ private:
   bool DispatchID = false;
 
   bool FlatScratchInit = false;
+
+  bool PrivateSegmentSize = false;
 
   unsigned NumKernargPreloadSGPRs = 0;
 

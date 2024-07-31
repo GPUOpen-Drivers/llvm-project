@@ -266,9 +266,9 @@ char &llvm::MachineSchedulerID = MachineScheduler::ID;
 INITIALIZE_PASS_BEGIN(MachineScheduler, DEBUG_TYPE,
                       "Machine Instruction Scheduler", false, false)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
-INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
-INITIALIZE_PASS_DEPENDENCY(SlotIndexes)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(SlotIndexesWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
 INITIALIZE_PASS_END(MachineScheduler, DEBUG_TYPE,
                     "Machine Instruction Scheduler", false, false)
@@ -279,12 +279,12 @@ MachineScheduler::MachineScheduler() : MachineSchedulerBase(ID) {
 
 void MachineScheduler::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
-  AU.addRequired<MachineDominatorTree>();
-  AU.addRequired<MachineLoopInfo>();
+  AU.addRequired<MachineDominatorTreeWrapperPass>();
+  AU.addRequired<MachineLoopInfoWrapperPass>();
   AU.addRequired<AAResultsWrapperPass>();
   AU.addRequired<TargetPassConfig>();
-  AU.addRequired<SlotIndexes>();
-  AU.addPreserved<SlotIndexes>();
+  AU.addRequired<SlotIndexesWrapperPass>();
+  AU.addPreserved<SlotIndexesWrapperPass>();
   AU.addRequired<LiveIntervals>();
   AU.addPreserved<LiveIntervals>();
   MachineFunctionPass::getAnalysisUsage(AU);
@@ -296,8 +296,8 @@ char &llvm::PostMachineSchedulerID = PostMachineScheduler::ID;
 
 INITIALIZE_PASS_BEGIN(PostMachineScheduler, "postmisched",
                       "PostRA Machine Instruction Scheduler", false, false)
-INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
-INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(PostMachineScheduler, "postmisched",
                     "PostRA Machine Instruction Scheduler", false, false)
@@ -308,8 +308,8 @@ PostMachineScheduler::PostMachineScheduler() : MachineSchedulerBase(ID) {
 
 void PostMachineScheduler::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
-  AU.addRequired<MachineDominatorTree>();
-  AU.addRequired<MachineLoopInfo>();
+  AU.addRequired<MachineDominatorTreeWrapperPass>();
+  AU.addRequired<MachineLoopInfoWrapperPass>();
   AU.addRequired<AAResultsWrapperPass>();
   AU.addRequired<TargetPassConfig>();
   MachineFunctionPass::getAnalysisUsage(AU);
@@ -444,8 +444,8 @@ bool MachineScheduler::runOnMachineFunction(MachineFunction &mf) {
 
   // Initialize the context of the pass.
   MF = &mf;
-  MLI = &getAnalysis<MachineLoopInfo>();
-  MDT = &getAnalysis<MachineDominatorTree>();
+  MLI = &getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+  MDT = &getAnalysis<MachineDominatorTreeWrapperPass>().getDomTree();
   PassConfig = &getAnalysis<TargetPassConfig>();
   AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
 
@@ -491,7 +491,7 @@ bool PostMachineScheduler::runOnMachineFunction(MachineFunction &mf) {
 
   // Initialize the context of the pass.
   MF = &mf;
-  MLI = &getAnalysis<MachineLoopInfo>();
+  MLI = &getAnalysis<MachineLoopInfoWrapperPass>().getLI();
   PassConfig = &getAnalysis<TargetPassConfig>();
   AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
 
@@ -4413,7 +4413,7 @@ struct DOTGraphTraits<ScheduleDAGMI*> : public DefaultDOTGraphTraits {
     SS << "SU:" << SU->NodeNum;
     if (DFS)
       SS << " I:" << DFS->getNumInstrs(SU);
-    return SS.str();
+    return Str;
   }
 
   static std::string getNodeDescription(const SUnit *SU, const ScheduleDAG *G) {

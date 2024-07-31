@@ -801,6 +801,12 @@ def InsnCJ : DirectiveInsnCJ<(outs), (ins uimm2_opcode:$opcode,
                                           uimm3:$funct3,
                                           simm12_lsb0:$imm11),
                              "$opcode, $funct3, $imm11">;
+def Insn16 : RVInst16<(outs), (ins uimm16:$value), "", "", [], InstFormatOther> {
+  bits<16> value;
+
+  let Inst{15-0} = value;
+  let AsmString = ".insn 0x2, $value";
+}
 }
 
 // Use InstAliases to match these so that we can combine the insn and format
@@ -823,9 +829,15 @@ def : InstAlias<".insn_css $opcode, $funct3, $rs2, $imm6",
 def : InstAlias<".insn_cl $opcode, $funct3, $rd, ${imm5}(${rs1})",
                 (InsnCL AnyRegC:$rd, uimm2_opcode:$opcode, uimm3:$funct3,
                         AnyRegC:$rs1, uimm5:$imm5)>;
+def : InstAlias<".insn_cl $opcode, $funct3, $rd, (${rs1})",
+                (InsnCL AnyRegC:$rd, uimm2_opcode:$opcode, uimm3:$funct3,
+                        AnyRegC:$rs1, 0)>;
 def : InstAlias<".insn_cs $opcode, $funct3, $rs2, ${imm5}(${rs1})",
                 (InsnCS uimm2_opcode:$opcode, uimm3:$funct3, AnyRegC:$rs2,
                         AnyRegC:$rs1, uimm5:$imm5)>;
+def : InstAlias<".insn_cs $opcode, $funct3, $rs2, (${rs1})",
+                (InsnCS uimm2_opcode:$opcode, uimm3:$funct3, AnyRegC:$rs2,
+                        AnyRegC:$rs1, 0)>;
 def : InstAlias<".insn_ca $opcode, $funct6, $funct2, $rd, $rs2",
                 (InsnCA AnyRegC:$rd, uimm2_opcode:$opcode, uimm6:$funct6,
                         uimm2:$funct2, AnyRegC:$rs2)>;
