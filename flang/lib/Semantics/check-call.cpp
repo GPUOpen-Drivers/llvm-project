@@ -1363,6 +1363,14 @@ static bool CheckElementalConformance(parser::ContextualMessages &messages,
     const auto &dummy{proc.dummyArguments.at(index++)};
     if (arg) {
       if (const auto *expr{arg->UnwrapExpr()}) {
+        if (const auto *wholeSymbol{evaluate::UnwrapWholeSymbolDataRef(arg)}) {
+          wholeSymbol = &ResolveAssociations(*wholeSymbol);
+          if (IsAssumedSizeArray(*wholeSymbol)) {
+            evaluate::SayWithDeclaration(messages, *wholeSymbol,
+                "Whole assumed-size array '%s' may not be used as an argument to an elemental procedure"_err_en_US,
+                wholeSymbol->name());
+          }
+        }
         if (auto argShape{evaluate::GetShape(context, *expr)}) {
           if (GetRank(*argShape) > 0) {
             std::string argName{"actual argument ("s + expr->AsFortran() +
@@ -2018,6 +2026,22 @@ bool CheckPPCIntrinsic(const Symbol &generic, const Symbol &specific,
       assert(false && "vector type is expected");
   }
   return false;
+}
+
+bool CheckWindowsIntrinsic(
+    const Symbol &intrinsic, evaluate::FoldingContext &foldingContext) {
+  parser::ContextualMessages &messages{foldingContext.messages()};
+  // TODO: there are other intrinsics that are unsupported on Windows that
+  // should be added here.
+  if (intrinsic.name() == "getuid") {
+    messages.Say(
+        "User IDs do not exist on Windows. This function will always return 1"_warn_en_US);
+  }
+  if (intrinsic.name() == "getgid") {
+    messages.Say(
+        "Group IDs do not exist on Windows. This function will always return 1"_warn_en_US);
+  }
+  return true;
 }
 
 bool CheckArguments(const characteristics::Procedure &proc,
