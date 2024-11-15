@@ -117,13 +117,15 @@ void SIAnnotateControlFlow::initialize(Module &M, const GCNSubtarget &ST) {
   BoolUndef = PoisonValue::get(Boolean);
   IntMaskZero = ConstantInt::get(IntMask, 0);
 
-  If = Intrinsic::getDeclaration(&M, Intrinsic::amdgcn_if, { IntMask });
-  Else = Intrinsic::getDeclaration(&M, Intrinsic::amdgcn_else,
-                                   { IntMask, IntMask });
-  IfBreak = Intrinsic::getDeclaration(&M, Intrinsic::amdgcn_if_break,
-                                      { IntMask });
-  Loop = Intrinsic::getDeclaration(&M, Intrinsic::amdgcn_loop, { IntMask });
-  EndCf = Intrinsic::getDeclaration(&M, Intrinsic::amdgcn_end_cf, { IntMask });
+  If = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_if, {IntMask});
+  Else = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_else,
+                                           {IntMask, IntMask});
+  IfBreak = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_if_break,
+                                              {IntMask});
+  Loop =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_loop, {IntMask});
+  EndCf = Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_end_cf,
+                                            {IntMask});
 }
 
 /// Is the branch condition uniform or did the StructurizeCFG pass
@@ -223,8 +225,13 @@ Value *SIAnnotateControlFlow::handleLoopCondition(
   if (Instruction *Inst = dyn_cast<Instruction>(Cond)) {
     BasicBlock *Parent = Inst->getParent();
     Instruction *Insert;
-    if (L->contains(Inst)) {
+    if (LI->getLoopFor(Parent) == L) {
+      // Insert IfBreak in the same BB as Cond, which can help
+      // SILowerControlFlow to know that it does not have to insert an
+      // AND with EXEC.
       Insert = Parent->getTerminator();
+    } else if (L->contains(Inst)) {
+      Insert = Term;
     } else {
       Insert = L->getHeader()->getFirstNonPHIOrDbgOrLifetime();
     }

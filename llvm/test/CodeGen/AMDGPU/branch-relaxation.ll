@@ -73,8 +73,6 @@ define amdgpu_kernel void @uniform_conditional_max_short_forward_branch(ptr addr
 ; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX11-NEXT:    global_store_b32 v0, v1, s[2:3] dlc
 ; GFX11-NEXT:    s_waitcnt_vscnt null, 0x0
-; GFX11-NEXT:    s_nop 0
-; GFX11-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX11-NEXT:    s_endpgm
 ;
 ; GFX12-LABEL: uniform_conditional_max_short_forward_branch:
@@ -104,8 +102,6 @@ define amdgpu_kernel void @uniform_conditional_max_short_forward_branch(ptr addr
 ; GFX12-NEXT:    s_wait_kmcnt 0x0
 ; GFX12-NEXT:    global_store_b32 v0, v1, s[2:3] scope:SCOPE_SYS
 ; GFX12-NEXT:    s_wait_storecnt 0x0
-; GFX12-NEXT:    s_nop 0
-; GFX12-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX12-NEXT:    s_endpgm
 bb:
   %cmp = icmp eq i32 %cnd, 0
@@ -183,8 +179,6 @@ define amdgpu_kernel void @uniform_conditional_min_long_forward_branch(ptr addrs
 ; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX11-NEXT:    global_store_b32 v0, v1, s[2:3] dlc
 ; GFX11-NEXT:    s_waitcnt_vscnt null, 0x0
-; GFX11-NEXT:    s_nop 0
-; GFX11-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX11-NEXT:    s_endpgm
 ;
 ; GFX12-LABEL: uniform_conditional_min_long_forward_branch:
@@ -214,8 +208,6 @@ define amdgpu_kernel void @uniform_conditional_min_long_forward_branch(ptr addrs
 ; GFX12-NEXT:    s_wait_kmcnt 0x0
 ; GFX12-NEXT:    global_store_b32 v0, v1, s[2:3] scope:SCOPE_SYS
 ; GFX12-NEXT:    s_wait_storecnt 0x0
-; GFX12-NEXT:    s_nop 0
-; GFX12-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX12-NEXT:    s_endpgm
 bb0:
   %cmp = icmp eq i32 %cnd, 0
@@ -298,8 +290,6 @@ define amdgpu_kernel void @uniform_conditional_min_long_forward_vcnd_branch(ptr 
 ; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX11-NEXT:    global_store_b32 v0, v1, s[2:3] dlc
 ; GFX11-NEXT:    s_waitcnt_vscnt null, 0x0
-; GFX11-NEXT:    s_nop 0
-; GFX11-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX11-NEXT:    s_endpgm
 ;
 ; GFX12-LABEL: uniform_conditional_min_long_forward_vcnd_branch:
@@ -333,8 +323,6 @@ define amdgpu_kernel void @uniform_conditional_min_long_forward_vcnd_branch(ptr 
 ; GFX12-NEXT:    s_wait_kmcnt 0x0
 ; GFX12-NEXT:    global_store_b32 v0, v1, s[2:3] scope:SCOPE_SYS
 ; GFX12-NEXT:    s_wait_storecnt 0x0
-; GFX12-NEXT:    s_nop 0
-; GFX12-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX12-NEXT:    s_endpgm
 bb0:
   %cmp = fcmp oeq float %cnd, 0.0
@@ -426,20 +414,19 @@ define amdgpu_kernel void @min_long_forward_vbranch(ptr addrspace(1) %arg) #0 {
 ; GFX11-NEXT:    s_or_b64 exec, exec, s[0:1]
 ; GFX11-NEXT:    global_store_b32 v[0:1], v2, off dlc
 ; GFX11-NEXT:    s_waitcnt_vscnt null, 0x0
-; GFX11-NEXT:    s_nop 0
-; GFX11-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX11-NEXT:    s_endpgm
 ;
 ; GFX12-LABEL: min_long_forward_vbranch:
 ; GFX12:       ; %bb.0: ; %bb
 ; GFX12-NEXT:    s_load_b64 s[0:1], s[2:3], 0x24
 ; GFX12-NEXT:    v_and_b32_e32 v0, 0x3ff, v0
-; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1) | instskip(SKIP_4) | instid1(VALU_DEP_1)
+; GFX12-NEXT:    s_delay_alu instid0(VALU_DEP_1)
 ; GFX12-NEXT:    v_lshlrev_b32_e32 v0, 2, v0
 ; GFX12-NEXT:    s_wait_kmcnt 0x0
 ; GFX12-NEXT:    global_load_b32 v2, v0, s[0:1] scope:SCOPE_SYS
 ; GFX12-NEXT:    s_wait_loadcnt 0x0
 ; GFX12-NEXT:    v_add_co_u32 v0, s0, s0, v0
+; GFX12-NEXT:    s_wait_alu 0xf1ff
 ; GFX12-NEXT:    v_add_co_ci_u32_e64 v1, null, s1, 0, s0
 ; GFX12-NEXT:    s_mov_b32 s0, exec_lo
 ; GFX12-NEXT:    v_cmpx_ne_u32_e32 0, v2
@@ -465,8 +452,6 @@ define amdgpu_kernel void @min_long_forward_vbranch(ptr addrspace(1) %arg) #0 {
 ; GFX12-NEXT:    s_or_b32 exec_lo, exec_lo, s0
 ; GFX12-NEXT:    global_store_b32 v[0:1], v2, off scope:SCOPE_SYS
 ; GFX12-NEXT:    s_wait_storecnt 0x0
-; GFX12-NEXT:    s_nop 0
-; GFX12-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX12-NEXT:    s_endpgm
 bb:
   %tid = call i32 @llvm.amdgcn.workitem.id.x()
@@ -646,16 +631,8 @@ define amdgpu_kernel void @uniform_unconditional_min_long_forward_branch(ptr add
 ; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX11-NEXT:    s_cmp_eq_u32 s0, 0
 ; GFX11-NEXT:    s_mov_b64 s[0:1], -1
-; GFX11-NEXT:    s_cbranch_scc0 .LBB5_1
-; GFX11-NEXT:  ; %bb.7: ; %bb0
-; GFX11-NEXT:    s_getpc_b64 s[0:1]
-; GFX11-NEXT:  .Lpost_getpc6:
-; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
-; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB5_4-.Lpost_getpc6)&4294967295
-; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB5_4-.Lpost_getpc6)>>32
-; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
-; GFX11-NEXT:    s_setpc_b64 s[0:1]
-; GFX11-NEXT:  .LBB5_1: ; %Flow
+; GFX11-NEXT:    s_cbranch_scc1 .LBB5_4
+; GFX11-NEXT:  ; %bb.1: ; %Flow
 ; GFX11-NEXT:    s_and_not1_b64 vcc, exec, s[0:1]
 ; GFX11-NEXT:    s_cbranch_vccnz .LBB5_3
 ; GFX11-NEXT:  .LBB5_2: ; %bb2
@@ -669,8 +646,6 @@ define amdgpu_kernel void @uniform_unconditional_min_long_forward_branch(ptr add
 ; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX11-NEXT:    global_store_b32 v0, v1, s[0:1] dlc
 ; GFX11-NEXT:    s_waitcnt_vscnt null, 0x0
-; GFX11-NEXT:    s_nop 0
-; GFX11-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX11-NEXT:    s_endpgm
 ; GFX11-NEXT:  .LBB5_4: ; %bb3
 ; GFX11-NEXT:    ;;#ASMSTART
@@ -680,12 +655,12 @@ define amdgpu_kernel void @uniform_unconditional_min_long_forward_branch(ptr add
 ; GFX11-NEXT:    v_nop_e64
 ; GFX11-NEXT:    ;;#ASMEND
 ; GFX11-NEXT:    s_cbranch_execnz .LBB5_5
-; GFX11-NEXT:  ; %bb.9: ; %bb3
+; GFX11-NEXT:  ; %bb.7: ; %bb3
 ; GFX11-NEXT:    s_getpc_b64 s[0:1]
-; GFX11-NEXT:  .Lpost_getpc7:
+; GFX11-NEXT:  .Lpost_getpc6:
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
-; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB5_2-.Lpost_getpc7)&4294967295
-; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB5_2-.Lpost_getpc7)>>32
+; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB5_2-.Lpost_getpc6)&4294967295
+; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB5_2-.Lpost_getpc6)>>32
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
 ; GFX11-NEXT:    s_setpc_b64 s[0:1]
 ; GFX11-NEXT:  .LBB5_5: ; %bb3
@@ -725,8 +700,6 @@ define amdgpu_kernel void @uniform_unconditional_min_long_forward_branch(ptr add
 ; GFX12-NEXT:    s_wait_kmcnt 0x0
 ; GFX12-NEXT:    global_store_b32 v0, v1, s[0:1] scope:SCOPE_SYS
 ; GFX12-NEXT:    s_wait_storecnt 0x0
-; GFX12-NEXT:    s_nop 0
-; GFX12-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX12-NEXT:    s_endpgm
 ; GFX12-NEXT:  .LBB5_4: ; %bb3
 ; GFX12-NEXT:    ;;#ASMSTART
@@ -814,10 +787,10 @@ define amdgpu_kernel void @uniform_unconditional_min_long_backward_branch(ptr ad
 ; GFX11-NEXT:  ; %bb.3: ; %loop
 ; GFX11-NEXT:    ; in Loop: Header=BB6_1 Depth=1
 ; GFX11-NEXT:    s_getpc_b64 s[0:1]
-; GFX11-NEXT:  .Lpost_getpc8:
+; GFX11-NEXT:  .Lpost_getpc7:
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
-; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB6_1-.Lpost_getpc8)&4294967295
-; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB6_1-.Lpost_getpc8)>>32
+; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB6_1-.Lpost_getpc7)&4294967295
+; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB6_1-.Lpost_getpc7)>>32
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
 ; GFX11-NEXT:    s_setpc_b64 s[0:1]
 ; GFX11-NEXT:  .LBB6_2: ; %DummyReturnBlock
@@ -872,7 +845,7 @@ define amdgpu_kernel void @expand_requires_expand(i32 %cond0) #0 {
 ; GCN-NEXT:    s_and_b64 vcc, exec, s[0:1]
 ; GCN-NEXT:    s_cbranch_vccnz .LBB7_2
 ; GCN-NEXT:  ; %bb.1: ; %bb1
-; GCN-NEXT:    s_load_dword s0, s[0:1], 0x0
+; GCN-NEXT:    s_load_dword s0, s[0:1], 0x0 glc
 ; GCN-NEXT:    s_waitcnt lgkmcnt(0)
 ; GCN-NEXT:    s_cmp_lg_u32 s0, 3
 ; GCN-NEXT:    s_cselect_b64 s[0:1], -1, 0
@@ -911,7 +884,7 @@ define amdgpu_kernel void @expand_requires_expand(i32 %cond0) #0 {
 ; GFX11-NEXT:    s_and_b64 vcc, exec, s[0:1]
 ; GFX11-NEXT:    s_cbranch_vccnz .LBB7_2
 ; GFX11-NEXT:  ; %bb.1: ; %bb1
-; GFX11-NEXT:    s_load_b32 s0, s[0:1], 0x0
+; GFX11-NEXT:    s_load_b32 s0, s[0:1], 0x0 glc dlc
 ; GFX11-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX11-NEXT:    s_cmp_lg_u32 s0, 3
 ; GFX11-NEXT:    s_cselect_b64 s[0:1], -1, 0
@@ -921,10 +894,10 @@ define amdgpu_kernel void @expand_requires_expand(i32 %cond0) #0 {
 ; GFX11-NEXT:    s_cbranch_vccz .LBB7_3
 ; GFX11-NEXT:  ; %bb.5: ; %Flow
 ; GFX11-NEXT:    s_getpc_b64 s[0:1]
-; GFX11-NEXT:  .Lpost_getpc9:
+; GFX11-NEXT:  .Lpost_getpc8:
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
-; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB7_4-.Lpost_getpc9)&4294967295
-; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB7_4-.Lpost_getpc9)>>32
+; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB7_4-.Lpost_getpc8)&4294967295
+; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB7_4-.Lpost_getpc8)>>32
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
 ; GFX11-NEXT:    s_setpc_b64 s[0:1]
 ; GFX11-NEXT:  .LBB7_3: ; %bb2
@@ -953,7 +926,7 @@ define amdgpu_kernel void @expand_requires_expand(i32 %cond0) #0 {
 ; GFX12-NEXT:    s_and_b32 vcc_lo, exec_lo, s0
 ; GFX12-NEXT:    s_cbranch_vccnz .LBB7_2
 ; GFX12-NEXT:  ; %bb.1: ; %bb1
-; GFX12-NEXT:    s_load_b32 s0, s[0:1], 0x0
+; GFX12-NEXT:    s_load_b32 s0, s[0:1], 0x0 scope:SCOPE_SYS
 ; GFX12-NEXT:    s_wait_kmcnt 0x0
 ; GFX12-NEXT:    s_cmp_lg_u32 s0, 3
 ; GFX12-NEXT:    s_cselect_b32 s0, -1, 0
@@ -1067,8 +1040,6 @@ define amdgpu_kernel void @uniform_inside_divergent(ptr addrspace(1) %out, i32 %
 ; GFX11-NEXT:  .LBB8_3: ; %endif
 ; GFX11-NEXT:    s_or_b64 exec, exec, s[0:1]
 ; GFX11-NEXT:    s_sleep 5
-; GFX11-NEXT:    s_nop 0
-; GFX11-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX11-NEXT:    s_endpgm
 ;
 ; GFX12-LABEL: uniform_inside_divergent:
@@ -1091,8 +1062,6 @@ define amdgpu_kernel void @uniform_inside_divergent(ptr addrspace(1) %out, i32 %
 ; GFX12-NEXT:  .LBB8_3: ; %endif
 ; GFX12-NEXT:    s_or_b32 exec_lo, exec_lo, s4
 ; GFX12-NEXT:    s_sleep 5
-; GFX12-NEXT:    s_nop 0
-; GFX12-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX12-NEXT:    s_endpgm
 entry:
   %tid = call i32 @llvm.amdgcn.workitem.id.x()
@@ -1186,10 +1155,10 @@ define amdgpu_kernel void @analyze_mask_branch() #0 {
 ; GFX11-NEXT:    s_cbranch_execnz .LBB9_3
 ; GFX11-NEXT:  ; %bb.6: ; %Flow1
 ; GFX11-NEXT:    s_getpc_b64 s[0:1]
-; GFX11-NEXT:  .Lpost_getpc10:
+; GFX11-NEXT:  .Lpost_getpc9:
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
-; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB9_5-.Lpost_getpc10)&4294967295
-; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB9_5-.Lpost_getpc10)>>32
+; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB9_5-.Lpost_getpc9)&4294967295
+; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB9_5-.Lpost_getpc9)>>32
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
 ; GFX11-NEXT:    s_setpc_b64 s[0:1]
 ; GFX11-NEXT:  .LBB9_3: ; %loop.preheader
@@ -1211,10 +1180,10 @@ define amdgpu_kernel void @analyze_mask_branch() #0 {
 ; GFX11-NEXT:  ; %bb.8: ; %loop
 ; GFX11-NEXT:    ; in Loop: Header=BB9_4 Depth=1
 ; GFX11-NEXT:    s_getpc_b64 s[0:1]
-; GFX11-NEXT:  .Lpost_getpc11:
+; GFX11-NEXT:  .Lpost_getpc10:
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
-; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB9_4-.Lpost_getpc11)&4294967295
-; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB9_4-.Lpost_getpc11)>>32
+; GFX11-NEXT:    s_add_u32 s0, s0, (.LBB9_4-.Lpost_getpc10)&4294967295
+; GFX11-NEXT:    s_addc_u32 s1, s1, (.LBB9_4-.Lpost_getpc10)>>32
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
 ; GFX11-NEXT:    s_setpc_b64 s[0:1]
 ; GFX11-NEXT:  .LBB9_5: ; %UnifiedReturnBlock
@@ -1374,10 +1343,10 @@ define amdgpu_kernel void @long_branch_hang(ptr addrspace(1) nocapture %arg, i32
 ; GFX11-NEXT:    s_cbranch_scc1 .LBB10_1
 ; GFX11-NEXT:  ; %bb.8: ; %bb
 ; GFX11-NEXT:    s_getpc_b64 s[8:9]
-; GFX11-NEXT:  .Lpost_getpc12:
+; GFX11-NEXT:  .Lpost_getpc11:
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
-; GFX11-NEXT:    s_add_u32 s8, s8, (.LBB10_2-.Lpost_getpc12)&4294967295
-; GFX11-NEXT:    s_addc_u32 s9, s9, (.LBB10_2-.Lpost_getpc12)>>32
+; GFX11-NEXT:    s_add_u32 s8, s8, (.LBB10_2-.Lpost_getpc11)&4294967295
+; GFX11-NEXT:    s_addc_u32 s9, s9, (.LBB10_2-.Lpost_getpc11)>>32
 ; GFX11-NEXT:    s_waitcnt_depctr 0xfffe
 ; GFX11-NEXT:    s_setpc_b64 s[8:9]
 ; GFX11-NEXT:  .LBB10_1: ; %bb13
@@ -1426,8 +1395,6 @@ define amdgpu_kernel void @long_branch_hang(ptr addrspace(1) nocapture %arg, i32
 ; GFX11-NEXT:    s_add_u32 s0, s2, s0
 ; GFX11-NEXT:    s_addc_u32 s1, s3, s1
 ; GFX11-NEXT:    global_store_b32 v1, v0, s[0:1]
-; GFX11-NEXT:    s_nop 0
-; GFX11-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX11-NEXT:    s_endpgm
 ;
 ; GFX12-LABEL: long_branch_hang:
@@ -1532,13 +1499,10 @@ define amdgpu_kernel void @long_branch_hang(ptr addrspace(1) nocapture %arg, i32
 ; GFX12-NEXT:    s_load_b64 s[2:3], s[2:3], 0x24
 ; GFX12-NEXT:    v_mov_b32_e32 v1, 0
 ; GFX12-NEXT:    s_wait_kmcnt 0x0
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_lshl_b64 s[0:1], s[0:1], 2
 ; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_add_nc_u64 s[0:1], s[2:3], s[0:1]
 ; GFX12-NEXT:    global_store_b32 v1, v0, s[0:1]
-; GFX12-NEXT:    s_nop 0
-; GFX12-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX12-NEXT:    s_endpgm
 bb:
   %tmp = icmp slt i32 %arg2, 9

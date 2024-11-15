@@ -97,6 +97,7 @@ add_llvm_target(AMDGPUCodeGen
   AMDGPURegisterBankInfo.cpp
   AMDGPURegPressAnalysis.cpp
   AMDGPURemoveIncompatibleFunctions.cpp
+  AMDGPUReserveWWMRegs.cpp
   AMDGPUResourceUsageAnalysis.cpp
   AMDGPURewriteOutArguments.cpp
   AMDGPURewriteUndefForPHI.cpp
@@ -106,6 +107,7 @@ add_llvm_target(AMDGPUCodeGen
   AMDGPUTargetMachine.cpp
   AMDGPUTargetObjectFile.cpp
   AMDGPUTargetTransformInfo.cpp
+  AMDGPUWaitSGPRHazards.cpp
   AMDGPUUnifyDivergentExitNodes.cpp
   AMDGPUUnifyMetadata.cpp
   R600MachineCFGStructurizer.cpp

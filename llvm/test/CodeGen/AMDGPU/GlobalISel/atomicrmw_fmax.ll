@@ -624,7 +624,6 @@ define double @global_agent_atomic_fmax_ret_f64__amdgpu_no_fine_grained_memory(p
 ; GFX12-NEXT:  ; %bb.2: ; %atomicrmw.end
 ; GFX12-NEXT:    s_or_b32 exec_lo, exec_lo, s0
 ; GFX12-NEXT:    v_dual_mov_b32 v0, v4 :: v_dual_mov_b32 v1, v5
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX940-LABEL: global_agent_atomic_fmax_ret_f64__amdgpu_no_fine_grained_memory:
@@ -780,7 +779,6 @@ define void @global_agent_atomic_fmax_noret_f64__amdgpu_no_fine_grained_memory(p
 ; GFX12-NEXT:    s_cbranch_execnz .LBB7_1
 ; GFX12-NEXT:  ; %bb.2: ; %atomicrmw.end
 ; GFX12-NEXT:    s_or_b32 exec_lo, exec_lo, s0
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX940-LABEL: global_agent_atomic_fmax_noret_f64__amdgpu_no_fine_grained_memory:
@@ -1212,7 +1210,6 @@ define double @flat_agent_atomic_fmax_ret_f64__amdgpu_no_fine_grained_memory(ptr
 ; GFX12-NEXT:  ; %bb.2: ; %atomicrmw.end
 ; GFX12-NEXT:    s_or_b32 exec_lo, exec_lo, s0
 ; GFX12-NEXT:    v_dual_mov_b32 v0, v4 :: v_dual_mov_b32 v1, v5
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX940-LABEL: flat_agent_atomic_fmax_ret_f64__amdgpu_no_fine_grained_memory:
@@ -1332,7 +1329,7 @@ define double @flat_agent_atomic_fmax_ret_f64__amdgpu_no_fine_grained_memory(ptr
 ; GFX7-NEXT:    s_waitcnt vmcnt(0) lgkmcnt(0)
 ; GFX7-NEXT:    buffer_wbinvl1
 ; GFX7-NEXT:    s_setpc_b64 s[30:31]
-  %result = atomicrmw fmax ptr %ptr, double %val syncscope("agent") seq_cst, !amdgpu.no.fine.grained.memory !0
+  %result = atomicrmw fmax ptr %ptr, double %val syncscope("agent") seq_cst, !noalias.addrspace !1, !amdgpu.no.fine.grained.memory !0
   ret double %result
 }
 
@@ -1366,7 +1363,6 @@ define void @flat_agent_atomic_fmax_noret_f64__amdgpu_no_fine_grained_memory(ptr
 ; GFX12-NEXT:    s_cbranch_execnz .LBB11_1
 ; GFX12-NEXT:  ; %bb.2: ; %atomicrmw.end
 ; GFX12-NEXT:    s_or_b32 exec_lo, exec_lo, s0
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX940-LABEL: flat_agent_atomic_fmax_noret_f64__amdgpu_no_fine_grained_memory:
@@ -1482,7 +1478,7 @@ define void @flat_agent_atomic_fmax_noret_f64__amdgpu_no_fine_grained_memory(ptr
 ; GFX7-NEXT:    s_waitcnt vmcnt(0) lgkmcnt(0)
 ; GFX7-NEXT:    buffer_wbinvl1
 ; GFX7-NEXT:    s_setpc_b64 s[30:31]
-  %unused = atomicrmw fmax ptr %ptr, double %val syncscope("agent") seq_cst, !amdgpu.no.fine.grained.memory !0
+  %unused = atomicrmw fmax ptr %ptr, double %val syncscope("agent") seq_cst, !noalias.addrspace !1, !amdgpu.no.fine.grained.memory !0
   ret void
 }
 
@@ -1862,14 +1858,12 @@ define double @buffer_fat_ptr_agent_atomic_fmax_ret_f64__amdgpu_no_fine_grained_
 ; GFX12-NEXT:    s_wait_loadcnt 0x0
 ; GFX12-NEXT:    global_inv scope:SCOPE_DEV
 ; GFX12-NEXT:    v_cmp_eq_u64_e32 vcc_lo, v[0:1], v[9:10]
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_or_b32 s4, vcc_lo, s4
 ; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_and_not1_b32 exec_lo, exec_lo, s4
 ; GFX12-NEXT:    s_cbranch_execnz .LBB14_1
 ; GFX12-NEXT:  ; %bb.2: ; %atomicrmw.end
 ; GFX12-NEXT:    s_or_b32 exec_lo, exec_lo, s4
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX940-LABEL: buffer_fat_ptr_agent_atomic_fmax_ret_f64__amdgpu_no_fine_grained_memory:
@@ -2054,14 +2048,12 @@ define void @buffer_fat_ptr_agent_atomic_fmax_noret_f64__amdgpu_no_fine_grained_
 ; GFX12-NEXT:    global_inv scope:SCOPE_DEV
 ; GFX12-NEXT:    v_cmp_eq_u64_e32 vcc_lo, v[7:8], v[2:3]
 ; GFX12-NEXT:    v_dual_mov_b32 v2, v7 :: v_dual_mov_b32 v3, v8
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_or_b32 s4, vcc_lo, s4
 ; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_and_not1_b32 exec_lo, exec_lo, s4
 ; GFX12-NEXT:    s_cbranch_execnz .LBB15_1
 ; GFX12-NEXT:  ; %bb.2: ; %atomicrmw.end
 ; GFX12-NEXT:    s_or_b32 exec_lo, exec_lo, s4
-; GFX12-NEXT:    s_wait_alu 0xfffe
 ; GFX12-NEXT:    s_setpc_b64 s[30:31]
 ;
 ; GFX940-LABEL: buffer_fat_ptr_agent_atomic_fmax_noret_f64__amdgpu_no_fine_grained_memory:
@@ -2215,3 +2207,4 @@ define void @buffer_fat_ptr_agent_atomic_fmax_noret_f64__amdgpu_no_fine_grained_
 }
 
 !0 = !{}
+!1 = !{i32 5, i32 6}

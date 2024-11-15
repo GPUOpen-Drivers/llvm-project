@@ -135,8 +135,6 @@ define amdgpu_ps void @test_waterfall_readlane(i32 addrspace(1)* inreg %out, <2 
 ; GFX1150-NEXT:  ; %bb.2:
 ; GFX1150-NEXT:    s_mov_b64 exec, s[2:3]
 ; GFX1150-NEXT:    global_store_b32 v2, v3, s[0:1]
-; GFX1150-NEXT:    s_nop 0
-; GFX1150-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX1150-NEXT:    s_endpgm
   %gep.in = getelementptr <2 x i32>, <2 x i32> addrspace(1)* %in, i32 %tid
   %args = load <2 x i32>, <2 x i32> addrspace(1)* %gep.in
@@ -703,8 +701,6 @@ define amdgpu_ps void @test_multiple_groups(i32 addrspace(1)* inreg %out1, i32 a
 ; GFX1150-NEXT:  ; %bb.4:
 ; GFX1150-NEXT:    s_mov_b64 exec, s[0:1]
 ; GFX1150-NEXT:    global_store_b32 v3, v0, s[2:3]
-; GFX1150-NEXT:    s_nop 0
-; GFX1150-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX1150-NEXT:    s_endpgm
   %wf_token = call i32 @llvm.amdgcn.waterfall.begin.i32(i32 0, i32 %idx1)
   %readlane1 = call i32 @llvm.amdgcn.waterfall.readfirstlane.i32.i32(i32 %wf_token, i32 %idx1)
@@ -1319,8 +1315,6 @@ define amdgpu_ps void @test_waterfall_non_uniform_img_single_store(<8 x i32> add
 ; GFX1150-NEXT:    s_xor_b64 exec, exec, s[8:9]
 ; GFX1150-NEXT:    s_cbranch_execnz .LBB6_1
 ; GFX1150-NEXT:  ; %bb.2:
-; GFX1150-NEXT:    s_nop 0
-; GFX1150-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX1150-NEXT:    s_endpgm
   %ptr = getelementptr <8 x i32>, <8 x i32> addrspace(4)* %in, i32 %index
   %rsrc = load <8 x i32>, <8 x i32> addrspace(4) * %ptr, align 32
@@ -1359,8 +1353,6 @@ define amdgpu_ps void @test_remove_waterfall_last_use(<8 x i32> addrspace(4)* in
 ; GFX1150-NEXT:    s_load_b256 s[0:7], s[0:1], 0x0
 ; GFX1150-NEXT:    s_waitcnt lgkmcnt(0)
 ; GFX1150-NEXT:    image_store v[2:5], v1, s[0:7] dmask:0xf dim:SQ_RSRC_IMG_1D unorm
-; GFX1150-NEXT:    s_nop 0
-; GFX1150-NEXT:    s_sendmsg sendmsg(MSG_DEALLOC_VGPRS)
 ; GFX1150-NEXT:    s_endpgm
   %rsrc = load <8 x i32>, <8 x i32> addrspace(4) * %in, align 32
   %wf_token = call i32 @llvm.amdgcn.waterfall.begin.i32(i32 0, i32 %index)
@@ -4116,10 +4108,10 @@ define amdgpu_gfx i32 @test_indirect_call_vgpr_ptr_arg_and_reuse(i32 %i, i32 %fp
 ; PRE-GFX10-NEXT:    v_writelane_b32 v40, s8, 4
 ; PRE-GFX10-NEXT:    v_writelane_b32 v40, s9, 5
 ; PRE-GFX10-NEXT:    v_writelane_b32 v40, s30, 6
-; PRE-GFX10-NEXT:    v_writelane_b32 v40, s31, 7
 ; PRE-GFX10-NEXT:    s_mov_b32 s5, 0
 ; PRE-GFX10-NEXT:    s_mov_b64 s[6:7], exec
 ; PRE-GFX10-NEXT:    s_addk_i32 s32, 0x400
+; PRE-GFX10-NEXT:    v_writelane_b32 v40, s31, 7
 ; PRE-GFX10-NEXT:  .LBB18_1: ; =>This Inner Loop Header: Depth=1
 ; PRE-GFX10-NEXT:    v_readfirstlane_b32 s4, v1
 ; PRE-GFX10-NEXT:    v_cmp_eq_u32_e64 s[34:35], s4, v1

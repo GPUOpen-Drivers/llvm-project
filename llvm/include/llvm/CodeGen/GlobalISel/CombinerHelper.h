@@ -321,6 +321,9 @@ public:
   bool matchCombineMulToShl(MachineInstr &MI, unsigned &ShiftVal);
   void applyCombineMulToShl(MachineInstr &MI, unsigned &ShiftVal);
 
+  // Transform a G_SUB with constant on the RHS to G_ADD.
+  bool matchCombineSubToAdd(MachineInstr &MI, BuildFnTy &MatchInfo);
+
   // Transform a G_SHL with an extended source into a narrower shift if
   // possible.
   bool matchCombineShlOfExtend(MachineInstr &MI, RegisterImmPair &MatchData);
@@ -917,6 +920,10 @@ public:
 
   bool matchCanonicalizeICmp(const MachineInstr &MI, BuildFnTy &MatchInfo);
   bool matchCanonicalizeFCmp(const MachineInstr &MI, BuildFnTy &MatchInfo);
+
+  // unmerge_values(anyext(build vector)) -> build vector(anyext)
+  bool matchUnmergeValuesAnyExtBuildVector(const MachineInstr &MI,
+                                           BuildFnTy &MatchInfo);
 
 private:
   /// Checks for legality of an indexed variant of \p LdSt.

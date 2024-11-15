@@ -118,8 +118,6 @@ def Debug : Package<"debug">, Hidden;
 
 def CloneDetectionAlpha : Package<"clone">, ParentPackage<Alpha>;
 
-def NonDeterminismAlpha : Package<"nondeterminism">, ParentPackage<Alpha>;
-
 def Fuchsia : Package<"fuchsia">;
 def FuchsiaAlpha : Package<"fuchsia">, ParentPackage<Alpha>;
 
@@ -1703,23 +1701,13 @@ def TaintedAllocChecker: Checker<"TaintedAlloc">,
   Dependencies<[DynamicMemoryModeling, TaintPropagationChecker]>,
   Documentation<HasDocumentation>;
 
+def TaintedDivChecker: Checker<"TaintedDiv">,
+  HelpText<"Check for divisions where the denominator is tainted "
+           "(attacker controlled) and might be 0.">,
+  Dependencies<[TaintPropagationChecker]>,
+  Documentation<HasDocumentation>;
+
 } // end "optin.taint"
-
-//===----------------------------------------------------------------------===//
-// NonDeterminism checkers.
-//===----------------------------------------------------------------------===//
-
-let ParentPackage = NonDeterminismAlpha in {
-
-def PointerIterationChecker : Checker<"PointerIteration">,
-  HelpText<"Checks for non-determinism caused by iteration of unordered containers of pointers">,
-  Documentation<HasDocumentation>;
-
-def PointerSortingChecker : Checker<"PointerSorting">,
-  HelpText<"Check for non-determinism caused by sorting of pointers">,
-  Documentation<HasDocumentation>;
-
-} // end alpha.nondeterminism
 
 //===----------------------------------------------------------------------===//
 // Fuchsia checkers.
@@ -1774,6 +1762,10 @@ def UncountedCallArgsChecker : Checker<"UncountedCallArgsChecker">,
 
 def UncountedLocalVarsChecker : Checker<"UncountedLocalVarsChecker">,
   HelpText<"Check uncounted local variables.">,
+  Documentation<HasDocumentation>;
+
+def UncheckedLocalVarsChecker : Checker<"UncheckedLocalVarsChecker">,
+  HelpText<"Check unchecked local variables.">,
   Documentation<HasDocumentation>;
 
 } // end alpha.webkit

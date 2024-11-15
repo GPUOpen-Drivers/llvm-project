@@ -1552,7 +1552,7 @@ define void @scalarize_induction_variable_04(ptr %a, ptr %p, i32 %n) {
 ; CHECK-NEXT:    [[MIN_ITERS_CHECK:%.*]] = icmp ult i64 [[TMP2]], 2
 ; CHECK-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_MEMCHECK:%.*]]
 ; CHECK:       vector.memcheck:
-; CHECK-NEXT:    [[SCEVGEP:%.*]] = getelementptr i8, ptr [[P:%.*]], i64 4
+; CHECK-NEXT:    [[SCEVGEP:%.*]] = getelementptr nuw i8, ptr [[P:%.*]], i64 4
 ; CHECK-NEXT:    [[TMP3:%.*]] = add i32 [[N]], -1
 ; CHECK-NEXT:    [[TMP4:%.*]] = zext i32 [[TMP3]] to i64
 ; CHECK-NEXT:    [[TMP5:%.*]] = shl nuw nsw i64 [[TMP4]], 3
@@ -1617,7 +1617,7 @@ define void @scalarize_induction_variable_04(ptr %a, ptr %p, i32 %n) {
 ; IND-NEXT:    [[MIN_ITERS_CHECK:%.*]] = icmp eq i32 [[TMP0]], 0
 ; IND-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_MEMCHECK:%.*]]
 ; IND:       vector.memcheck:
-; IND-NEXT:    [[SCEVGEP:%.*]] = getelementptr i8, ptr [[P:%.*]], i64 4
+; IND-NEXT:    [[SCEVGEP:%.*]] = getelementptr nuw i8, ptr [[P:%.*]], i64 4
 ; IND-NEXT:    [[TMP3:%.*]] = add i32 [[N]], -1
 ; IND-NEXT:    [[TMP4:%.*]] = zext i32 [[TMP3]] to i64
 ; IND-NEXT:    [[TMP5:%.*]] = shl nuw nsw i64 [[TMP4]], 3
@@ -1680,7 +1680,7 @@ define void @scalarize_induction_variable_04(ptr %a, ptr %p, i32 %n) {
 ; UNROLL-NEXT:    [[MIN_ITERS_CHECK:%.*]] = icmp ult i32 [[TMP0]], 3
 ; UNROLL-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_MEMCHECK:%.*]]
 ; UNROLL:       vector.memcheck:
-; UNROLL-NEXT:    [[SCEVGEP:%.*]] = getelementptr i8, ptr [[P:%.*]], i64 4
+; UNROLL-NEXT:    [[SCEVGEP:%.*]] = getelementptr nuw i8, ptr [[P:%.*]], i64 4
 ; UNROLL-NEXT:    [[TMP3:%.*]] = add i32 [[N]], -1
 ; UNROLL-NEXT:    [[TMP4:%.*]] = zext i32 [[TMP3]] to i64
 ; UNROLL-NEXT:    [[TMP5:%.*]] = shl nuw nsw i64 [[TMP4]], 3
@@ -1757,7 +1757,7 @@ define void @scalarize_induction_variable_04(ptr %a, ptr %p, i32 %n) {
 ; UNROLL-NO-IC-NEXT:    [[MIN_ITERS_CHECK:%.*]] = icmp ult i64 [[TMP2]], 4
 ; UNROLL-NO-IC-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_MEMCHECK:%.*]]
 ; UNROLL-NO-IC:       vector.memcheck:
-; UNROLL-NO-IC-NEXT:    [[SCEVGEP:%.*]] = getelementptr i8, ptr [[P:%.*]], i64 4
+; UNROLL-NO-IC-NEXT:    [[SCEVGEP:%.*]] = getelementptr nuw i8, ptr [[P:%.*]], i64 4
 ; UNROLL-NO-IC-NEXT:    [[TMP3:%.*]] = add i32 [[N]], -1
 ; UNROLL-NO-IC-NEXT:    [[TMP4:%.*]] = zext i32 [[TMP3]] to i64
 ; UNROLL-NO-IC-NEXT:    [[TMP5:%.*]] = shl nuw nsw i64 [[TMP4]], 3
@@ -1836,7 +1836,7 @@ define void @scalarize_induction_variable_04(ptr %a, ptr %p, i32 %n) {
 ; INTERLEAVE-NEXT:    [[MIN_ITERS_CHECK:%.*]] = icmp ult i32 [[TMP0]], 8
 ; INTERLEAVE-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_MEMCHECK:%.*]]
 ; INTERLEAVE:       vector.memcheck:
-; INTERLEAVE-NEXT:    [[SCEVGEP:%.*]] = getelementptr i8, ptr [[P:%.*]], i64 4
+; INTERLEAVE-NEXT:    [[SCEVGEP:%.*]] = getelementptr nuw i8, ptr [[P:%.*]], i64 4
 ; INTERLEAVE-NEXT:    [[TMP3:%.*]] = add i32 [[N]], -1
 ; INTERLEAVE-NEXT:    [[TMP4:%.*]] = zext i32 [[TMP3]] to i64
 ; INTERLEAVE-NEXT:    [[TMP5:%.*]] = shl nuw nsw i64 [[TMP4]], 3
@@ -5563,8 +5563,8 @@ define i64 @trunc_with_first_order_recurrence() {
 ; CHECK:       scalar.ph:
 ; CHECK-NEXT:    [[BC_RESUME_VAL:%.*]] = phi i64 [ 113, [[MIDDLE_BLOCK]] ], [ 1, [[ENTRY:%.*]] ]
 ; CHECK-NEXT:    [[BC_RESUME_VAL1:%.*]] = phi i32 [ 113, [[MIDDLE_BLOCK]] ], [ 1, [[ENTRY]] ]
-; CHECK-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ 42, [[ENTRY]] ]
 ; CHECK-NEXT:    [[BC_MERGE_RDX:%.*]] = phi i64 [ [[TMP12]], [[MIDDLE_BLOCK]] ], [ 0, [[ENTRY]] ]
+; CHECK-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ 42, [[ENTRY]] ]
 ; CHECK-NEXT:    br label [[LOOP:%.*]]
 ; CHECK:       exit:
 ; CHECK-NEXT:    [[DOTLCSSA:%.*]] = phi i64 [ [[C23:%.*]], [[LOOP]] ], [ [[TMP12]], [[MIDDLE_BLOCK]] ]
@@ -5625,8 +5625,8 @@ define i64 @trunc_with_first_order_recurrence() {
 ; IND-NEXT:    [[VECTOR_RECUR_EXTRACT:%.*]] = extractelement <2 x i32> [[VEC_IND2]], i64 1
 ; IND-NEXT:    br i1 false, label [[EXIT:%.*]], label [[SCALAR_PH]]
 ; IND:       scalar.ph:
-; IND-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY:%.*]] ]
-; IND-NEXT:    [[BC_MERGE_RDX:%.*]] = phi i64 [ [[TMP12]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY]] ]
+; IND-NEXT:    [[BC_MERGE_RDX:%.*]] = phi i64 [ [[TMP12]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY:%.*]] ]
+; IND-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY]] ]
 ; IND-NEXT:    br label [[LOOP:%.*]]
 ; IND:       exit:
 ; IND-NEXT:    [[DOTLCSSA:%.*]] = phi i64 [ [[C23:%.*]], [[LOOP]] ], [ poison, [[MIDDLE_BLOCK]] ]
@@ -5703,8 +5703,8 @@ define i64 @trunc_with_first_order_recurrence() {
 ; UNROLL-NEXT:    [[VECTOR_RECUR_EXTRACT:%.*]] = extractelement <2 x i32> [[STEP_ADD7]], i64 1
 ; UNROLL-NEXT:    br i1 false, label [[EXIT:%.*]], label [[SCALAR_PH]]
 ; UNROLL:       scalar.ph:
-; UNROLL-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY:%.*]] ]
-; UNROLL-NEXT:    [[BC_MERGE_RDX:%.*]] = phi i64 [ [[TMP23]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY]] ]
+; UNROLL-NEXT:    [[BC_MERGE_RDX:%.*]] = phi i64 [ [[TMP23]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY:%.*]] ]
+; UNROLL-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY]] ]
 ; UNROLL-NEXT:    br label [[LOOP:%.*]]
 ; UNROLL:       exit:
 ; UNROLL-NEXT:    [[DOTLCSSA:%.*]] = phi i64 [ [[C23:%.*]], [[LOOP]] ], [ poison, [[MIDDLE_BLOCK]] ]
@@ -5783,8 +5783,8 @@ define i64 @trunc_with_first_order_recurrence() {
 ; UNROLL-NO-IC:       scalar.ph:
 ; UNROLL-NO-IC-NEXT:    [[BC_RESUME_VAL:%.*]] = phi i64 [ 113, [[MIDDLE_BLOCK]] ], [ 1, [[ENTRY:%.*]] ]
 ; UNROLL-NO-IC-NEXT:    [[BC_RESUME_VAL1:%.*]] = phi i32 [ 113, [[MIDDLE_BLOCK]] ], [ 1, [[ENTRY]] ]
-; UNROLL-NO-IC-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ 42, [[ENTRY]] ]
 ; UNROLL-NO-IC-NEXT:    [[BC_MERGE_RDX:%.*]] = phi i64 [ [[TMP23]], [[MIDDLE_BLOCK]] ], [ 0, [[ENTRY]] ]
+; UNROLL-NO-IC-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ 42, [[ENTRY]] ]
 ; UNROLL-NO-IC-NEXT:    br label [[LOOP:%.*]]
 ; UNROLL-NO-IC:       exit:
 ; UNROLL-NO-IC-NEXT:    [[DOTLCSSA:%.*]] = phi i64 [ [[C23:%.*]], [[LOOP]] ], [ [[TMP23]], [[MIDDLE_BLOCK]] ]
@@ -5861,8 +5861,8 @@ define i64 @trunc_with_first_order_recurrence() {
 ; INTERLEAVE-NEXT:    [[VECTOR_RECUR_EXTRACT:%.*]] = extractelement <4 x i32> [[STEP_ADD7]], i64 3
 ; INTERLEAVE-NEXT:    br i1 false, label [[EXIT:%.*]], label [[SCALAR_PH]]
 ; INTERLEAVE:       scalar.ph:
-; INTERLEAVE-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY:%.*]] ]
-; INTERLEAVE-NEXT:    [[BC_MERGE_RDX:%.*]] = phi i64 [ [[TMP23]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY]] ]
+; INTERLEAVE-NEXT:    [[BC_MERGE_RDX:%.*]] = phi i64 [ [[TMP23]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY:%.*]] ]
+; INTERLEAVE-NEXT:    [[SCALAR_RECUR_INIT:%.*]] = phi i32 [ [[VECTOR_RECUR_EXTRACT]], [[MIDDLE_BLOCK]] ], [ poison, [[ENTRY]] ]
 ; INTERLEAVE-NEXT:    br label [[LOOP:%.*]]
 ; INTERLEAVE:       exit:
 ; INTERLEAVE-NEXT:    [[DOTLCSSA:%.*]] = phi i64 [ [[C23:%.*]], [[LOOP]] ], [ poison, [[MIDDLE_BLOCK]] ]
