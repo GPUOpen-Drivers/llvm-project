@@ -16,6 +16,7 @@
 #include "AMDGPU.h"
 #include "AMDGPUGlobalISelUtils.h"
 #include "AMDGPUInstrInfo.h"
+#include "AMDGPUMemoryUtils.h"
 #include "AMDGPUTargetMachine.h"
 #include "MCTargetDesc/AMDGPUMCTargetDesc.h"
 #include "SIInstrInfo.h"
@@ -23,7 +24,6 @@
 #include "SIRegisterInfo.h"
 #include "Utils/AMDGPUBaseInfo.h"
 #include "llvm/ADT/ScopeExit.h"
-#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerHelper.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
@@ -1040,10 +1040,13 @@ AMDGPULegalizerInfo::AMDGPULegalizerInfo(const GCNSubtarget &ST_,
       .lower();
   }
 
-  getActionDefinitionsBuilder(G_FPTRUNC)
-    .legalFor({{S32, S64}, {S16, S32}})
-    .scalarize(0)
-    .lower();
+  auto &FPTruncActions = getActionDefinitionsBuilder(G_FPTRUNC);
+  if (ST.hasCvtPkF16F32Inst())
+    FPTruncActions.legalFor(
+        {{S32, S64}, {S16, S32}, {V2S16, V2S32}, {V2S16, V2S64}});
+  else
+    FPTruncActions.legalFor({{S32, S64}, {S16, S32}});
+  FPTruncActions.scalarize(0).lower();
 
   getActionDefinitionsBuilder(G_FPEXT)
     .legalFor({{S64, S32}, {S32, S16}})
@@ -2975,7 +2978,8 @@ bool AMDGPULegalizerInfo::legalizeGlobalValue(
 
   if (AS == AMDGPUAS::LOCAL_ADDRESS || AS == AMDGPUAS::REGION_ADDRESS) {
     if (!MFI->isModuleEntryFunction() &&
-        GV->getName() != "llvm.amdgcn.module.lds") {
+        GV->getName() != "llvm.amdgcn.module.lds" &&
+        !AMDGPU::isNamedBarrier(*cast<GlobalVariable>(GV))) {
       const Function &Fn = MF.getFunction();
       DiagnosticInfoUnsupported BadLDSDecl(
         Fn, "local memory global used by non-kernel function", MI.getDebugLoc(),
