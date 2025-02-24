@@ -976,8 +976,7 @@ struct Waitcnt {
   Waitcnt() = default;
   // Pre-gfx12 constructor.
   Waitcnt(unsigned VmCnt, unsigned ExpCnt, unsigned LgkmCnt, unsigned VsCnt)
-      : LoadCnt(VmCnt), ExpCnt(ExpCnt), DsCnt(LgkmCnt), StoreCnt(VsCnt),
-        SampleCnt(~0u), BvhCnt(~0u), KmCnt(~0u) {}
+      : LoadCnt(VmCnt), ExpCnt(ExpCnt), DsCnt(LgkmCnt), StoreCnt(VsCnt) {}
 
   // gfx12+ constructor.
   Waitcnt(unsigned LoadCnt, unsigned ExpCnt, unsigned DsCnt, unsigned StoreCnt,
@@ -1199,7 +1198,7 @@ unsigned encodeFieldVaSdst(unsigned VaSdst);
 unsigned encodeFieldVaSdst(unsigned Encoded, unsigned VaSdst);
 
 /// \returns \p VaVcc as an encoded Depctr immediate.
-unsigned encodeFieldVaVcc(unsigned VaSdst);
+unsigned encodeFieldVaVcc(unsigned VaVcc);
 
 /// \returns \p Encoded combined with encoded \p VaVcc.
 unsigned encodeFieldVaVcc(unsigned Encoded, unsigned VaVcc);

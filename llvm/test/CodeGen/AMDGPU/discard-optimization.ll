@@ -7,7 +7,7 @@
 
 ; GCN-LABEL: {{^}}if_with_kill_true_cond:
 ; GCN:      v_cmp_ne_u32_e32 vcc,
-; GCN-NEXT: s_xor_b64 [[KILLED:s\[[0-9+]:[0-9+]\]]], vcc, exec
+; GCN-NEXT: s_andn2_b64 [[KILLED:s\[[0-9+]:[0-9+]\]]], exec, vcc
 ; GCN-NEXT: s_andn2_b64 [[LIVE:s\[[0-9+]:[0-9+]\]]], exec, [[KILLED]]
 ; GCN-NEXT: s_cbranch_scc0
 ;
@@ -32,7 +32,7 @@ endif:
 
 ; GCN-LABEL: {{^}}if_with_kill_false_cond:
 ; GCN:      v_cmp_eq_u32_e32 vcc,
-; GCN-NEXT: s_xor_b64 [[KILLED:s\[[0-9+]:[0-9+]\]]], vcc, exec
+; GCN-NEXT: s_andn2_b64 [[KILLED:s\[[0-9+]:[0-9+]\]]], exec, vcc
 ; GCN-NEXT: s_andn2_b64 [[LIVE:s\[[0-9+]:[0-9+]\]]], exec, [[KILLED]]
 ; GCN-NEXT: s_cbranch_scc0
 define amdgpu_ps void @if_with_kill_false_cond(i32 %arg) {
@@ -208,7 +208,7 @@ define amdgpu_ps <4 x float> @wqm_kill_to_demote2(<8 x i32> inreg %rsrc, <4 x i3
 ; GCN: image_sample
 define amdgpu_ps void @sinking_image_sample(float %arg0, <8 x i32> inreg %arg1, <4 x i32> inreg %arg2, float %arg3) {
 .entry:
-  %tmp0 = call <4 x float> @llvm.amdgcn.image.sample.1d.v4f32.f32(i32 7, float %arg0, <8 x i32> %arg1, <4 x i32> %arg2, i1 false, i32 0, i32 0)
+  %tmp0 = call <4 x float> @llvm.amdgcn.image.sample.l.1d.v4f32.f32(i32 7, float %arg0, float %arg0, <8 x i32> %arg1, <4 x i32> %arg2, i1 false, i32 0, i32 0)
   %tmp1 = fcmp olt float %arg3, 0.000000e+00
   br i1 %tmp1, label %kill_br, label %next
 
@@ -355,4 +355,5 @@ attributes #1 = { nounwind readnone }
 declare void @llvm.amdgcn.exp.f32(i32 immarg, i32 immarg, float, float, float, float, i1 immarg, i1 immarg) #0
 declare void @llvm.amdgcn.kill(i1) #0
 declare <4 x float> @llvm.amdgcn.image.sample.1d.v4f32.f32(i32, float, <8 x i32>, <4 x i32>, i1, i32, i32) #1
+declare <4 x float> @llvm.amdgcn.image.sample.l.1d.v4f32.f32(i32, float, float, <8 x i32>, <4 x i32>, i1, i32, i32) #1
 
