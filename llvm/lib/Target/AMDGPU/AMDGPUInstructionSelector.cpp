@@ -4103,6 +4103,7 @@ bool AMDGPUInstructionSelector::select(MachineInstr &I) {
   }
   case AMDGPU::G_AMDGPU_BVH_DUAL_INTERSECT_RAY:
   case AMDGPU::G_AMDGPU_INTRIN_BVH_INTERSECT_RAY:
+  case AMDGPU::G_AMDGPU_BVH8_INTERSECT_RAY:
     return selectBVHIntrinsic(I);
   case AMDGPU::G_SBFX:
   case AMDGPU::G_UBFX:
