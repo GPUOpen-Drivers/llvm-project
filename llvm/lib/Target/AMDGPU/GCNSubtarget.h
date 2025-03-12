@@ -190,6 +190,8 @@ protected:
   /// indicates a lack of S_CLAUSE support.
   unsigned MaxHardClauseLength = 0;
   bool SupportsSRAMECC = false;
+  bool DynamicVGPR = false;
+  bool DynamicVGPRBlockSize32 = false;
 
   // This should not be used directly. 'TargetID' tracks the dynamic settings
   // for SRAMECC.
@@ -255,6 +257,7 @@ protected:
   bool HasMinimum3Maximum3PKF16 = false;
 
   bool RequiresCOV6 = false;
+  bool UseBlockVGPROpsForCSR = false;
 
   // Dummy feature to use for assembler in tablegen.
   bool FeatureDisable = false;
@@ -1270,6 +1273,8 @@ public:
 
   bool requiresCodeObjectV6() const { return RequiresCOV6; }
 
+  bool useVGPRBlockOpsForCSR() const { return UseBlockVGPROpsForCSR; }
+
   bool hasVALUMaskWriteHazard() const { return getGeneration() == GFX11; }
 
   bool hasVALUReadSGPRHazard() const { return getGeneration() == GFX12; }
@@ -1656,6 +1661,8 @@ public:
     // the nop.
     return true;
   }
+
+  bool isDynamicVGPREnabled() const { return DynamicVGPR; }
 
   bool requiresDisjointEarlyClobberAndUndef() const override {
     // AMDGPU doesn't care if early-clobber and undef operands are allocated

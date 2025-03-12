@@ -691,36 +691,42 @@ def : GCNPat<
   (SI_TCRETURN_GFX Gfx_CCR_SGPR_64:$src0, (i64 0), i32imm:$fpdiff)
 >;
 
-// Pseudo for the llvm.amdgcn.cs.chain intrinsic.
-// This is essentially a tail call, but it also takes a mask to put in EXEC
-// right before jumping to the callee.
-class SI_CS_CHAIN_TC<
+// Pseudos for the llvm.amdgcn.cs.chain intrinsic.
+multiclass SI_CS_CHAIN_TC<
     ValueType execvt, Predicate wavesizepred,
-    RegisterOperand execrc = getSOPSrcForVT<execvt>.ret>
-    : SPseudoInstSI <(outs),
-      (ins CCR_SGPR_64:$src0, unknown:$callee, i32imm:$fpdiff, execrc:$exec)> {
-  let FixedSize = 0;
-  let isCall = 1;
-  let isTerminator = 1;
-  let isBarrier = 1;
-  let isReturn = 1;
-  let UseNamedOperandTable = 1;
-  let SchedRW = [WriteBranch];
-  let isConvergent = 1;
+    RegisterOperand execrc = getSOPSrcForVT<execvt>.ret> {
+  let FixedSize = 0,
+      isCall = 1,
+      isTerminator = 1,
+      isBarrier = 1,
+      isReturn = 1,
+      UseNamedOperandTable = 1,
+      SchedRW = [WriteBranch],
+      isConvergent = 1,
+      WaveSizePredicate = wavesizepred in {
+  // This is essentially a tail call, but it also takes a mask to put in EXEC
+  // right before jumping to the callee.
+  def NAME: SPseudoInstSI <(outs),
+      (ins CCR_SGPR_64:$src0, unknown:$callee, i32imm:$fpdiff, execrc:$exec)>;
 
-  let WaveSizePredicate = wavesizepred;
+  // Same as above, but it will first try to reallocate the VGPRs, and choose an
+  // EXEC mask and a callee depending on the success of the reallocation attempt.
+  def _DVGPR : SPseudoInstSI <(outs),
+      (ins CCR_SGPR_64:$src0, i64imm:$callee, i32imm:$fpdiff, execrc:$exec,
+           SSrc_b32:$numvgprs, execrc:$fbexec, CCR_SGPR_64:$fbcallee)>;
+  } // End FixedSize = 0 etc
 }
 
-def SI_CS_CHAIN_TC_W32 : SI_CS_CHAIN_TC<i32, isWave32>;
-def SI_CS_CHAIN_TC_W64 : SI_CS_CHAIN_TC<i64, isWave64>;
+defm SI_CS_CHAIN_TC_W32 : SI_CS_CHAIN_TC<i32, isWave32>;
+defm SI_CS_CHAIN_TC_W64 : SI_CS_CHAIN_TC<i64, isWave64>;
 
 // Handle selecting direct & indirect calls via SI_CS_CHAIN_TC_W32/64
 multiclass si_cs_chain_tc_pattern<
   dag callee, ValueType execvt, RegisterOperand execrc, Instruction tc> {
-def : GCNPat<
-  (AMDGPUtc_return_chain i64:$src0, callee, (i32 timm:$fpdiff), execvt:$exec),
-  (tc CCR_SGPR_64:$src0, callee, i32imm:$fpdiff, execrc:$exec)
->;
+  def : GCNPat<
+    (AMDGPUtc_return_chain i64:$src0, callee, (i32 timm:$fpdiff), execvt:$exec),
+    (tc CCR_SGPR_64:$src0, callee, i32imm:$fpdiff, execrc:$exec)
+  >;
 }
 
 multiclass si_cs_chain_tc_patterns<
@@ -734,6 +740,26 @@ multiclass si_cs_chain_tc_patterns<
 
 defm : si_cs_chain_tc_patterns<i32>;
 defm : si_cs_chain_tc_patterns<i64>;
+
+// Match dynamic VGPR case. This is always indirect since we choose the callee
+// dynamically based on the result of the VGPR reallocation, so make sure to
+// drop the callee info if there is any.
+multiclass si_cs_chain_tc_dvgpr_patterns<
+  ValueType execvt, RegisterOperand execrc = getSOPSrcForVT<execvt>.ret,
+  Instruction tc = SI_CS_CHAIN_TC_W32_DVGPR> {
+  let AddedComplexity = 90 in {
+  foreach callee = [ (i64 0), (tglobaladdr) ] in {
+  def : GCNPat<
+    (AMDGPUtc_return_chain i64:$src0, callee, (i32 timm:$fpdiff), execvt:$exec,
+                           i32:$numvgprs, execvt:$fbexec, i64:$fbcallee),
+    (tc CCR_SGPR_64:$src0, (i64 0), i32imm:$fpdiff, execrc:$exec,
+        SSrc_b32:$numvgprs, execrc:$fbexec, CCR_SGPR_64:$fbcallee)
+  >;
+  }
+  } // AddedComplexity
+}
+
+defm : si_cs_chain_tc_dvgpr_patterns<i32>; // On GFX12, dVGPR mode is wave32-only.
 
 def ADJCALLSTACKUP : SPseudoInstSI<
   (outs), (ins i32imm:$amt0, i32imm:$amt1),
@@ -972,13 +998,16 @@ def SI_RESTORE_S32_FROM_VGPR : PseudoInstSI <(outs SReg_32:$sdst),
 // VGPR or AGPR spill instructions. In case of AGPR spilling a temp register
 // needs to be used and an extra instruction to move between VGPR and AGPR.
 // UsesTmp adds to the total size of an expanded spill in this case.
-multiclass SI_SPILL_VGPR <RegisterClass vgpr_class, bit UsesTmp = 0> {
+multiclass SI_SPILL_VGPR <RegisterClass vgpr_class,
+                          bit UsesTmp = 0, bit HasMask = 0> {
   let UseNamedOperandTable = 1, Spill = 1, VALU = 1,
        SchedRW = [WriteVMEM] in {
     def _SAVE : VPseudoInstSI <
       (outs),
-      (ins vgpr_class:$vdata, i32imm:$vaddr,
-           SReg_32:$soffset, i32imm:$offset)> {
+      !con(
+        (ins vgpr_class:$vdata, i32imm:$vaddr,
+             SReg_32:$soffset, i32imm:$offset),
+        !if(HasMask, (ins SReg_32:$mask), (ins)))> {
       let mayStore = 1;
       let mayLoad = 0;
       // (2 * 4) + (8 * num_subregs) bytes maximum
@@ -989,8 +1018,10 @@ multiclass SI_SPILL_VGPR <RegisterClass vgpr_class, bit UsesTmp = 0> {
 
     def _RESTORE : VPseudoInstSI <
       (outs vgpr_class:$vdata),
-      (ins i32imm:$vaddr,
-           SReg_32:$soffset, i32imm:$offset)> {
+      !con(
+        (ins i32imm:$vaddr,
+             SReg_32:$soffset, i32imm:$offset),
+        !if(HasMask, (ins SReg_32:$mask), (ins)))> {
       let mayStore = 0;
       let mayLoad = 1;
 
@@ -1016,6 +1047,12 @@ defm SI_SPILL_V352 : SI_SPILL_VGPR <VReg_352>;
 defm SI_SPILL_V384 : SI_SPILL_VGPR <VReg_384>;
 defm SI_SPILL_V512 : SI_SPILL_VGPR <VReg_512>;
 defm SI_SPILL_V1024 : SI_SPILL_VGPR <VReg_1024>;
+
+let Defs = [M0] in {
+  // Spills a block of 32 VGPRs. M0 will contain a mask describing which
+  // registers in the block need to be transferred.
+  defm SI_BLOCK_SPILL_V1024 : SI_SPILL_VGPR <VReg_1024, 0, 1>;
+}
 
 defm SI_SPILL_A32  : SI_SPILL_VGPR <AGPR_32, 1>;
 defm SI_SPILL_A64  : SI_SPILL_VGPR <AReg_64, 1>;
@@ -4312,9 +4349,25 @@ def G_AMDGPU_INTRIN_IMAGE_STORE_D16 : AMDGPUGenericInstruction {
   let mayStore = 1;
 }
 
-def G_AMDGPU_INTRIN_BVH_INTERSECT_RAY : AMDGPUGenericInstruction {
+def G_AMDGPU_BVH_INTERSECT_RAY : AMDGPUGenericInstruction {
   let OutOperandList = (outs type0:$dst);
-  let InOperandList = (ins unknown:$intrin, variable_ops);
+  let InOperandList = (ins unknown:$opcode, variable_ops);
+  let hasSideEffects = 0;
+  let mayLoad = 1;
+  let mayStore = 0;
+}
+
+def G_AMDGPU_BVH_DUAL_INTERSECT_RAY : AMDGPUGenericInstruction {
+  let OutOperandList = (outs type0:$dst, type1:$ray_origin, type1:$ray_dir);
+  let InOperandList = (ins unknown:$opcode, variable_ops);
+  let hasSideEffects = 0;
+  let mayLoad = 1;
+  let mayStore = 0;
+}
+
+def G_AMDGPU_BVH8_INTERSECT_RAY : AMDGPUGenericInstruction {
+  let OutOperandList = (outs type0:$dst, type1:$ray_origin, type1:$ray_dir);
+  let InOperandList = (ins unknown:$opcode, variable_ops);
   let hasSideEffects = 0;
   let mayLoad = 1;
   let mayStore = 0;
