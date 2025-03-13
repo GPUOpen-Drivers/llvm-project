@@ -1246,7 +1246,7 @@ bool AMDGPUCallLowering::lowerTailCall(
       // On GFX12, we can only change the VGPR allocation for wave32.
       if (!ST.isWave32()) {
         F.getContext().diagnose(DiagnosticInfoUnsupported(
-            F, "Dynamic VGPR mode is only supported for wave32\n"));
+            F, "dynamic VGPR mode is only supported for wave32"));
         return false;
       }
 
@@ -1254,7 +1254,7 @@ bool AMDGPUCallLowering::lowerTailCall(
       assert(FallbackExecArg.Regs.size() == 1 &&
              "Expected single register for fallback EXEC");
       if (!FallbackExecArg.Ty->isIntegerTy(ST.getWavefrontSize())) {
-        LLVM_DEBUG(dbgs() << "Bad type for fallback EXEC");
+        LLVM_DEBUG(dbgs() << "Bad type for fallback EXEC\n");
         return false;
       }
     }
