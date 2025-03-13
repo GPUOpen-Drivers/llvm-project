@@ -3710,6 +3710,7 @@ SDValue SITargetLowering::LowerCall(CallLoweringInfo &CLI,
   SDValue Callee = CLI.Callee;
 
   llvm::SmallVector<SDValue, 6> ChainCallSpecialArgs;
+  bool UsesDynamicVGPRs = false;
   if (IsChainCallConv) {
     // The last arguments should be the value that we need to put in EXEC,
     // followed by the flags and any other arguments with special meanings.
@@ -3758,6 +3759,7 @@ SDValue SITargetLowering::LowerCall(CallLoweringInfo &CLI,
         return lowerUnhandledCall(CLI, InVals, "Expected 3 additional args");
       }
 
+      UsesDynamicVGPRs = true;
       std::for_each(CLI.Args.begin() + ChainCallArgIdx::NumVGPRs,
                     CLI.Args.end(), PushNodeOrTargetConstant);
     }
@@ -4091,7 +4093,8 @@ SDValue SITargetLowering::LowerCall(CallLoweringInfo &CLI,
       break;
     case CallingConv::AMDGPU_CS_Chain:
     case CallingConv::AMDGPU_CS_ChainPreserve:
-      OPC = AMDGPUISD::TC_RETURN_CHAIN;
+      OPC = UsesDynamicVGPRs ? AMDGPUISD::TC_RETURN_CHAIN_DVGPR
+                             : AMDGPUISD::TC_RETURN_CHAIN;
       break;
     }
 
