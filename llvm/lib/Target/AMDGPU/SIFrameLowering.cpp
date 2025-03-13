@@ -1894,7 +1894,6 @@ void SIFrameLowering::determineCalleeSavesSGPR(MachineFunction &MF,
 
 static void assignSlotsUsingVGPRBlocks(MachineFunction &MF,
                                        const GCNSubtarget &ST,
-                                       const TargetRegisterInfo *TRI,
                                        std::vector<CalleeSavedInfo> &CSI,
                                        unsigned &MinCSFrameIndex,
                                        unsigned &MaxCSFrameIndex) {
@@ -1921,8 +1920,8 @@ static void assignSlotsUsingVGPRBlocks(MachineFunction &MF,
     if (!CanUseBlockOps(*CSIt))
       continue;
 
-    // Find all the regs that will fit in a 32-bit block starting at the current
-    // reg and build the mask. It should have 1 for every register that's
+    // Find all the regs that will fit in a 32-bit mask starting at the current
+    // reg and build said mask. It should have 1 for every register that's
     // included, with the current register as the least significant bit.
     uint32_t Mask = 1;
     CSEnd = std::remove_if(
@@ -1935,8 +1934,7 @@ static void assignSlotsUsingVGPRBlocks(MachineFunction &MF,
           }
         });
 
-    const TargetRegisterClass *BlockRegClass =
-        TII->getRegClassForBlockOp(TRI, MF);
+    const TargetRegisterClass *BlockRegClass = &AMDGPU::VReg_1024RegClass;
     Register RegBlock =
         MRI->getMatchingSuperReg(Reg, AMDGPU::sub0, BlockRegClass);
     if (!RegBlock) {
@@ -1990,8 +1988,7 @@ bool SIFrameLowering::assignCalleeSavedSpillSlots(
   bool UseVGPRBlocks = ST.useVGPRBlockOpsForCSR();
 
   if (UseVGPRBlocks)
-    assignSlotsUsingVGPRBlocks(MF, ST, TRI, CSI, MinCSFrameIndex,
-                               MaxCSFrameIndex);
+    assignSlotsUsingVGPRBlocks(MF, ST, CSI, MinCSFrameIndex, MaxCSFrameIndex);
 
   return assignCalleeSavedSpillSlots(MF, TRI, CSI);
 }
@@ -2152,10 +2149,10 @@ bool SIFrameLowering::restoreCalleeSavedRegisters(
     // VGPRs in the register block is reserved (e.g. if it's a WWM register),
     // then the whole block will be marked as reserved and `updateLiveness` will
     // skip it.
-    if (!MBB.isLiveIn(Reg))
-      MBB.addLiveIn(Reg);
+    MBB.addLiveIn(Reg);
   }
 
+  MBB.sortUniqueLiveIns();
   return false;
 }
 
