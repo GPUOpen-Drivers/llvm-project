@@ -32,7 +32,7 @@ class AllocaInst;
 /// Callee saved reg can also be saved to a different register rather than
 /// on the stack by setting DstReg instead of FrameIdx.
 class CalleeSavedInfo {
-  Register Reg;
+  MCRegister Reg;
   union {
     int FrameIdx;
     unsigned DstReg;
@@ -53,32 +53,25 @@ class CalleeSavedInfo {
   /// Flag indicating whether the register is spilled to stack or another
   /// register.
   bool SpilledToReg = false;
-  /// Flag indicating whether this CSI has been handled by the target and can be
-  /// skipped by the generic code in the prolog/epilog inserter.
-  bool IsHandledByTarget = false;
 
 public:
-  explicit CalleeSavedInfo(unsigned R, int FI = 0) : Reg(R), FrameIdx(FI) {}
+  explicit CalleeSavedInfo(MCRegister R, int FI = 0) : Reg(R), FrameIdx(FI) {}
 
   // Accessors.
-  Register getReg()                        const { return Reg; }
+  MCRegister getReg()                      const { return Reg; }
   int getFrameIdx()                        const { return FrameIdx; }
-  unsigned getDstReg()                     const { return DstReg; }
-  void setReg(MCRegister R) { Reg = R; }
+  MCRegister getDstReg()                   const { return DstReg; }
   void setFrameIdx(int FI) {
     FrameIdx = FI;
     SpilledToReg = false;
   }
-  void setDstReg(Register SpillReg) {
-    DstReg = SpillReg;
+  void setDstReg(MCRegister SpillReg) {
+    DstReg = SpillReg.id();
     SpilledToReg = true;
   }
   bool isRestored()                        const { return Restored; }
   void setRestored(bool R)                       { Restored = R; }
   bool isSpilledToReg()                    const { return SpilledToReg; }
-
-  bool isHandledByTarget() const { return IsHandledByTarget; }
-  void setHandledByTarget() { IsHandledByTarget = true; }
 };
 
 /// The MachineFrameInfo class represents an abstract stack frame until

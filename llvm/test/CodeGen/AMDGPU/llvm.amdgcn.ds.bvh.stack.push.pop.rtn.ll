@@ -2,11 +2,6 @@
 ; RUN: llc -global-isel=0 -march=amdgcn -mcpu=gfx1200 < %s | FileCheck %s
 ; RUN: llc -global-isel=1 -march=amdgcn -mcpu=gfx1200 < %s | FileCheck %s
 
-declare { i32, i32 } @llvm.amdgcn.ds.bvh.stack.push4.pop1.rtn(i32, i32, <4 x i32>, i32 immarg)
-declare { i32, i32 } @llvm.amdgcn.ds.bvh.stack.push8.pop1.rtn(i32, i32, <8 x i32>, i32 immarg)
-declare { i64, i32 } @llvm.amdgcn.ds.bvh.stack.push8.pop2.rtn(i32, i32, <8 x i32>, i32 immarg)
-declare void @llvm.amdgcn.exp.i32(i32, i32, i32, i32, i32, i32, i1, i1)
-
 define amdgpu_gs void @test_ds_bvh_stack_push4_pop1(i32 %addr, i32 %data0, <4 x i32> %data1) {
 ; CHECK-LABEL: test_ds_bvh_stack_push4_pop1:
 ; CHECK:       ; %bb.0:

@@ -476,24 +476,6 @@ def S_BARRIER_SIGNAL_ISFIRST_M0 : SOP1_Pseudo <"s_barrier_signal_isfirst m0", (o
   let isConvergent = 1;
 }
 
-def S_BARRIER_INIT_M0 : SOP1_Pseudo <"s_barrier_init m0", (outs), (ins),
-  "", []>{
-  let SchedRW = [WriteBarrier];
-  let isConvergent = 1;
-}
-
-def S_BARRIER_INIT_IMM : SOP1_Pseudo <"s_barrier_init", (outs),
-  (ins SplitBarrier:$src0), "$src0", []>{
-  let SchedRW = [WriteBarrier];
-  let isConvergent = 1;
-}
-
-def S_BARRIER_JOIN_M0 : SOP1_Pseudo <"s_barrier_join m0", (outs), (ins),
-  "", []>{
-  let SchedRW = [WriteBarrier];
-  let isConvergent = 1;
-}
-
 } // End Uses = [M0]
 
 def S_BARRIER_SIGNAL_IMM : SOP1_Pseudo <"s_barrier_signal", (outs),
@@ -505,12 +487,6 @@ def S_BARRIER_SIGNAL_IMM : SOP1_Pseudo <"s_barrier_signal", (outs),
 def S_BARRIER_SIGNAL_ISFIRST_IMM : SOP1_Pseudo <"s_barrier_signal_isfirst", (outs),
   (ins SplitBarrier:$src0), "$src0", [(set SCC, (int_amdgcn_s_barrier_signal_isfirst timm:$src0))]>{
   let Defs = [SCC];
-  let SchedRW = [WriteBarrier];
-  let isConvergent = 1;
-}
-
-def S_BARRIER_JOIN_IMM : SOP1_Pseudo <"s_barrier_join", (outs),
-  (ins SplitBarrier:$src0), "$src0", []>{
   let SchedRW = [WriteBarrier];
   let isConvergent = 1;
 }
@@ -1600,17 +1576,6 @@ def S_BARRIER_WAIT : SOPP_Pseudo <"s_barrier_wait", (ins i16imm:$simm16), "$simm
   let isConvergent = 1;
 }
 
-def S_BARRIER_LEAVE : SOPP_Pseudo <"s_barrier_leave", (ins)> {
-  let SchedRW = [WriteBarrier];
-  let simm16 = 0;
-  let fixed_imm = 1;
-  let isConvergent = 1;
-  let Defs = [SCC];
-}
-
-def S_BARRIER_LEAVE_IMM : SOPP_Pseudo <"s_barrier_leave",
-    (ins i16imm:$simm16), "$simm16", [(int_amdgcn_s_barrier_leave timm:$simm16)]>;
-
 def S_WAKEUP : SOPP_Pseudo <"s_wakeup", (ins) > {
   let SubtargetPredicate = isGFX8Plus;
   let simm16 = 0;
@@ -1960,6 +1925,20 @@ def : ScalarNot2Pat<S_ORN2_B32, or, v2i16>;
 def : ScalarNot2Pat<S_ORN2_B64, or, v4i16>;
 def : ScalarNot2Pat<S_ORN2_B64, or, v2i32>;
 
+let WaveSizePredicate = isWave32 in {
+def : GCNPat<
+  (i1 (not (or_oneuse i1:$src0, i1:$src1))),
+  (S_NOR_B32 i1:$src0, i1:$src1)
+>;
+}
+
+let WaveSizePredicate = isWave64 in {
+def : GCNPat<
+  (i1 (not (or_oneuse i1:$src0, i1:$src1))),
+  (S_NOR_B64 i1:$src0, i1:$src1)
+>;
+}
+
 //===----------------------------------------------------------------------===//
 // Target-specific instruction encodings.
 //===----------------------------------------------------------------------===//
@@ -2086,13 +2065,9 @@ defm S_SENDMSG_RTN_B64            : SOP1_Real_gfx11_gfx12<0x04d>;
 defm S_BARRIER_SIGNAL_M0          : SOP1_M0_Real_gfx12<0x04e>;
 defm S_BARRIER_SIGNAL_ISFIRST_M0  : SOP1_M0_Real_gfx12<0x04f>;
 defm S_GET_BARRIER_STATE_M0       : SOP1_M0_Real_gfx12<0x050>;
-defm S_BARRIER_INIT_M0            : SOP1_M0_Real_gfx12<0x051>;
-defm S_BARRIER_JOIN_M0            : SOP1_M0_Real_gfx12<0x052>;
 defm S_BARRIER_SIGNAL_IMM         : SOP1_IMM_Real_gfx12<0x04e>;
 defm S_BARRIER_SIGNAL_ISFIRST_IMM : SOP1_IMM_Real_gfx12<0x04f>;
 defm S_GET_BARRIER_STATE_IMM      : SOP1_IMM_Real_gfx12<0x050>;
-defm S_BARRIER_INIT_IMM           : SOP1_IMM_Real_gfx12<0x051>;
-defm S_BARRIER_JOIN_IMM           : SOP1_IMM_Real_gfx12<0x052>;
 defm S_ALLOC_VGPR                 : SOP1_Real_gfx12<0x053>;
 defm S_SLEEP_VAR                  : SOP1_IMM_Real_gfx12<0x058>;
 
@@ -2570,7 +2545,6 @@ multiclass SOPP_Real_32_gfx12<bits<7> op, string name = !tolower(NAME)> {
 }
 
 defm S_BARRIER_WAIT         : SOPP_Real_32_gfx12<0x014>;
-defm S_BARRIER_LEAVE        : SOPP_Real_32_gfx12<0x015>;
 defm S_WAIT_LOADCNT         : SOPP_Real_32_gfx12<0x040>;
 defm S_WAIT_STORECNT        : SOPP_Real_32_gfx12<0x041>;
 defm S_WAIT_SAMPLECNT       : SOPP_Real_32_gfx12<0x042>;

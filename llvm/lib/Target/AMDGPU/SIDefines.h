@@ -396,7 +396,7 @@ enum CPol {
   TH_NT = 1,     // non-temporal
   TH_HT = 2,     // high-temporal
   TH_LU = 3,     // last use
-  TH_RT_WB = 3,  // regular (CU, SE), high-temporal with write-back (MALL)
+  TH_WB = 3,     // regular (CU, SE), high-temporal with write-back (MALL)
   TH_NT_RT = 4,  // non-temporal (CU, SE), regular (MALL)
   TH_RT_NT = 5,  // regular (CU, SE), non-temporal (MALL)
   TH_NT_HT = 6,  // non-temporal (CU, SE), high-temporal (MALL)
@@ -542,7 +542,7 @@ enum Id { // HwRegCode, (6) [5:0]
   ID_EXCP_FLAG_USER = 18,
   ID_TRAP_CTRL = 19,
 
-  // GFX940 specific registers
+  // GFX94* specific registers
   ID_XCC_ID = 20,
   ID_SQ_PERF_SNAPSHOT_DATA = 21,
   ID_SQ_PERF_SNAPSHOT_DATA1 = 22,

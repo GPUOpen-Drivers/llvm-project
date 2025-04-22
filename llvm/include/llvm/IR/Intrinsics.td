@@ -565,6 +565,7 @@ def llvm_v10i32_ty     : LLVMType<v10i32>;   // 10 x i32
 def llvm_v16i32_ty     : LLVMType<v16i32>;   // 16 x i32
 def llvm_v32i32_ty     : LLVMType<v32i32>;   // 32 x i32
 def llvm_v64i32_ty     : LLVMType<v64i32>;   // 64 x i32
+def llvm_v128i32_ty    : LLVMType<v128i32>;  //128 x i32
 def llvm_v256i32_ty    : LLVMType<v256i32>;  //256 x i32
 
 def llvm_v1i64_ty      : LLVMType<v1i64>;    //  1 x i64
@@ -1024,7 +1025,7 @@ def int_memset_inline
 def int_experimental_memset_pattern
     : Intrinsic<[],
       [llvm_anyptr_ty, // Destination.
-       llvm_anyint_ty, // Pattern value.
+       llvm_any_ty,    // Pattern value.
        llvm_anyint_ty, // Count (number of times to fill value).
        llvm_i1_ty],    // IsVolatile.
       [IntrWriteMem, IntrArgMemOnly, IntrWillReturn, IntrNoFree, IntrNoCallback,
@@ -1882,7 +1883,8 @@ def int_is_constant : DefaultAttrsIntrinsic<[llvm_i1_ty], [llvm_any_ty],
                                 "llvm.is.constant">;
 
 // Introduce a use of the argument without generating any code.
-def int_fake_use : Intrinsic<[], [llvm_vararg_ty]>;
+def int_fake_use : DefaultAttrsIntrinsic<[], [llvm_vararg_ty],
+  [IntrHasSideEffects, IntrInaccessibleMemOnly, IntrWillReturn]>;
 
 // Intrinsic to mask out bits of a pointer.
 // First argument must be pointer or vector of pointer. This is checked by the
